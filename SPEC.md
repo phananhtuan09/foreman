@@ -1,6 +1,6 @@
 # Foreman specification
 
-Status: Draft 0.3 — P0/P1/P2 core paths implemented; P3 capability-gated
+Status: Draft 0.4 — P0/P1/P2 core paths implemented and regression-covered; P3 capability-gated
 Scope: New standalone Foreman repository
 Language: User-facing communication is Vietnamese; identifiers, paths, commands, and runtime state values remain verbatim.
 
@@ -712,22 +712,23 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 ### 20.1 Implemented paths
 
-- P0 durable coordination is implemented with versioned message and event records, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, delivery and acknowledgement tracking, bounded retries, durable pending/processing/handled wake queues, event deduplication, processing-claim recovery, and one-pass fleet reconciliation.
-- The deterministic observer classifies runtime evidence, detects worker state changes and identity mismatches, emits actionable events without model calls, and never converts `unknown` into `dead`.
-- Restart reconciliation reloads the project registry, tasks, inbox state, messages, leases, and wake events, then reconciles disk state against one runtime listing without conversation history.
+- P0 durable coordination is implemented with schema-v1 validation at active-record load boundaries, an atomic migration seam that preserves the source record, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, delivery and acknowledgement tracking, bounded backoff/age/attempt retries, durable pending/processing/handled wake queues, event deduplication, processing-claim recovery, and one-pass fleet reconciliation.
+- The deterministic observer compares runtime, project, workspace, branch, lease, message, inbox, endpoint, owner, and generation evidence; it emits actionable transitions and bounded wakes without model calls and never converts `unknown` into `dead`.
+- Restart reconciliation applies valid generation-bound inbox packages and acknowledgements before retrying messages and performing one runtime listing; invalid external records are quarantined byte-for-byte.
 - P1 lifecycle control is implemented through the Herdr adapter for spawn, inspect, send, read, interrupt, stop, and relaunch workflows, with compatibility checks and verified outcomes.
-- Confirmed `dead` or `missing` workers can be recovered with the existing workspace, a new assignment generation, a durable handoff package, and stale-generation rejection for old packages or acknowledgements.
-- Blocker triage, durable Decision Packages, verbatim human responses, decision delivery, decision acknowledgement, and scout-to-ship promotion are implemented.
-- P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, and concurrent non-conflicting dispatch are implemented.
-- P3 static dispatch-profile validation is implemented against runtime capabilities.
+- Confirmed `dead` or `missing` workers can be recovered with a bounded durable handoff message containing the brief, decisions, progress, report, evidence, unresolved checks, workspace, resources, and inspect-first instructions; the successor receives a new generation and stale records remain rejected.
+- Blocker triage, bounded persisted technical follow-up, authority Decision Packages, verbatim human responses, acknowledged decision delivery, strict decision application, and scout-to-ship promotion are implemented.
+- P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
+- P3 static dispatch-profile validation is implemented against runtime capabilities; a compatible fallback is accepted only when explicitly configured and is forwarded unchanged.
+- Production distribution artifacts are present under `AGENTS.md`, `skills/`, `docs/`, `bin/`, and `adapters/herdr/`; `legacy/` remains preserved but is not a production entry point.
 
 ### 20.2 Runtime proof
 
-- `npm test` passes 14 tests and intentionally skips the live Herdr test unless explicitly enabled.
-- `npm run test:live` passes against the installed Herdr 0.9.1 runtime and a real Codex worker, including workspace mutation, completion recording, local landing, endpoint release, cleanup, and a clean Git worktree.
+- `npm test` passes 23 tests and intentionally skips the live Herdr test unless explicitly enabled.
+- `npm run test:live` remains an opt-in proof against the installed Herdr 0.9.1 runtime and a real Codex worker; it is not claimed by the default test run.
 
 ### 20.3 Explicit compatibility limits and deferrals
 
-- `assignTask` retains `requireMessageAck: false` as the backwards-compatible API default; callers that require strict ACK-gated activation set it to `true`, and the ACK-gated path is covered by runtime tests.
+- Task briefs are strictly ACK-gated: an assignment remains `pending-ack` and stays `[ ]` until a current-generation ACK is verified.  Disabling brief ACK-gating is rejected rather than treated as a valid dispatch mode.
 - The current Herdr runtime exposes `agentKind` but not model or reasoning-effort capabilities, so those dispatch-profile fields fail closed until a compatible runtime is configured; no implicit model fallback is performed.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.

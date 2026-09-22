@@ -7,6 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage,
   acceptTask, markLanded, releaseEndpoint, cleanupTask,
+  listMessages, acknowledgeTaskMessage,
 } = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 
@@ -34,7 +35,9 @@ test("live Herdr runtime dispatches a real worker and lands its artifact", { tim
     adapter = new HerdrAdapter({ transport: new HerdrCliTransport({ command: "herdr", agentKind: process.env.FOREMAN_AGENT_KIND || "codex" }) });
     assert.equal(adapter.verifyCompatibility(), true);
     const task = createTask({ roots, projectId: "live", brief: "Create file/live-artifact.txt in the current workspace with exactly one line: foreman-live-ok. Do not commit, switch branches, reset, clean, merge, or edit any other file. After the file exists, stop and report completion." });
-    assignment = assignTask({ roots, taskId: task.id, owner, adapter, requireMessageAck: false, resources: [{ key: "file/live-artifact.txt", mode: "write" }] });
+    assignment = assignTask({ roots, taskId: task.id, owner, adapter, resources: [{ key: "file/live-artifact.txt", mode: "write" }] });
+    const brief = listMessages({ roots }).find((message) => message.messageId === assignment.briefMessageId);
+    acknowledgeTaskMessage({ roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     assert.equal(assignment.owner, owner);
     assert.equal(assignment.workspace, project);
 

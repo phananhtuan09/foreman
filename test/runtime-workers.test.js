@@ -17,6 +17,8 @@ const {
   releaseEndpoint,
   cleanupTask,
   listResourceLeases,
+  listMessages,
+  acknowledgeTaskMessage,
   ResourceBusyError,
   HerdrAdapter,
 } = require("../src/foreman");
@@ -110,6 +112,10 @@ test("runtime workers share the current branch with disjoint resource leases", a
     const two = createTask({ roots: f.roots, projectId: "fixture", brief: "write worker two file" });
     const assignmentOne = assignTask({ roots: f.roots, taskId: one.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/agent-one.txt", mode: "write" }] });
     const assignmentTwo = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/agent-two.txt", mode: "write" }] });
+    for (const [task, assignment] of [[one, assignmentOne], [two, assignmentTwo]]) {
+      const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
+      acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
+    }
     assert.equal(assignmentOne.workspace, f.projectRoot);
     assert.equal(assignmentTwo.workspace, f.projectRoot);
     assert.equal(assignmentOne.branch, "main");

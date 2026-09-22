@@ -9,7 +9,7 @@ const {
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
   recordPackage, reconstructTask, acceptTask, markLanded, releaseEndpoint, cleanupTask,
   claimResources, releaseResources, renewResources, listResourceLeases,
-  validateWorkspace,
+  validateWorkspace, listMessages, acknowledgeTaskMessage,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
 
@@ -93,9 +93,12 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "implement slice" });
     const meta = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: new HerdrAdapter({ transport: f.adapter }) });
+    const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === meta.briefMessageId);
+    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
+    const active = JSON.parse(fs.readFileSync(path.join(f.home, "state", "tasks", task.id, "meta.json"), "utf8"));
     assert.equal(meta.generation, 1);
     assert.equal(meta.projectId, "fixture");
-    assert.equal(meta.status, "working");
+    assert.equal(active.status, "working");
     assert.equal(meta.endpoint, "endpoint-1");
     assert.equal(meta.workspace, f.projectRoot);
     assert.equal(meta.branch, "main");
@@ -118,7 +121,9 @@ test("completion, acceptance, restart reconstruction, and cleanup refusal preser
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "finish and verify" });
-    assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
+    const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
+    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     const progress = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: progress\n\nRAW progress package`;
     recordPackage({ roots: f.roots, taskId: task.id, raw: progress, type: "progress" });
     assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).progress, progress);

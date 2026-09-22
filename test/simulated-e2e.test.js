@@ -16,6 +16,8 @@ const {
   markLanded,
   releaseEndpoint,
   cleanupTask,
+  listMessages,
+  acknowledgeTaskMessage,
   HerdrAdapter,
 } = require("../src/foreman");
 
@@ -106,6 +108,10 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
 
     const assignmentOne = assignTask({ roots: f.roots, taskId: taskOne.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/src/one", mode: "write" }] });
     const assignmentTwo = assignTask({ roots: f.roots, taskId: taskTwo.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/two", mode: "write" }] });
+    for (const [task, assignment] of [[taskOne, assignmentOne], [taskTwo, assignmentTwo]]) {
+      const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
+      acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
+    }
     assert.deepEqual(f.adapter.list().map((worker) => worker.owner), ["worker-1", "worker-2"]);
     assert.deepEqual(f.transport.messages.map(({ message }) => message.owner), ["worker-1", "worker-2"]);
     assert.equal(f.transport.messages[0].message.generation, 1);

@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+
+// Small shell-friendly helper that routes to the same core CLI entry point.
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+const result = spawnSync(process.execPath, [path.join(__dirname, "foreman"), ...process.argv.slice(2)], { stdio: "inherit" });
+process.exitCode = result.status === null ? 1 : result.status;

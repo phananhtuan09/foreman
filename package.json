@@ -2,8 +2,12 @@
   "name": "foreman",
   "version": "0.1.0",
   "private": true,
-  "description": "Durable single-project Foreman vertical slice",
+  "description": "Durable multi-project Foreman supervisor",
   "main": "src/foreman.js",
+  "bin": {
+    "foreman": "bin/foreman",
+    "foreman-helper": "bin/foreman-helper"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:live": "RUN_HERDR_LIVE=1 node --test test/herdr-live.integration.test.js"

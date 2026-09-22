@@ -110,19 +110,20 @@ test("real child workers complete an ACK-gated assignment and survive observer/r
     assert.equal(fs.readFileSync(path.join(f.one, "worker-real.out"), "utf8"), "worker-real completed\n");
 
     const observed = observeRuntime({ roots: f.roots, adapter: f.adapter });
-    assert.equal(observed.tasks.find((item) => item.taskId === task.id).state, "done");
+    assert.equal(observed.tasks.find((item) => item.taskId === task.id).state, "unknown");
     const events = listEvents({ roots: f.roots, state: "pending" });
-    assert.equal(events.filter((event) => event.taskId === task.id && event.eventType === "worker.done").length, 1);
+    assert.equal(events.filter((event) => event.taskId === task.id && event.eventType === "worker.unknown").length, 1);
     const handled = drainWakeQueue({ roots: f.roots, handler: (event) => ({ handled: true, observed: event.eventType }) });
     assert.ok(handled.some((event) => event.taskId === task.id));
     assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.taskId === task.id), false);
     observeRuntime({ roots: f.roots, adapter: f.adapter });
     observeRuntime({ roots: f.roots, adapter: f.adapter });
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.taskId === task.id && event.eventType === "worker.done"), false);
+    assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.taskId === task.id && event.eventType === "worker.unknown"), false);
     recoverProcessingEvents({ roots: f.roots, maxAgeMs: 0 });
 
     const completion = packageFor(task, assignment, "completion", "runtime worker verified completion");
     recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
     acceptTask({ roots: f.roots, taskId: task.id });
     execFileSync("git", ["-C", f.one, "add", "worker-real.out"]);
     execFileSync("git", ["-C", f.one, "commit", "-m", "runtime artifact"], { stdio: "pipe" });

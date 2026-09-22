@@ -218,7 +218,7 @@ class HerdrCliTransport {
     if (!paneId) throw new HerdrCompatibilityError("Herdr pane split did not return a pane identity");
     this._runJson(["agent", "start", owner, "--kind", agentKind, "--pane", paneId]);
     this._ensureInteractiveReady(paneId);
-    return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle" };
+    return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
   }
 
   list() {

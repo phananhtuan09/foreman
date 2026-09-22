@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+
+const fs = require("node:fs");
+const path = require("node:path");
+const {
+  resolveRoots, initHome, registerProject, createTask, listTasks, fleetStatus,
+  projectStatus, restartReconcile,
+} = require("../src/foreman");
+const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
+
+function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
+function arg(name, fallback) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 && process.argv[index + 1] !== undefined ? process.argv[index + 1] : fallback;
+}
+function roots() { return resolveRoots({ foremanRoot: process.env.FOREMAN_ROOT || process.cwd(), foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd() }); }
+function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
+function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) }); }
+
+function main() {
+  const command = process.argv[2];
+  const r = roots();
+  const usage = "usage: init | project register --id ID --root PATH | task create --project ID (--brief TEXT|--brief-file FILE) | task list [--project ID] | status [--project ID] | reconcile";
+  if (!command || command === "--help" || command === "-h" || command === "help") { process.stdout.write(`${usage}\n`); return; }
+  if (command === "init") { output(initHome(r)); return; }
+  if (command === "project" && process.argv[3] === "register") {
+    output(registerProject({ roots: r, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") })); return;
+  }
+  if (command === "task" && process.argv[3] === "create") {
+    const briefFile = arg("--brief-file");
+    const brief = briefFile ? fs.readFileSync(path.resolve(briefFile), "utf8") : arg("--brief");
+    output(createTask({ roots: r, projectId: arg("--project"), brief, type: arg("--type", "ship") })); return;
+  }
+  if (command === "task" && process.argv[3] === "list") { output(listTasks({ roots: r, projectId: arg("--project") })); return; }
+  if (command === "status") { const adapter = runtimeAdapter(); output(arg("--project") ? projectStatus({ roots: r, projectId: arg("--project"), adapter }) : fleetStatus({ roots: r, adapter })); return; }
+  if (command === "reconcile") { output(restartReconcile({ roots: r, adapter: runtimeAdapter() })); return; }
+  die(usage);
+}
+
+try { main(); } catch (error) { die(error.message); }
