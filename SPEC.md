@@ -73,7 +73,11 @@ Conversation memory is never authoritative operational state. After a fresh sess
 
 Exactly one Foreman session may mutate canonical backlog, task, assignment, decision, message lifecycle, or runtime state at a time.
 A verified home lock is required before those mutations, and a session that cannot acquire the lock remains read-only.
-The deterministic observer may only create immutable pending event records in its owned event spool, and a worker may only create generation-bound inbox or acknowledgement records in its assigned paths.
+The deterministic observer creates immutable pending event records in `state/events/worker/`.
+A worker does not write that spool directly.
+`foreman event emit` validates the current task, project, owner, generation, and endpoint, then creates the pending event itself.
+A mismatched emit is quarantined and cannot change task lifecycle.
+A worker may directly create only generation-bound inbox or acknowledgement records in its assigned paths.
 Observer and worker writers must use atomic exclusive creation and must never edit canonical task state or records owned by another writer.
 
 ### 5.3 Exact project binding
@@ -225,11 +229,18 @@ Fleet-wide coordination records live under `state/`:
 state/
 ├── messages/         durable Foreman-to-worker outbox and message lifecycle
 ├── events/
-│   ├── pending/      immutable observer-created wake events
-│   ├── processing/   Foreman-claimed events with recoverable claims
-│   └── handled/      bounded event audit records
-└── observer/         deterministic observation cursor and wake diagnostics
+│   └── worker/       durable events grouped by task id
+│       └── T-000123/
+│           └── E-<eventId>.json
+├── connections/      derived worker registry and one record per assignment
+│   ├── registry.json
+│   └── T-000123-<owner>.json
+├── wake/
+│   └── foreman.json  wake signal for the Foreman session
+└── observer/         deterministic observation cursor
 ```
+
+Events that have no task live under `state/events/worker/_fleet/`.
 
 Durable requirements and decisions live in `data/`. Ephemeral runtime coordination lives in `state/`. Runtime loss must not erase user intent or accepted decisions.
 
@@ -300,8 +311,9 @@ An acknowledgement with mismatched identity or digest is quarantined and cannot 
 
 ### 7.8 Durable wake queue
 
-The observer persists an event before attempting to wake Foreman.
-Pending, processing, and handled events live in separately owned queue paths so a crash cannot make an event disappear between states.
+The event spool is `state/events/worker/<taskId>/<eventId>.json`.
+The file name is the stable event ID, so two observations of different evidence do not overwrite each other.
+Each event record keeps its own lifecycle: `pending`, `processing`, or `handled`.
 
 Each event records at least:
 
@@ -313,13 +325,31 @@ Each event records at least:
 - normalized evidence and its source;
 - lifecycle timestamps and handling result.
 
-The observer may only create immutable pending events.
-Foreman claims a pending event by moving it atomically to processing while holding the home lock, applies it idempotently, then marks it handled.
-An expired processing claim returns to pending during restart reconciliation.
-Handled events are retained for a bounded audit period before deterministic archival or removal.
+The observer persists an event before attempting to wake Foreman.
+Foreman claims a pending event by exclusively creating the sibling claim file `<eventId>.json.claim`, then marking the record `processing`, while holding the home lock.
+It applies the event idempotently, marks it `handled`, and removes the claim.
+An expired processing claim returns the record to `pending` during restart reconciliation.
+A stale claim left on a still-pending record is removed during the same recovery.
+Handled events are retained for a bounded audit period and are then removed.
+
+Wake delivery writes `state/wake/foreman.json` after the event is durable.
+That file is a signal, not the queue.
+It records whether any event is pending, the pending count, and the latest event identity.
+A failed or overwritten wake signal does not change or delete the pending event.
+Foreman restart drains the event records even when the wake file was lost.
 
 Deduplication uses stable task, generation, event type, and evidence identity rather than event text alone.
 A duplicate wake may occur, but applying the same event more than once must not repeat a lifecycle transition or runtime action.
+
+Workers request an event through `foreman event emit <taskId> <type>`.
+A type without a dot is stored as `worker.<type>`.
+Workers cannot emit `message.*` or `task.*` supervisor events.
+The same payload for the same assignment is stored once.
+`blocked` and `done` still require a valid structured package before task lifecycle advances.
+An emitted event alone does not apply that transition.
+
+Legacy files under `state/events/pending`, `state/events/processing`, and `state/events/handled` are moved into the task spool on startup.
+They are not a second queue.
 
 ### 7.9 Decision records
 
@@ -344,6 +374,29 @@ A task with unsatisfied dependencies remains queued and cannot be dispatched.
 By default, a ship dependency is satisfied only when it is landed, while a scout dependency is satisfied when its report is accepted.
 Dependency cycles and cross-project dependency references to missing tasks are rejected.
 When a dependency reaches its required terminal state, the scheduler reevaluates each dependent task and unlocks it exactly once when every dependency is satisfied.
+
+### 7.11 Worker registry
+
+`state/connections/registry.json` is derived state.
+Foreman is its only writer, and it writes the file under the home lock.
+Each current assignment also has `state/connections/<taskId>-<owner>.json`.
+The registry key is the runtime endpoint.
+Each entry records the task ID, status, last heartbeat, pid, generation, last acknowledgement, and adapter.
+`totalActive` counts entries whose status is `active`.
+
+Assignment registers the worker as `active`.
+A valid acknowledgement updates `lastAck`.
+Reconciliation refreshes status from runtime classification.
+Runtime state `working` is stored as `active`.
+Endpoint release or replacement retires the previous record and removes it from `registry.json`.
+A retired per-worker file remains on disk until a later assignment reuses the same task and owner.
+
+`dead` requires explicit terminal runtime evidence.
+`missing` requires a successful runtime listing that omits the expected endpoint after the configured confirmation window.
+`foreman worker heartbeat` updates `lastHeartbeat` and `pid` for the current assignment only.
+A heartbeat does not change runtime classification.
+A stale or fresh heartbeat does not convert `unknown` to `dead` and does not override terminal runtime evidence.
+Unreadable, contradictory, or insufficient evidence stays `unknown`.
 
 ## 8. Runtime abstraction
 
@@ -449,11 +502,15 @@ The observer distinguishes `working`, `idle`, `blocked`, `done`, `dead`, `missin
 - unreadable, contradictory, or insufficient evidence remains `unknown`.
 
 The observer never converts `unknown` to `dead` and never initiates recovery itself.
+A worker heartbeat is registry evidence.
+It does not by itself satisfy `dead` or `missing`.
 Endpoint, owner, project, workspace, or generation mismatch produces an anomaly event and prevents automatic task-state advancement.
 
 ### 10.2 Wake behavior
 
-After persisting an actionable event, the observer attempts a bounded wake through the configured local wake mechanism.
+After persisting an actionable event, the observer writes `state/wake/foreman.json` and attempts a bounded wake through the configured local wake mechanism.
+`WakeManager` watches the wake directory and invokes the Foreman session when the signal reports a pending event.
+The Foreman session does not poll for work.
 Wake failure does not change or delete the pending event.
 Repeated observations of the same evidence reuse the event deduplication identity and do not create an unbounded queue.
 

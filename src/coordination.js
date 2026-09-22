@@ -89,21 +89,55 @@ function coordinationDirs(home) {
   return {
     messages: path.join(home, "state", "messages"),
     events: path.join(home, "state", "events"),
-    pendingEvents: path.join(home, "state", "events", "pending"),
-    processingEvents: path.join(home, "state", "events", "processing"),
-    handledEvents: path.join(home, "state", "events", "handled"),
+    workerEvents: path.join(home, "state", "events", "worker"),
+    connections: path.join(home, "state", "connections"),
+    wake: path.join(home, "state", "wake"),
     observer: path.join(home, "state", "observer"),
   };
 }
 
 function initCoordination(home) {
   const dirs = coordinationDirs(home);
-  for (const dir of Object.values(dirs)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const key of ["messages", "workerEvents", "connections", "wake", "observer"]) fs.mkdirSync(dirs[key], { recursive: true, mode: 0o700 });
+  migrateLegacyEvents(home);
   return dirs;
 }
 
 function messageFile(home, messageId) { return path.join(coordinationDirs(home).messages, `${messageId}.json`); }
-function eventFile(home, state, eventId) { return path.join(coordinationDirs(home)[`${state}Events`], `${eventId}.json`); }
+
+function safeToken(value, label) {
+  const text = String(value || "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(text)) throw new EventValidationError(`${label} is invalid`);
+  return text;
+}
+
+function eventBucket(taskId) { return taskId ? safeToken(taskId, "Event task") : "_fleet"; }
+
+function workerEventFile(home, taskId, id) {
+  return path.join(coordinationDirs(home).workerEvents, eventBucket(taskId), `${safeToken(id, "Event")}.json`);
+}
+
+function connectionFile(home, taskId, worker) {
+  return path.join(coordinationDirs(home).connections, `${safeToken(taskId, "Task")}-${safeToken(worker, "Worker")}.json`);
+}
+
+function migrateLegacyEvents(home) {
+  for (const state of ["pending", "processing", "handled"]) {
+    const dir = path.join(home, "state", "events", state);
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".json")) continue;
+      const from = path.join(dir, name);
+      let event;
+      try { event = readJson(from); } catch (_) { continue; }
+      if (!event?.eventId) continue;
+      const target = workerEventFile(home, event.taskId, event.eventId);
+      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      if (fs.existsSync(target)) { try { fs.unlinkSync(from); } catch (_) {} continue; }
+      try { fs.renameSync(from, target); } catch (_) {}
+    }
+  }
+}
 
 function messageId({ taskId, generation, kind, payload, explicitId }) {
   if (explicitId) return String(explicitId);
@@ -281,6 +315,35 @@ function eventId(input) {
   return `E-${digest(`${input.dedupKey || ""}:${input.eventType}:${input.taskId || ""}:${input.generation ?? ""}:${digest(input.evidence || "")}`).slice(0, 24)}`;
 }
 
+function findEventFile(home, id) {
+  const root = coordinationDirs(home).workerEvents;
+  if (!fs.existsSync(root)) return null;
+  for (const bucket of fs.readdirSync(root)) {
+    const dir = path.join(root, bucket);
+    if (!fs.statSync(dir).isDirectory()) continue;
+    const file = path.join(dir, `${id}.json`);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+function walkWorkerEvents(home) {
+  initCoordination(home);
+  const root = coordinationDirs(home).workerEvents;
+  const events = [];
+  if (!fs.existsSync(root)) return events;
+  for (const bucket of fs.readdirSync(root)) {
+    const dir = path.join(root, bucket);
+    let names;
+    try { if (!fs.statSync(dir).isDirectory()) continue; names = fs.readdirSync(dir); } catch (_) { continue; }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try { events.push(validateEventRecord(readJson(path.join(dir, name)), name.slice(0, -5))); } catch (_) {}
+    }
+  }
+  return events;
+}
+
 function createObserverEvent({ roots, eventType, dedupKey, taskId, projectId, worker, generation, endpoint, evidence, source = "observer", observedAt = isoNow() }) {
   if (!eventType || !dedupKey) throw new EventValidationError("Event type and deduplication key are required");
   initCoordination(roots.foremanHome);
@@ -292,81 +355,121 @@ function createObserverEvent({ roots, eventType, dedupKey, taskId, projectId, wo
     }
   }
   const id = eventId({ eventType, dedupKey, taskId, generation, evidence });
-  const dirs = coordinationDirs(roots.foremanHome);
-  for (const state of ["pending", "processing", "handled"]) {
-    const existing = path.join(dirs[`${state}Events`], `${id}.json`);
-    if (fs.existsSync(existing)) return { event: validateEventRecord(readJson(existing), id), duplicate: true };
+  const existing = findEventFile(roots.foremanHome, id);
+  if (existing) {
+    const duplicate = { event: validateEventRecord(readJson(existing), id), duplicate: true };
+    signalWake(roots);
+    return duplicate;
   }
-  const file = eventFile(roots.foremanHome, "pending", id);
+  const file = workerEventFile(roots.foremanHome, taskId, id);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const event = { schemaVersion: 1, eventId: id, dedupKey, taskId: taskId || null, projectId: projectId || null, worker: worker || null, generation: generation === undefined ? null : Number(generation), endpoint: endpoint || null, eventType, observedAt, source, evidence: evidence || null, status: "pending", createdAt: isoNow(), processingStartedAt: null, handledAt: null, handlingResult: null };
   try {
     const fd = fs.openSync(file, "wx", 0o600);
     try { fs.writeFileSync(fd, `${JSON.stringify(event, null, 2)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    return { event: validateEventRecord(event, id), duplicate: false };
+    const created = { event: validateEventRecord(event, id), duplicate: false };
+    signalWake(roots);
+    return created;
   } catch (error) {
-    if (error.code === "EEXIST") return { event: validateEventRecord(readJson(file), id), duplicate: true };
+    if (error.code === "EEXIST") {
+      signalWake(roots);
+      return { event: validateEventRecord(readJson(file), id), duplicate: true };
+    }
     throw error;
   }
 }
 
 function listEvents({ roots, state = "pending" } = {}) {
+  if (!["pending", "processing", "handled"].includes(state)) throw new EventValidationError(`Unknown event state: ${state}`);
+  return walkWorkerEvents(roots.foremanHome).filter((event) => event.status === state);
+}
+
+function claimPath(file) { return `${file}.claim`; }
+
+function readClaim(file) {
+  const claim = claimPath(file);
+  if (!fs.existsSync(claim)) return null;
+  try { return { ...readJson(claim), file: claim, mtimeMs: fs.statSync(claim).mtimeMs }; }
+  catch (_) { return { file: claim, mtimeMs: fs.statSync(claim).mtimeMs }; }
+}
+
+function signalWake(roots) {
   initCoordination(roots.foremanHome);
-  const dir = coordinationDirs(roots.foremanHome)[`${state}Events`];
-  if (!dir) throw new EventValidationError(`Unknown event state: ${state}`);
-  return fs.readdirSync(dir).filter((name) => name.endsWith(".json")).map((name) => validateEventRecord(readJson(path.join(dir, name)), name.slice(0, -5)));
+  const pending = walkWorkerEvents(roots.foremanHome).filter((event) => event.status === "pending");
+  const latest = pending[pending.length - 1] || null;
+  const signal = { schemaVersion: 1, version: 1, pending: pending.length > 0, pendingCount: pending.length, lastEventId: latest ? latest.eventId : null, lastEventType: latest ? latest.eventType : null, taskId: latest ? latest.taskId : null, updatedAt: isoNow() };
+  atomicJson(path.join(coordinationDirs(roots.foremanHome).wake, "foreman.json"), signal);
+  return signal;
+}
+
+function readWakeSignal(roots) {
+  const file = path.join(roots.foremanHome, "state", "wake", "foreman.json");
+  if (!fs.existsSync(file)) return null;
+  const signal = readJson(file);
+  assertSchemaVersion(signal, "Wake signal");
+  if (!Number.isInteger(signal.pendingCount) || signal.pendingCount < 0 || signal.pending !== signal.pendingCount > 0) throw new SchemaValidationError("Wake signal is invalid");
+  return signal;
 }
 
 function drainWakeQueue({ roots, handler, limit = 100 }) {
   const { withHomeLock } = require("./foreman");
   initCoordination(roots.foremanHome);
-  const dirs = coordinationDirs(roots.foremanHome);
   const processed = [];
   for (const event of listEvents({ roots, state: "pending" }).slice(0, limit)) {
+    const file = workerEventFile(roots.foremanHome, event.taskId, event.eventId);
     const claimed = withHomeLock(roots.foremanHome, () => {
-      const pending = path.join(dirs.pendingEvents, `${event.eventId}.json`);
-      const processing = path.join(dirs.processingEvents, `${event.eventId}.json`);
-      try {
-        fs.renameSync(pending, processing);
-        const claimed = validateEventRecord({ ...event, status: "processing", processingStartedAt: isoNow() }, event.eventId);
-        atomicJson(processing, claimed);
-        return true;
-      } catch (_) { return false; }
+      if (!fs.existsSync(file)) return false;
+      const current = validateEventRecord(readJson(file), event.eventId);
+      if (current.status !== "pending") return false;
+      const existing = readClaim(file);
+      if (existing && Date.now() - existing.mtimeMs < 60_000) return false;
+      if (existing) { try { fs.unlinkSync(existing.file); } catch (_) {} }
+      const fd = fs.openSync(claimPath(file), "wx", 0o600);
+      try { fs.writeFileSync(fd, `${JSON.stringify({ schemaVersion: 1, eventId: event.eventId, claimedAt: isoNow() })}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      atomicJson(file, validateEventRecord({ ...current, status: "processing", processingStartedAt: isoNow() }, event.eventId));
+      return true;
     });
     if (!claimed) continue;
     let result;
     try { result = handler ? handler(event) : { handled: true }; }
     catch (error) { result = { handled: false, error: error.message }; }
     const next = withHomeLock(roots.foremanHome, () => {
-      const processing = path.join(dirs.processingEvents, `${event.eventId}.json`);
-      const current = fs.existsSync(processing) ? validateEventRecord(readJson(processing), event.eventId) : event;
+      const current = fs.existsSync(file) ? validateEventRecord(readJson(file), event.eventId) : event;
       if (result && result.handled === false) {
         const pending = validateEventRecord({ ...current, status: "pending", processingStartedAt: null, handlingResult: result, lastHandlingFailureAt: isoNow() }, event.eventId);
-        atomicJson(path.join(dirs.pendingEvents, `${event.eventId}.json`), pending);
-        try { fs.unlinkSync(processing); } catch (_) {}
+        atomicJson(file, pending);
+        try { fs.unlinkSync(claimPath(file)); } catch (_) {}
         return pending;
       }
       const handled = validateEventRecord({ ...current, status: "handled", processingStartedAt: current.processingStartedAt || isoNow(), handledAt: isoNow(), handlingResult: result }, event.eventId);
-      atomicJson(path.join(dirs.handledEvents, `${event.eventId}.json`), handled);
-      try { fs.unlinkSync(processing); } catch (_) {}
+      atomicJson(file, handled);
+      try { fs.unlinkSync(claimPath(file)); } catch (_) {}
       return handled;
     });
     processed.push(next);
   }
+  signalWake(roots);
   return processed;
 }
 
 function recoverProcessingEventsUnlocked({ roots, maxAgeMs = 60_000 }) {
   initCoordination(roots.foremanHome);
-  const dirs = coordinationDirs(roots.foremanHome);
+  const cutoff = Date.now() - Math.max(0, Number(maxAgeMs) || 0);
   let count = 0;
-  for (const event of listEvents({ roots, state: "processing" })) {
-    if (event.processingStartedAt && Date.now() - Date.parse(event.processingStartedAt) < maxAgeMs) continue;
-    try {
-      const pending = validateEventRecord({ ...event, status: "pending", processingStartedAt: null }, event.eventId);
-      atomicJson(path.join(dirs.pendingEvents, `${event.eventId}.json`), pending);
-      fs.unlinkSync(path.join(dirs.processingEvents, `${event.eventId}.json`));
-      count += 1;
-    } catch (_) {}
+  for (const event of walkWorkerEvents(roots.foremanHome)) {
+    const file = workerEventFile(roots.foremanHome, event.taskId, event.eventId);
+    const claim = readClaim(file);
+    if (event.status === "processing") {
+      const started = Date.parse(event.processingStartedAt || "");
+      if (Number.isFinite(started) && started > cutoff) continue;
+      try {
+        atomicJson(file, validateEventRecord({ ...event, status: "pending", processingStartedAt: null }, event.eventId));
+        if (claim) fs.unlinkSync(claim.file);
+        count += 1;
+      } catch (_) {}
+    } else if (event.status === "pending" && claim && claim.mtimeMs <= cutoff) {
+      try { fs.unlinkSync(claim.file); count += 1; } catch (_) {}
+    }
   }
   return count;
 }
@@ -378,16 +481,159 @@ function recoverProcessingEvents({ roots, maxAgeMs = 60_000 }) {
 
 function retainHandledEvents({ roots, maxAgeMs = 7 * 24 * 60 * 60 * 1000 }) {
   initCoordination(roots.foremanHome);
-  const dir = coordinationDirs(roots.foremanHome).handledEvents;
   const cutoff = Date.now() - Math.max(0, Number(maxAgeMs) || 0);
   let removed = 0;
   for (const event of listEvents({ roots, state: "handled" })) {
     const at = Date.parse(event.handledAt || event.createdAt || "");
     if (Number.isFinite(at) && at < cutoff) {
-      try { fs.unlinkSync(path.join(dir, `${event.eventId}.json`)); removed += 1; } catch (_) {}
+      const file = workerEventFile(roots.foremanHome, event.taskId, event.eventId);
+      try { fs.unlinkSync(file); removed += 1; } catch (_) {}
+      try { fs.unlinkSync(claimPath(file)); } catch (_) {}
     }
   }
   return removed;
+}
+
+function readConnectionFiles(home) {
+  const dir = coordinationDirs(home).connections;
+  if (!fs.existsSync(dir)) return [];
+  const records = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith(".json") || name === "registry.json") continue;
+    const record = readJson(path.join(dir, name));
+    assertSchemaVersion(record, "Worker connection", { field: "taskId", value: record.taskId });
+    if (!record.worker || !Number.isInteger(record.generation) || !record.projectId) throw new SchemaValidationError(`Worker connection identity is invalid: ${name}`);
+    records.push(record);
+  }
+  return records;
+}
+
+function writeRegistryUnlocked(home) {
+  const workers = {};
+  for (const record of readConnectionFiles(home)) {
+    if (record.retiredAt || record.status === "retired") continue;
+    const key = record.endpoint || record.worker;
+    workers[key] = { taskId: record.taskId, status: record.status, lastHeartbeat: record.lastHeartbeat || null, pid: record.pid ?? null, generation: record.generation, lastAck: record.lastAck ?? null, adapter: record.adapter || "herdr" };
+  }
+  const registry = { schemaVersion: 1, version: 1, totalActive: Object.values(workers).filter((item) => item.status === "active").length, lastUpdated: isoNow(), workers };
+  atomicJson(path.join(coordinationDirs(home).connections, "registry.json"), registry);
+  return registry;
+}
+
+function readWorkerRegistry(roots) {
+  initCoordination(roots.foremanHome);
+  const file = path.join(coordinationDirs(roots.foremanHome).connections, "registry.json");
+  if (!fs.existsSync(file)) return { schemaVersion: 1, version: 1, totalActive: 0, lastUpdated: null, workers: {} };
+  const registry = readJson(file);
+  assertSchemaVersion(registry, "Worker registry");
+  if (registry.version !== 1 || !Number.isInteger(registry.totalActive) || !registry.workers || typeof registry.workers !== "object") throw new SchemaValidationError("Worker registry is invalid");
+  return registry;
+}
+
+function registryStatus(runtimeState) {
+  if (runtimeState === "working") return "active";
+  if (["idle", "blocked", "done", "dead", "missing", "unknown", "active"].includes(runtimeState)) return runtimeState;
+  return "unknown";
+}
+
+function registerWorkerUnlocked({ roots, taskId, projectId, worker, endpoint, generation, status = "active", pid, lastAck, adapter = "herdr", lastHeartbeat } = {}) {
+  if (!taskId || !projectId || !worker || !Number.isInteger(Number(generation))) throw new EventValidationError("Worker registration identity is incomplete");
+  initCoordination(roots.foremanHome);
+  const home = roots.foremanHome;
+  const file = connectionFile(home, taskId, worker);
+  let previous = {};
+  if (fs.existsSync(file)) {
+    previous = readJson(file);
+    assertSchemaVersion(previous, "Worker connection", { field: "taskId", value: taskId });
+  }
+  for (const record of readConnectionFiles(home)) {
+    if (record.taskId !== taskId || record.worker === worker || record.retiredAt) continue;
+    atomicJson(connectionFile(home, record.taskId, record.worker), { ...record, status: "retired", retiredAt: isoNow() });
+  }
+  const next = {
+    schemaVersion: 1,
+    version: 1,
+    taskId,
+    projectId,
+    worker,
+    endpoint: endpoint === undefined ? (previous.endpoint || null) : endpoint,
+    status,
+    lastHeartbeat: lastHeartbeat === undefined ? (previous.lastHeartbeat || null) : lastHeartbeat,
+    pid: Number.isInteger(pid) ? pid : (previous.pid ?? null),
+    generation: Number(generation),
+    lastAck: lastAck === undefined ? (previous.lastAck ?? null) : lastAck,
+    adapter: adapter || previous.adapter || "herdr",
+    updatedAt: isoNow(),
+    retiredAt: null,
+  };
+  atomicJson(file, next);
+  return { record: next, registry: writeRegistryUnlocked(home) };
+}
+
+function retireWorkerUnlocked({ roots, taskId, worker }) {
+  initCoordination(roots.foremanHome);
+  const file = connectionFile(roots.foremanHome, taskId, worker);
+  if (fs.existsSync(file)) {
+    const current = readJson(file);
+    assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
+    if (!current.retiredAt) atomicJson(file, { ...current, status: "retired", retiredAt: isoNow() });
+  }
+  return writeRegistryUnlocked(roots.foremanHome);
+}
+
+function noteWorkerAckUnlocked({ roots, taskId, worker, generation, messageId }) {
+  const file = connectionFile(roots.foremanHome, taskId, worker);
+  if (!fs.existsSync(file)) return null;
+  const current = readJson(file);
+  assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
+  if (current.retiredAt || Number(current.generation) !== Number(generation)) return null;
+  atomicJson(file, { ...current, lastAck: messageId, updatedAt: isoNow() });
+  return writeRegistryUnlocked(roots.foremanHome);
+}
+
+function recordHeartbeatUnlocked({ roots, taskId, worker, generation, pid, endpoint }) {
+  if (!taskId || !worker || !Number.isInteger(Number(generation))) throw new EventValidationError("Heartbeat identity is incomplete");
+  const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
+  if (!fs.existsSync(taskMetaFile)) throw new EventValidationError("Heartbeat task does not exist");
+  const meta = validateTaskMetaRecord(readJson(taskMetaFile), taskId);
+  if (meta.owner !== worker || meta.generation !== Number(generation) || (endpoint && meta.endpoint !== endpoint)) {
+    quarantineExternal({ roots, taskId, name: "heartbeat.json", raw: JSON.stringify({ taskId, worker, generation, pid: pid ?? null, endpoint: endpoint || null }), reason: "heartbeat identity does not match the current assignment" });
+    throw new EventValidationError("Heartbeat identity does not match the current assignment");
+  }
+  const file = connectionFile(roots.foremanHome, taskId, worker);
+  if (!fs.existsSync(file)) throw new EventValidationError("Worker is not registered");
+  const current = readJson(file);
+  assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
+  if (current.retiredAt || current.status === "retired") throw new EventValidationError("Retired worker cannot record a heartbeat");
+  return registerWorkerUnlocked({ roots, taskId, projectId: meta.projectId, worker, endpoint: meta.endpoint, generation: meta.generation, status: current.status, pid: Number.isInteger(pid) ? pid : current.pid, lastAck: current.lastAck ?? null, adapter: current.adapter || meta.backend || "herdr", lastHeartbeat: isoNow() });
+}
+
+function syncRegistryUnlocked({ roots, tasks }) {
+  for (const item of tasks || []) {
+    const meta = item.meta;
+    if (!meta?.owner || !meta.taskId || !Number.isInteger(meta.generation) || meta.generation < 1 || !meta.endpoint) continue;
+    const alive = ["working", "idle", "blocked", "done"].includes(item.state);
+    const runtimePid = Number.isInteger(item.worker?.pid) ? item.worker.pid : undefined;
+    registerWorkerUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, endpoint: meta.endpoint, generation: meta.generation, status: registryStatus(item.state), pid: runtimePid, adapter: meta.backend || "herdr", lastHeartbeat: alive ? isoNow() : undefined });
+  }
+  return writeRegistryUnlocked(roots.foremanHome);
+}
+
+function emitWorkerEventUnlocked({ roots, taskId, eventType, worker, generation, payload }) {
+  initCoordination(roots.foremanHome);
+  const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
+  if (!fs.existsSync(taskMetaFile)) throw new EventValidationError("Event task does not exist");
+  const meta = validateTaskMetaRecord(readJson(taskMetaFile), taskId);
+  const typeToken = String(eventType || "");
+  if (!/^[a-z][a-z0-9._-]{0,63}$/.test(typeToken) || typeToken.startsWith("message.") || typeToken.startsWith("task.")) throw new EventValidationError("Event type is invalid");
+  const normalized = typeToken.includes(".") ? typeToken : `worker.${typeToken}`;
+  const boundWorker = worker || meta.owner;
+  const boundGeneration = generation === undefined || generation === null || generation === "" ? meta.generation : Number(generation);
+  if (!meta.owner || !meta.endpoint || boundWorker !== meta.owner || boundGeneration !== meta.generation) {
+    quarantineExternal({ roots, taskId, name: `event-${normalized}.json`, raw: JSON.stringify({ taskId, eventType: normalized, worker: boundWorker, generation: boundGeneration, payload: payload ?? null }), reason: "event identity does not match the current assignment" });
+    throw new EventValidationError("Event identity does not match the current assignment");
+  }
+  return createObserverEvent({ roots, eventType: normalized, dedupKey: `worker-emit:${taskId}:${boundGeneration}:${normalized}:${digest(payload ?? null)}`, taskId, projectId: meta.projectId, worker: boundWorker, generation: boundGeneration, endpoint: meta.endpoint, evidence: { payload: payload ?? null, emittedBy: "worker" }, source: "worker" });
 }
 
 function activeTaskMetas(roots) {
@@ -546,6 +792,7 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
     const endpoint = worker.endpoint || worker.endpointId || worker.pane_id || worker.name;
     if (endpoint && !knownEndpoints.has(endpoint) && emitEvents) createObserverEvent({ roots, eventType: "worker.orphan", dedupKey: `orphan:${endpoint}`, worker: worker.owner || worker.name, endpoint, evidence: worker, source: "reconciliation" });
   }
+  syncRegistryUnlocked({ roots, tasks: states });
   return { workers, tasks: states };
 }
 
@@ -605,6 +852,41 @@ class DeterministicObserver {
   }
 }
 
+class WakeManager {
+  constructor({ roots, onWake } = {}) {
+    this.roots = roots;
+    this.onWake = onWake;
+    this.watcher = null;
+    this.timer = null;
+    this.running = false;
+  }
+
+  start() {
+    if (this.running) return this;
+    initCoordination(this.roots.foremanHome);
+    this.running = true;
+    const dir = coordinationDirs(this.roots.foremanHome).wake;
+    this.watcher = fs.watch(dir, () => {
+      if (!this.running) return;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => {
+        try {
+          const signal = readWakeSignal(this.roots);
+          if (signal?.pendingCount > 0 && typeof this.onWake === "function") this.onWake(signal);
+        } catch (_) {}
+      }, 30);
+    });
+    return this;
+  }
+
+  stop() {
+    this.running = false;
+    clearTimeout(this.timer);
+    if (this.watcher) this.watcher.close();
+    this.watcher = null;
+  }
+}
+
 function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
   const dir = path.join(roots.foremanHome, "data", "tasks", taskId);
   const state = path.join(roots.foremanHome, "state", "tasks", taskId);
@@ -650,5 +932,6 @@ module.exports = {
   digest, initCoordination, coordinationDirs, messageFile, createMessageUnlocked, createMessage,
   updateMessageUnlocked, acknowledgeMessage, listMessages, markMessageDeliveryUnlocked, retryMessages, retryMessagesUnlocked, failMessageUnlocked,
   eventId, createObserverEvent, listEvents, drainWakeQueue, recoverProcessingEvents, recoverProcessingEventsUnlocked, retainHandledEvents,
-  observeOnce, DeterministicObserver, reconcileFleet, reconcileFleetUnlocked, classifyRuntime, buildHandoffPackage,
+  signalWake, readWakeSignal, registerWorkerUnlocked, retireWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, syncRegistryUnlocked, readWorkerRegistry, emitWorkerEventUnlocked,
+  observeOnce, DeterministicObserver, WakeManager, reconcileFleet, reconcileFleetUnlocked, classifyRuntime, buildHandoffPackage,
 };

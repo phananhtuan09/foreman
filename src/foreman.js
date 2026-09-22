@@ -550,6 +550,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       for (const priorMessage of coordination.listMessages({ roots }).filter((item) => item.taskId === taskId && item.generation !== generation && ["pending", "delivered"].includes(item.status))) {
         coordination.failMessageUnlocked({ roots, messageId: priorMessage.messageId, reason: "assignment generation was replaced" });
       }
+      coordination.registerWorkerUnlocked({ roots, taskId, projectId: project.id, worker: owner, endpoint, generation, status: "active", pid: Number.isInteger(inspected?.pid) ? inspected.pid : (Number.isInteger(spawned?.pid) ? spawned.pid : undefined), adapter: "herdr", lastAck: null, lastHeartbeat: now() });
       return assigned;
     } catch (error) {
       releaseResourcesUnlocked({ roots, leaseId: resourceLease.leaseId });
@@ -793,6 +794,7 @@ function releaseEndpoint({ roots, taskId, adapter }) {
     if (inspection.cwd && meta.workspace && path.resolve(inspection.cwd) !== path.resolve(meta.workspace)) throw new CleanupRefusedError("Endpoint workspace does not match the task assignment");
     const next = { ...meta, endpoint: null, endpointReleasedAt: now() };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
+    coordination.retireWorkerUnlocked({ roots, taskId, worker: meta.owner });
     return next;
   });
 }
@@ -851,6 +853,7 @@ function acknowledgeTaskMessage({ roots, taskId, messageId, ack = {} }) {
     } else if (next.pendingMessageIds.length !== (meta.pendingMessageIds || []).length) {
       atomicJson(metaFile(roots.foremanHome, taskId), next);
     }
+    coordination.noteWorkerAckUnlocked({ roots, taskId, worker: meta.owner, generation: meta.generation, messageId });
     return { message: acknowledged, task: next };
   });
 }
@@ -1019,6 +1022,14 @@ function triageBlocker({ roots, taskId, raw, adapter, followUpPayload, decision,
   return result;
 }
 
+function emitWorkerEvent({ roots, taskId, eventType, worker, generation, payload }) {
+  return withHomeLock(roots.foremanHome, () => coordination.emitWorkerEventUnlocked({ roots, taskId, eventType, worker, generation, payload }));
+}
+
+function recordWorkerHeartbeat({ roots, taskId, worker, generation, pid, endpoint }) {
+  return withHomeLock(roots.foremanHome, () => coordination.recordHeartbeatUnlocked({ roots, taskId, worker, generation, pid, endpoint }));
+}
+
 function observeRuntime({ roots, adapter, missingConfirmationMs = 1000 }) { return coordination.observeOnce({ roots, adapter, missingConfirmationMs }); }
 function reconcileFleet({ roots, adapter, emitEvents = true, missingConfirmationMs = 1000, requireCompletionPackage = true }) { return coordination.reconcileFleet({ roots, adapter, emitEvents, missingConfirmationMs, requireCompletionPackage }); }
 function drainWakeQueue({ roots, handler, limit }) { return coordination.drainWakeQueue({ roots, handler, limit }); }
@@ -1165,4 +1176,8 @@ module.exports = {
   createObserverEvent: coordination.createObserverEvent, listEvents: coordination.listEvents,
   coordinationDirs: coordination.coordinationDirs,
   DeterministicObserver: coordination.DeterministicObserver,
+  WakeManager: coordination.WakeManager,
+  emitWorkerEvent, recordWorkerHeartbeat,
+  readWakeSignal: coordination.readWakeSignal,
+  readWorkerRegistry: coordination.readWorkerRegistry,
 };

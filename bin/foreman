@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   resolveRoots, initHome, registerProject, createTask, listTasks, fleetStatus,
-  projectStatus, restartReconcile,
+  projectStatus, restartReconcile, emitWorkerEvent, recordWorkerHeartbeat,
 } = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 
@@ -20,7 +20,7 @@ function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTra
 function main() {
   const command = process.argv[2];
   const r = roots();
-  const usage = "usage: init | project register --id ID --root PATH | task create --project ID (--brief TEXT|--brief-file FILE) | task list [--project ID] | status [--project ID] | reconcile";
+  const usage = "usage: init | project register --id ID --root PATH | task create --project ID (--brief TEXT|--brief-file FILE) | task list [--project ID] | status [--project ID] | reconcile | event emit TASK TYPE [--worker OWNER --generation N --payload JSON] | worker heartbeat --task TASK --worker OWNER --generation N [--pid N]";
   if (!command || command === "--help" || command === "-h" || command === "help") { process.stdout.write(`${usage}\n`); return; }
   if (command === "init") { output(initHome(r)); return; }
   if (command === "project" && process.argv[3] === "register") {
@@ -34,6 +34,25 @@ function main() {
   if (command === "task" && process.argv[3] === "list") { output(listTasks({ roots: r, projectId: arg("--project") })); return; }
   if (command === "status") { const adapter = runtimeAdapter(); output(arg("--project") ? projectStatus({ roots: r, projectId: arg("--project"), adapter }) : fleetStatus({ roots: r, adapter })); return; }
   if (command === "reconcile") { output(restartReconcile({ roots: r, adapter: runtimeAdapter() })); return; }
+  if (command === "event" && process.argv[3] === "emit") {
+    const taskId = process.argv[4];
+    const eventType = process.argv[5];
+    if (!taskId || !eventType || taskId.startsWith("--") || eventType.startsWith("--")) { die(usage); return; }
+    const payloadFile = arg("--payload-file");
+    const payloadArg = arg("--payload");
+    let payload = null;
+    if (payloadFile) payload = JSON.parse(fs.readFileSync(path.resolve(payloadFile), "utf8"));
+    else if (payloadArg !== undefined) { try { payload = JSON.parse(payloadArg); } catch (_) { payload = payloadArg; } }
+    const generation = arg("--generation");
+    output(emitWorkerEvent({ roots: r, taskId, eventType, worker: arg("--worker"), generation: generation === undefined ? undefined : Number(generation), payload }));
+    return;
+  }
+  if (command === "worker" && process.argv[3] === "heartbeat") {
+    const generation = arg("--generation");
+    const pid = arg("--pid");
+    output(recordWorkerHeartbeat({ roots: r, taskId: arg("--task"), worker: arg("--worker"), generation: generation === undefined ? undefined : Number(generation), pid: pid === undefined ? undefined : Number(pid), endpoint: arg("--endpoint") }));
+    return;
+  }
   die(usage);
 }
 
