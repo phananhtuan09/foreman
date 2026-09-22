@@ -19,7 +19,7 @@ Foreman owns:
 - the fleet-wide project registry;
 - task intake, priority, dependencies, assignment, lifecycle, and durable history;
 - worker dispatch, adoption, steering, recovery, and handoff;
-- worktree and runtime-endpoint identity;
+- workspace, resource-lease, and runtime-endpoint identity;
 - event-driven supervision and restart recovery;
 - concise user-facing status, decision, and approval packages;
 - runtime adapters, initially Herdr only;
@@ -39,7 +39,7 @@ Workers own deep project context. They inspect, implement, reproduce, verify, an
 1. One Foreman session can manage tasks across every registered local project.
 2. All task, assignment, decision, progress, blocker, completion, and recovery state survives session reset.
 3. Every task is bound to exactly one registered project, one current owner at most, and one runtime endpoint at most.
-4. Project mutations happen through workers, normally in isolated worktrees.
+4. Project mutations happen through workers in a client-prepared workspace, with resource leases allowing safe concurrency.
 5. Foreman can recover safely after its session, observer, or worker exits.
 6. Supervision is event-driven and consumes no model tokens while nothing actionable happens.
 7. The user sees conclusions, decisions, approvals, and material anomalies rather than worker transcripts or internal housekeeping.
@@ -75,7 +75,7 @@ Exactly one Foreman session may mutate a Foreman home at a time. A verified home
 
 ### 5.3 Exact project binding
 
-Every task records a stable project ID. Before dispatch, steering, worktree operations, delivery, or cleanup, Foreman resolves that ID through the project registry and verifies the canonical project root. Runtime `cwd` is evidence, not durable project identity.
+Every task records a stable project ID. Before dispatch, steering, workspace operations, delivery, or cleanup, Foreman resolves that ID through the project registry and verifies the canonical project root. Runtime `cwd` is evidence, not durable project identity.
 
 ### 5.4 Foreman supervises; workers implement
 
@@ -93,9 +93,9 @@ User requirements and decisions are persisted verbatim before being sent to a wo
 
 A task has at most one current worker owner. Reassignment changes the assignment generation. Reports and events from an older generation cannot update the new owner's state.
 
-### 5.8 No teardown of unlanded work
+### 5.8 No release of unlanded work
 
-Foreman does not remove a worktree, branch, endpoint, or task record until the configured delivery path proves that all valuable work is landed or the user explicitly authorizes discard.
+Foreman does not release a task's resource lease or mark its workspace reusable until the configured delivery path proves that all valuable work is landed and the client confirms workspace release, or the user explicitly authorizes discard.
 
 ### 5.9 Claims are attributed
 
@@ -125,13 +125,13 @@ foreman/
 ├── config/                    private operational choices; gitignored
 ├── data/                      durable private fleet records; gitignored
 ├── state/                     runtime records, locks, and events; gitignored
-└── projects/                  optional managed clones/worktrees; gitignored
+└── projects/                  optional client-owned workspace mount; not managed by Foreman
 ```
 
 Definitions:
 
 - `FOREMAN_ROOT`: tracked source checkout containing instructions, scripts, adapters, tests, and this specification.
-- `FOREMAN_HOME`: private operational root containing `config/`, `data/`, `state/`, and optionally `projects/`.
+- `FOREMAN_HOME`: private operational root containing `config/`, `data/`, and `state/`; client-owned workspaces live outside Foreman home.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
 
@@ -204,7 +204,7 @@ Runtime records live under `state/tasks/<id>/`:
 
 ```text
 state/tasks/T-000123/
-├── meta              project, owner, generation, worktree, backend, endpoint
+├── meta              project, owner, generation, workspace, branch, resources, backend, endpoint
 ├── progress          latest normalized operational snapshot
 ├── status            append-only worker/runtime events
 ├── inbox/            generation-bound worker packages and steering receipts
@@ -247,7 +247,7 @@ Core supervision uses a narrow runtime adapter contract:
 
 - list agents and stable endpoints;
 - inspect agent state;
-- spawn a worker at a validated worktree;
+- spawn a worker at a validated client-prepared workspace;
 - send a prompt or steering message;
 - read bounded worker output;
 - verify delivery of a message;
@@ -258,13 +258,17 @@ The first adapter is Herdr. Herdr identifiers are stored as opaque backend metad
 
 Foreman must version-gate against the installed Herdr protocol it relies on and fail closed when required semantics cannot be verified. It must not guess CLI syntax.
 
-## 9. Worker and worktree model
+## 9. Worker, workspace, and resource model
 
 ### 9.1 Dispatch
 
-For mutation work, Foreman creates or validates an isolated worktree before spawning a worker. The worktree is bound to the task and project in task metadata.
+For mutation work, the client prepares a workspace on the current branch. Foreman validates the workspace and binds it to the task and project in task metadata; Foreman never creates, switches, merges, or removes worktrees.
 
-For read-only investigation, a project checkout may be used only when the worker cannot mutate it and the selected workflow explicitly permits that mode.
+Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
+
+Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner, generation, expiry, and heartbeat renewal.
+
+A preflight worker may return the structured resource claims and dependency hints. Foreman treats that result as scheduling input, normalizes the claims, and defaults to an exclusive project-workspace lease when no plan is supplied.
 
 ### 9.2 Worker brief
 
@@ -273,10 +277,12 @@ The dispatched brief includes:
 - task ID, project ID, assignment generation, and report path;
 - user requirements verbatim;
 - accepted follow-up decisions verbatim;
-- canonical worktree and project boundary;
+- canonical workspace, current branch, and project boundary;
+- resource lease IDs and the declared resource claims;
 - required deliverable and evidence contract;
 - prohibition on expanding scope, changing lifecycle, or addressing the user directly;
-- permission to write only the exact generation-bound Foreman report/inbox path outside the worktree.
+- permission to write only the leased project resources and the exact generation-bound Foreman report/inbox path outside the workspace;
+- prohibition on `git switch`, `git reset`, `git clean`, `git merge`, and `git commit`; Git lifecycle remains client-owned.
 
 ### 9.3 Worker communication
 
@@ -294,7 +300,7 @@ Every Foreman session starts with one bounded pass:
 4. apply valid generation-bound inbox packages;
 5. drain durable observer events;
 6. list Herdr runtime state once;
-7. reconcile every assigned task against project, owner, generation, endpoint, and worktree identity;
+7. reconcile every assigned task against project, owner, generation, endpoint, workspace, branch, and resource-lease identity;
 8. perform mandatory blocker, idle, dead-worker, or completion follow-up;
 9. persist lifecycle and progress changes before reporting them;
 10. ensure the observer is active while supervised work remains;
@@ -324,7 +330,7 @@ Foreman does not continuously poll with an LLM after a turn. A deterministic obs
 
 1. Validate project, task, authority, dependency, and home lock.
 2. Create a new assignment generation.
-3. Create or validate the task worktree.
+3. Receive and validate the client-prepared workspace and resource claims.
 4. Persist the brief and pending assignment before runtime delivery.
 5. Spawn the worker through the Herdr adapter.
 6. Verify delivery and stable endpoint identity.
@@ -345,11 +351,11 @@ Worker completion produces a Completion Package containing outcome, changed surf
 
 ### 11.7 Dead worker and handoff
 
-Foreman distinguishes `working`, `blocked`, `idle`, `done`, `unknown`, `dead`, and `missing` using adapter evidence. Only recovery-grade `dead` or `missing` permits automatic handoff. The successor receives original requirements, accepted decisions, latest snapshot, prior report, worktree state, and an instruction to inspect rather than trust previous implementation assumptions.
+Foreman distinguishes `working`, `blocked`, `idle`, `done`, `unknown`, `dead`, and `missing` using adapter evidence. Only recovery-grade `dead` or `missing` permits automatic handoff. The successor receives original requirements, accepted decisions, latest snapshot, prior report, workspace state, resource claims, and an instruction to inspect rather than trust previous implementation assumptions.
 
 ### 11.8 Cleanup
 
-Cleanup verifies delivery, Git state, worktree identity, task generation, and endpoint binding. Uncommitted, unpushed, unmerged, or otherwise unlanded work blocks teardown unless the user explicitly authorizes discard for that exact task.
+Cleanup verifies delivery, workspace identity, resource lease, task generation, and endpoint binding. The client performs commit, merge, branch switching, reset, and workspace recycling. Unlanded work blocks lease release unless the user explicitly authorizes discard for that exact task.
 
 ## 12. User-facing reporting
 
@@ -370,11 +376,11 @@ Foreman fails closed when:
 
 - the home lock is unavailable;
 - a project ID or canonical root is ambiguous;
-- task metadata does not match runtime endpoint or worktree identity;
+- task metadata does not match runtime endpoint, workspace, branch, or resource identity;
 - an assignment generation is stale;
 - worker output cannot be attributed to the current assignment;
 - Herdr state is unreadable or incompatible;
-- cleanup cannot prove work is landed;
+- cleanup cannot prove work is landed or the client has released the workspace;
 - multiple valid user-authority choices remain unresolved.
 
 Foreman preserves evidence and reports the exact uncertainty. It does not convert `unknown` into `dead`, retry destructive operations blindly, or route work to another project as fallback.
@@ -394,13 +400,13 @@ The legacy copy remains unchanged until equivalent behavior is proven in the new
 
 - Add project registration and canonical root validation.
 - Bind every task and runtime operation to a project ID.
-- Prove two projects can run concurrently without state, worker, event, or worktree crossover.
+- Prove two projects can run concurrently without state, worker, event, workspace, or resource crossover.
 - Add fleet and per-project reporting.
 
-### Phase C: worktree and worker lifecycle
+### Phase C: workspace, resources, and worker lifecycle
 
-- Add safe worktree creation, spawn, handoff, and cleanup.
-- Prove interrupted spawn recovery and stale-generation rejection.
+- Add client-prepared workspace validation, resource leases, spawn, handoff, and release proof.
+- Prove overlapping leases block dispatch, disjoint leases run concurrently, interrupted spawn recovery, and stale-generation rejection.
 - Prove unlanded work prevents teardown.
 
 ### Phase D: delivery
@@ -418,14 +424,14 @@ The first milestone is complete only when all of the following are directly demo
 
 1. A clean Foreman session registers one local project without modifying it.
 2. A task is persisted before dispatch and can be reconstructed after clearing the session.
-3. A Herdr worker is bound to the correct project, worktree, task, owner, and generation.
+3. A Herdr worker is bound to the correct project, workspace, branch, task, owner, generation, and resource lease.
 4. Progress, blocker, decision, completion, and acceptance transitions preserve their original packages.
 5. A stale worker package cannot update a reassigned task.
 6. A dead worker can be handed off without losing user requirements or accepted decisions.
 7. Observer events survive Foreman downtime and reconcile once after restart.
 8. A second Foreman session cannot mutate the same home.
 9. Foreman does not write production code in the managed project.
-10. Cleanup refuses unlanded work.
+10. Cleanup refuses unlanded work or missing client workspace-release proof.
 11. Default reporting contains no duplicate task and no empty status group.
 12. Focused automated scenarios cover state transitions, generation guards, observer deduplication, lock refusal, restart recovery, project-boundary rejection, and cleanup refusal.
 
@@ -439,7 +445,7 @@ Multi-project support is complete only when:
 4. Fleet restart reconstructs both projects from disk and one runtime listing.
 5. Per-project status and fleet status agree on lifecycle and ownership.
 6. Dispatch refuses an unregistered, disabled, missing, or relocated project until the registry is explicitly reconciled.
-7. Worktree cleanup in one project cannot address paths or endpoints belonging to another project.
+7. Workspace/resource cleanup in one project cannot address paths or endpoints belonging to another project.
 
 ## 17. Deliberate initial decisions
 
@@ -451,7 +457,7 @@ Multi-project support is complete only when:
 - Acceptance: user only.
 - Merge authority: none in the initial release.
 - Supervision: deterministic event observer plus on-demand Foreman turns.
-- Project mutation: workers only, in isolated worktrees for mutation tasks.
+- Project mutation: workers only, in client-prepared shared workspaces; resource leases guard concurrent mutation.
 - Legacy code: preserved under `legacy/` until parity and cutover are proven.
 
 ## 18. Feature admission rule
@@ -464,7 +470,7 @@ A new feature belongs in Foreman core only if it passes every check:
 4. It keeps the user as acceptance and material-policy authority.
 5. It materially reduces user coordination or protects fleet correctness.
 6. Any new state has one writer, a stable identity, and a cleanup lifecycle.
-7. It respects exact project, task, owner, generation, worktree, and endpoint binding.
+7. It respects exact project, task, owner, generation, workspace, resource lease, and endpoint binding.
 8. It can be proven through focused state, runtime, or recovery scenarios.
 9. It does not add another backend or distribution mechanism without demonstrated need.
 10. It does not copy a FirstMate feature merely because FirstMate has it.
@@ -480,7 +486,7 @@ The milestone includes:
 3. register exactly one local Git project without modifying that project;
 4. allocate a global task ID and persist the user's requirements before dispatch;
 5. persist assignment metadata with one owner and a generation;
-6. create or validate an isolated worktree bound to the task and project;
+6. validate a client-prepared workspace and resource lease bound to the task and project;
 7. dispatch one worker through the Herdr adapter and verify delivery and endpoint identity;
 8. persist generation-bound progress and completion packages without replacing their original wording;
 9. reconstruct the task and assignment after clearing the Foreman session;

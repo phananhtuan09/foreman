@@ -5,9 +5,11 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  HomeLock, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError,
+  HomeLock, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, ResourceBusyError,
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
   recordPackage, reconstructTask, acceptTask, markLanded, releaseEndpoint, cleanupTask,
+  claimResources, releaseResources, renewResources, listResourceLeases,
+  validateWorkspace,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
 
@@ -56,6 +58,20 @@ test("atomic persistence leaves a complete file and no temporary file", () => {
   } finally { f.cleanup(); }
 });
 
+test("resource leases allow disjoint work and block overlapping work", () => {
+  const f = fixture();
+  try {
+    const first = claimResources({ roots: f.roots, taskId: "T-1", generation: 1, owner: "worker-1", resources: [{ key: "file/src/auth/**", mode: "write" }] });
+    assert.throws(() => claimResources({ roots: f.roots, taskId: "T-2", generation: 1, owner: "worker-2", resources: [{ key: "file/src/auth/login", mode: "read" }] }), ResourceBusyError);
+    const second = claimResources({ roots: f.roots, taskId: "T-2", generation: 1, owner: "worker-2", resources: [{ key: "db/users/record/2", mode: "write" }] });
+    assert.equal(listResourceLeases({ roots: f.roots }).length, 2);
+    assert.equal(renewResources({ roots: f.roots, leaseId: first.leaseId }).leaseId, first.leaseId);
+    assert.equal(releaseResources({ roots: f.roots, leaseId: first.leaseId }), 1);
+    assert.equal(releaseResources({ roots: f.roots, leaseId: second.leaseId }), 1);
+    assert.deepEqual(listResourceLeases({ roots: f.roots }), []);
+  } finally { f.cleanup(); }
+});
+
 test("task intake preserves the original brief and validates project boundary", () => {
   const f = fixture();
   try {
@@ -65,11 +81,14 @@ test("task intake preserves the original brief and validates project boundary", 
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), before);
     assert.equal(fs.readFileSync(path.join(f.home, "data", "tasks", task.id, "brief.md"), "utf8"), brief);
     assert.throws(() => createTask({ roots: f.roots, projectId: "other", brief: "x" }), ValidationError);
-    assert.throws(() => require("../src/foreman").createWorktree({ roots: f.roots, projectId: "fixture", taskId: task.id, generation: 1, worktreePath: path.join(f.base, "outside") }), ValidationError);
+    assert.throws(() => validateWorkspace({ root: f.projectRoot }, path.join(f.base, "outside")), ValidationError);
+    const workspace = validateWorkspace({ root: f.projectRoot }, f.projectRoot);
+    assert.equal(workspace.path, f.projectRoot);
+    assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);
   } finally { f.cleanup(); }
 });
 
-test("dispatch binds Herdr endpoint, worktree, owner, and generation", () => {
+test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "implement slice" });
@@ -78,7 +97,8 @@ test("dispatch binds Herdr endpoint, worktree, owner, and generation", () => {
     assert.equal(meta.projectId, "fixture");
     assert.equal(meta.status, "working");
     assert.equal(meta.endpoint, "endpoint-1");
-    assert.equal(fs.realpathSync(meta.worktree).startsWith(fs.realpathSync(path.join(f.home, "projects", "fixture"))), true);
+    assert.equal(meta.workspace, f.projectRoot);
+    assert.equal(meta.branch, "main");
   } finally { f.cleanup(); }
 });
 
@@ -113,6 +133,6 @@ test("completion, acceptance, restart reconstruction, and cleanup refusal preser
     assert.equal(fs.readFileSync(path.join(f.home, "data", "backlog.md"), "utf8").includes(task.id), false);
     assert.equal(fs.readFileSync(path.join(f.home, "data", "done.md"), "utf8").includes(task.id), true);
     releaseEndpoint({ roots: f.roots, taskId: task.id, adapter: f.adapter });
-    assert.equal(cleanupTask({ roots: f.roots, taskId: task.id }), true);
+    assert.equal(cleanupTask({ roots: f.roots, taskId: task.id, workspaceReleased: true }), true);
   } finally { f.cleanup(); }
 });

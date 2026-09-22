@@ -104,8 +104,8 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     const taskOne = createTask({ roots: f.roots, projectId: "fixture", brief: "implement worker one slice" });
     const taskTwo = createTask({ roots: f.roots, projectId: "fixture", brief: "implement worker two slice" });
 
-    const assignmentOne = assignTask({ roots: f.roots, taskId: taskOne.id, owner: "worker-1", adapter: f.adapter });
-    const assignmentTwo = assignTask({ roots: f.roots, taskId: taskTwo.id, owner: "worker-2", adapter: f.adapter });
+    const assignmentOne = assignTask({ roots: f.roots, taskId: taskOne.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/src/one", mode: "write" }] });
+    const assignmentTwo = assignTask({ roots: f.roots, taskId: taskTwo.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/two", mode: "write" }] });
     assert.deepEqual(f.adapter.list().map((worker) => worker.owner), ["worker-1", "worker-2"]);
     assert.deepEqual(f.transport.messages.map(({ message }) => message.owner), ["worker-1", "worker-2"]);
     assert.equal(f.transport.messages[0].message.generation, 1);
@@ -134,10 +134,11 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     releaseEndpoint({ roots: f.roots, taskId: taskOne.id, adapter: f.adapter });
     releaseEndpoint({ roots: f.roots, taskId: taskTwo.id, adapter: f.adapter });
     assert.deepEqual(f.adapter.list(), []);
-    const worktrees = [assignmentOne.worktree, assignmentTwo.worktree];
-    assert.equal(cleanupTask({ roots: f.roots, taskId: taskOne.id }), true);
-    assert.equal(cleanupTask({ roots: f.roots, taskId: taskTwo.id }), true);
-    assert.ok(worktrees.every((worktree) => !fs.existsSync(worktree)));
+    assert.equal(assignmentOne.workspace, f.projectRoot);
+    assert.equal(assignmentTwo.workspace, f.projectRoot);
+    assert.equal(cleanupTask({ roots: f.roots, taskId: taskOne.id, workspaceReleased: true }), true);
+    assert.equal(cleanupTask({ roots: f.roots, taskId: taskTwo.id, workspaceReleased: true }), true);
+    assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);
 
     const backlog = fs.readFileSync(path.join(f.roots.foremanHome, "data", "backlog.md"), "utf8");
     const done = fs.readFileSync(path.join(f.roots.foremanHome, "data", "done.md"), "utf8");
