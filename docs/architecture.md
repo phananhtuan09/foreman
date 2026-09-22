@@ -6,6 +6,12 @@ Foreman keeps global fleet state in a private file home and treats each register
 `src/herdr.js` is the narrow Herdr adapter.
 `adapters/herdr/` is the distribution wrapper.
 
+Every task enters a durable `routing` state after its verbatim brief is stored.
+`config/model-routing.json` defines one fixed router, one default worker profile, and named worker profiles.
+The router may select only a configured profile; failure selects the configured default and records the error.
+The routing record binds the task, brief digest, config digest, selected profile, source, reason, and timestamp before the task becomes `queued`.
+Worker profiles support `codex`, `claude`, and `omp`; Herdr starts the selected tool with the configured command arguments and model.
+
 Canonical writes use the home lock and atomic replacement.
 JSON records carry `schemaVersion: 1`; unsupported or malformed active records fail closed.
 Worker files are external input: valid current-generation packages are applied idempotently, while invalid packages and acknowledgements are copied byte-for-byte to the task quarantine.

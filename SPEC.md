@@ -655,9 +655,9 @@ Each phase must preserve the core invariants and add focused recovery and failur
 
 ### Phase P3: dispatch optimization
 
-1. Add explicit static dispatch profiles for agent harness, model, and reasoning effort.
-2. Validate profiles against runtime adapter capabilities and provide an explicit compatible fallback.
-3. Add policy-based selection only after real task evidence demonstrates that static profiles are insufficient.
+1. Configure a default router and named worker profiles with a coding tool, command, model, and natural-language usage policy.
+2. Route every newly created task before it becomes scheduler-eligible, and persist the selected profile and evidence.
+3. Validate profiles against runtime adapter capabilities and use only the explicitly configured default when routing fails.
 
 ### Deferred expansion
 
@@ -713,7 +713,7 @@ Multi-project support is complete only when:
 
 ### 16.2 P3 dispatch profiles
 
-P3 is complete only when a supported static profile reaches the runtime unchanged, an unsupported profile fails before dispatch, and fallback occurs only through an explicitly configured compatible profile.
+P3 is complete only when every new task produces a durable routing record, the router can select only a configured profile, a supported tool command and model reach the runtime unchanged, an unsupported profile fails before dispatch, and fallback occurs only through the explicitly configured default profile.
 
 ## 17. Deliberate initial decisions
 
@@ -798,7 +798,10 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - The same proof covers concurrent assignments in two projects, cross-project package refusal, one restart listing, fleet and project status agreement, disabled or missing or relocated projects, cleanup that cannot address the other project, and idle-endpoint reuse only after the prior assignment is terminal and its messages and lease are released.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
-- A compatible fallback is accepted only when explicitly configured and is forwarded unchanged.
+- Mandatory task-intake routing is implemented through `config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
+- Routing supports the `codex`, `claude`, and `omp` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
+- Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
+- A compatible dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
 - `bin/foreman` is a thin wrapper over the core modules for dispatch, schedule, adopt, recover, decision lifecycle, accept, mark-landed, endpoint release, lease release, cleanup, reconcile, observer, and wake-driven follow-up.
 - Default `status` and `task list` render the grouped Vietnamese report.
 - `--json` keeps the machine-readable record.
@@ -807,7 +810,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 ### 20.2 Runtime proof
 
-- On 2026-09-22, `npm test` ran 36 tests: 34 passed and 2 were skipped.
+- On 2026-09-22, `npm test` ran 41 tests: 39 passed and 2 were skipped.
 - The skipped tests are the live Herdr cases, and they stay skipped unless `RUN_HERDR_LIVE=1`.
 - `npm run test:live` was not run for this status update.
 - The installed runtime is Herdr 0.9.1 and `HERDR_ENV=1`, but the session already has active user agents, so spawning the live workers was not treated as a safe proof.
@@ -816,7 +819,8 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 - Task briefs are strictly ACK-gated: an assignment remains `pending-ack` and stays `[ ]` until a current-generation ACK is verified.
 - Disabling brief ACK-gating is rejected rather than treated as a valid dispatch mode.
-- The current Herdr runtime exposes `agentKind` but not model or reasoning-effort capabilities, so those dispatch-profile fields fail closed until a compatible runtime is configured.
-- No implicit model fallback is performed.
+- Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
+- Reasoning-effort routing remains unsupported until the runtime exposes a verified cross-tool contract for it.
+- No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - Scout isolation is a before/after workspace fingerprint, not a runtime sandbox.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.

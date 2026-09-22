@@ -13,7 +13,7 @@ function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1, a
     if (args.join(" ") === "pane --help") return paneHelp || "herdr pane split\nherdr pane close\nherdr pane process-info\nherdr pane send-keys\nherdr pane read\n";
     if (args.join(" ") === "pane split --current --direction right --cwd /tmp/worktree --no-focus") return JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } });
     if (args.join(" ") === "pane process-info --pane w1:p2") return JSON.stringify({ result: { process_info: { shell_pid: 42, foreground_processes: [{ pid: 42, name: "zsh" }] } } });
-    if (args.join(" ") === "agent start worker-1 --kind codex --pane w1:p2") return JSON.stringify({ result: { type: "agent_started" } });
+    if (args[0] === "agent" && args[1] === "start" && args[2] === "worker-1") return JSON.stringify({ result: { type: "agent_started" } });
     if (args[0] === "agent" && args[1] === "send-keys" && args[3] === "ctrl-c") { agentStatus = "idle"; return ""; }
     if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: agentStatus, cwd: "/tmp/worktree", pane_id: "w1:p2" }] } });
     if (args[0] === "agent" && args[1] === "prompt") return JSON.stringify({ result: { type: "agent_prompt_submitted" } });
@@ -77,6 +77,29 @@ test("Herdr transport accepts a newer compatible release but rejects endpoint ge
   assert.throws(() => incompatible.verifyCompatibility(), HerdrCompatibilityError);
   const missingInterrupt = new HerdrCliTransport({ runner: fakeHerdr({ agentHelp: "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\n" }).runner });
   assert.throws(() => missingInterrupt.verifyCompatibility(), /send-keys/);
+});
+
+test("Herdr starts a routed coding tool with configured arguments and model", () => {
+  const previous = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "1";
+  try {
+    const fake = fakeHerdr();
+    const transport = new HerdrCliTransport({ runner: fake.runner });
+    transport.spawn({
+      owner: "worker-1",
+      cwd: "/tmp/worktree",
+      dispatchProfile: {
+        name: "claude-deep",
+        tool: "claude",
+        command: ["claude", "--dangerously-skip-permissions"],
+        model: "claude-opus",
+      },
+    });
+    assert.ok(fake.calls.some((args) => args.join(" ") === "agent start worker-1 --kind claude --pane w1:p2 -- --dangerously-skip-permissions --model claude-opus"));
+  } finally {
+    if (previous === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = previous;
+  }
 });
 
 test("adapter interrupt fails closed unless a later inspection shows the endpoint survived idle", () => {

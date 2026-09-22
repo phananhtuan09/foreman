@@ -48,6 +48,9 @@ function resourceClaims() {
 const usage = [
   "usage:",
   "  init",
+  "  routing init",
+  "  routing show",
+  "  routing route --task ID",
   "  project register --id ID --root PATH [--name NAME]",
   "  task create --project ID (--brief TEXT|--brief-file FILE) [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
@@ -80,12 +83,21 @@ function main() {
   const action = process.argv[3];
   const home = roots();
   if (!command || command === "--help" || command === "-h" || command === "help") { output(usage); return; }
-  if (command === "init") { output(core.initHome(home)); return; }
+  if (command === "init") {
+    const initialized = core.initHome(home);
+    const routing = core.initRoutingConfig({ roots: home });
+    output({ ...initialized, routingConfig: routing.file });
+    return;
+  }
+  if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home })); return; }
+  if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanHome, { required: true })); return; }
+  if (command === "routing" && action === "route") { output(core.routeTask({ roots: home, taskId: arg("--task") })); return; }
   if (command === "project" && action === "register") {
     output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));
     return;
   }
   if (command === "task" && action === "create") {
+    core.initRoutingConfig({ roots: home });
     output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
     return;
   }

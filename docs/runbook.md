@@ -5,6 +5,7 @@ Register a Git project, create a task, and dispatch through the CLI:
 
 ```sh
 bin/foreman init
+bin/foreman routing show
 bin/foreman project register --id app --root /path/to/app
 bin/foreman task create --project app --brief-file brief.md
 bin/foreman task dispatch --task T-000001 --owner worker
@@ -18,6 +19,48 @@ bin/foreman observer once
 bin/foreman reconcile
 bin/foreman status
 ```
+
+`init` creates `FOREMAN_HOME/config/model-routing.json` if it does not exist and never overwrites an existing file.
+The file has one fixed `router`, one `default` profile name, and named worker `profiles`:
+
+```json
+{
+  "schemaVersion": 1,
+  "router": {
+    "tool": "codex",
+    "command": ["codex", "exec", "--sandbox", "read-only", "--ephemeral"],
+    "model": "default",
+    "whenToUse": "Classify every new Foreman task."
+  },
+  "default": "codex-default",
+  "profiles": {
+    "codex-default": {
+      "tool": "codex",
+      "command": ["codex"],
+      "model": "default",
+      "whenToUse": "General coding and debugging."
+    },
+    "claude-deep": {
+      "tool": "claude",
+      "command": ["claude", "--dangerously-skip-permissions"],
+      "model": "claude-opus",
+      "whenToUse": "Large architecture and difficult reasoning."
+    },
+    "omp-fast": {
+      "tool": "omp",
+      "command": ["omp", "--auto-approve"],
+      "model": "fast-model",
+      "whenToUse": "Small isolated changes."
+    }
+  }
+}
+```
+
+`command` accepts either an argument array or a shell-like string, but Foreman always executes it without a shell.
+The command executable must match `tool`, and model flags belong in `model` rather than `command`.
+Every task is routed during creation, and the decision is stored at `state/tasks/<taskId>/routing.json` before scheduling.
+If the router fails or returns an unknown profile, Foreman uses only the configured `default` and records the failure.
+Use `routing route --task <id>` to resume a task left in `routing` after an interrupted process.
 
 `status` prints the grouped Vietnamese report.
 `status --json` and `task list --json` keep the machine-readable record.

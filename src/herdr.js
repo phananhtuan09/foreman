@@ -1,4 +1,5 @@
 const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 
 class HerdrCompatibilityError extends Error {}
 
@@ -177,10 +178,12 @@ class HerdrCliTransport {
     throw new HerdrCompatibilityError("Herdr pane did not reach an available shell prompt");
   }
 
-  _startAgentWhenAvailable({ owner, agentKind, paneId }, timeoutMs = 5000) {
+  _startAgentWhenAvailable({ owner, agentKind, paneId, agentArgs = [] }, timeoutMs = 5000) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-      try { return this._runJson(["agent", "start", owner, "--kind", agentKind, "--pane", paneId]); }
+      const args = ["agent", "start", owner, "--kind", agentKind, "--pane", paneId];
+      if (agentArgs.length) args.push("--", ...agentArgs);
+      try { return this._runJson(args); }
       catch (error) {
         if (!String(error.message).includes("agent_pane_busy") || Date.now() >= deadline) throw error;
         this._sleep(50);
@@ -237,20 +240,32 @@ class HerdrCliTransport {
   }
 
   capabilities() {
-    return { agentKind: true, model: false, reasoningEffort: false };
+    return { agentKind: true, tool: true, command: true, model: true, reasoningEffort: false };
   }
 
   spawn({ owner, cwd, agentKind = this.agentKind, dispatchProfile } = {}) {
     if (process.env.HERDR_ENV !== "1") throw new HerdrCompatibilityError("Herdr worker dispatch requires HERDR_ENV=1");
-    if (dispatchProfile?.agentKind) agentKind = dispatchProfile.agentKind;
+    if (dispatchProfile?.tool) agentKind = dispatchProfile.tool;
+    else if (dispatchProfile?.agentKind) agentKind = dispatchProfile.agentKind;
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(owner)) throw new HerdrCompatibilityError(`Invalid Herdr agent name: ${owner}`);
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(agentKind)) throw new HerdrCompatibilityError(`Invalid Herdr agent kind: ${agentKind}`);
+    let agentArgs = [];
+    if (dispatchProfile?.command) {
+      const command = Array.isArray(dispatchProfile.command) ? dispatchProfile.command.map(String) : String(dispatchProfile.command).trim().split(/\s+/);
+      if (!command.length || !command[0]) throw new HerdrCompatibilityError("Dispatch profile command is empty");
+      const executable = path.basename(command[0]).replace(/\.(?:cmd|exe)$/i, "");
+      if (executable !== agentKind) throw new HerdrCompatibilityError("Dispatch profile command does not match its tool");
+      agentArgs = command.slice(1);
+    }
+    if (dispatchProfile?.model && dispatchProfile.model !== "default" && !agentArgs.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) {
+      agentArgs.push("--model", dispatchProfile.model);
+    }
     const split = this._runJson(["pane", "split", "--current", "--direction", this.paneDirection, "--cwd", cwd, "--no-focus"]);
     const paneId = split?.result?.pane?.pane_id || split?.result?.pane_id;
     if (!paneId) throw new HerdrCompatibilityError("Herdr pane split did not return a pane identity");
     try {
       this._waitForAvailableShell(paneId);
-      this._startAgentWhenAvailable({ owner, agentKind, paneId });
+      this._startAgentWhenAvailable({ owner, agentKind, paneId, agentArgs });
       this._ensureInteractiveReady(paneId);
       return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
     } catch (error) {

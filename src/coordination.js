@@ -48,7 +48,7 @@ function validateTaskMetaRecord(meta, taskId) {
   }
   if (!meta.type || !["ship", "scout"].includes(meta.type)) throw new SchemaValidationError(`Task metadata type is invalid: ${taskId || meta.taskId}`);
   if (!Array.isArray(meta.dependencies || []) || !Array.isArray(meta.resources || [])) throw new SchemaValidationError(`Task metadata collections are invalid: ${taskId || meta.taskId}`);
-  if (!meta.status || !["queued", "pending", "pending-ack", "working", "blocked", "waiting-decision", "review-ready", "accepted", "cleaned"].includes(meta.status)) throw new SchemaValidationError(`Task metadata status is invalid: ${taskId || meta.taskId}`);
+  if (!meta.status || !["routing", "queued", "pending", "pending-ack", "working", "blocked", "waiting-decision", "review-ready", "accepted", "cleaned"].includes(meta.status)) throw new SchemaValidationError(`Task metadata status is invalid: ${taskId || meta.taskId}`);
   if (meta.owner !== null && meta.owner !== undefined && typeof meta.owner !== "string") throw new SchemaValidationError(`Task metadata owner is invalid: ${taskId || meta.taskId}`);
   if (meta.endpoint !== null && meta.endpoint !== undefined && typeof meta.endpoint !== "string") throw new SchemaValidationError(`Task metadata endpoint is invalid: ${taskId || meta.taskId}`);
   return meta;
