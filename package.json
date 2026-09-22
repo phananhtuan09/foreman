@@ -5,6 +5,7 @@
   "description": "Durable single-project Foreman vertical slice",
   "main": "src/foreman.js",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:live": "RUN_HERDR_LIVE=1 node --test test/herdr-live.integration.test.js"
   }
 }

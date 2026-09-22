@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { HerdrAdapter } = require("./herdr");
+const coordination = require("./coordination");
 
 class ForemanError extends Error {}
 class HomeLockError extends ForemanError {}
@@ -89,6 +90,7 @@ function initHome(roots) {
   for (const dir of ["config", "data", "data/tasks", "state", "state/tasks"]) {
     fs.mkdirSync(path.join(roots.foremanHome, dir), { recursive: true, mode: 0o700 });
   }
+  coordination.initCoordination(roots.foremanHome);
   const projectsFile = path.join(roots.foremanHome, "data", "projects.json");
   if (!fs.existsSync(projectsFile)) atomicJson(projectsFile, { version: 1, projects: [] });
   const sequence = path.join(roots.foremanHome, "data", "sequence.json");
@@ -292,7 +294,6 @@ function registerProject({ roots, id, name = id, root, defaultBranch = "main", d
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const projects = loadProjects(roots.foremanHome);
-    if (projects.length >= 1) throw new ValidationError("Milestone 1 permits exactly one registered project");
     if (projects.some((p) => p.id === id || p.root === projectRoot)) throw new ValidationError("Duplicate project id or root");
     const project = { id, name, root: projectRoot, defaultBranch, deliveryMode, enabled: true };
     atomicJson(projectFile(roots.foremanHome), { version: 1, projects: [...projects, project] });
@@ -309,32 +310,97 @@ function allocateTaskId(home) {
   return id;
 }
 
-function createTask({ roots, projectId, brief }) {
+function normalizeTaskType(type) {
+  const value = String(type || "ship").toLowerCase();
+  if (!["ship", "scout"].includes(value)) throw new ValidationError(`Unsupported task type: ${value}`);
+  return value;
+}
+
+function normalizeDependencies(dependencies) {
+  if (dependencies === undefined) return [];
+  if (!Array.isArray(dependencies)) throw new ValidationError("Task dependencies must be an array");
+  const values = [...new Set(dependencies.map((dependency) => String(dependency)))];
+  for (const value of values) if (!/^T-\d{6,}$/.test(value)) throw new ValidationError(`Invalid dependency task ID: ${value}`);
+  return values;
+}
+
+function taskMetaPath(home, id) { return metaFile(home, id); }
+
+function validateDependenciesUnlocked({ home, projectId, dependencies }) {
+  const tasks = new Map();
+  const root = path.join(home, "state", "tasks");
+  if (fs.existsSync(root)) {
+    for (const id of fs.readdirSync(root)) {
+      const file = taskMetaPath(home, id);
+      if (fs.existsSync(file)) tasks.set(id, readJson(file));
+    }
+  }
+  for (const dependency of dependencies) {
+    const record = tasks.get(dependency);
+    if (!record) throw new ValidationError(`Unknown task dependency: ${dependency}`);
+    if (record.projectId !== projectId) throw new ValidationError("Cross-project task dependencies are not supported");
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (id) => {
+    if (visiting.has(id)) throw new ValidationError("Task dependency cycle detected");
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of tasks.get(id)?.dependencies || []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const dependency of dependencies) visit(dependency);
+}
+
+function createTask({ roots, projectId, brief, type = "ship", taskType, dependencies = [] }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
+  const normalizedType = normalizeTaskType(taskType || type);
+  const normalizedDependencies = normalizeDependencies(dependencies);
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const project = findProject(roots.foremanHome, projectId);
+    validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
     const id = allocateTaskId(roots.foremanHome);
     const dir = taskDir(roots.foremanHome, id);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(taskStateDir(roots.foremanHome, id), { recursive: true, mode: 0o700 });
     atomicWrite(path.join(dir, "brief.md"), brief);
     atomicWrite(path.join(dir, "decisions.md"), "");
+    fs.mkdirSync(path.join(dir, "decisions"), { recursive: true, mode: 0o700 });
     atomicWrite(path.join(dir, "report.md"), "");
     atomicWrite(path.join(dir, "history.jsonl"), `${JSON.stringify({ at: now(), status: "queued", projectId })}\n`);
-    atomicJson(metaFile(roots.foremanHome, id), { taskId: id, projectId: project.id, owner: null, generation: 0, workspace: null, branch: null, resources: [], resourceLease: null, backend: "herdr", endpoint: null, status: "queued" });
+    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, branch: null, resources: [], resourceLease: null, backend: "herdr", endpoint: null, status: "queued" });
     updateBacklog(roots.foremanHome, id, "[ ]", project.id, brief);
-    return { id, projectId: project.id, brief };
+    return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief };
   });
 }
 
-function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, leaseTtlMs }) {
+function dependencySatisfied(meta) {
+  if (!meta) return false;
+  if (meta.type === "scout") return ["accepted", "cleaned"].includes(meta.status);
+  return meta.deliveryState === "landed";
+}
+
+function assertTaskDispatchable(home, taskId) {
+  const root = path.join(home, "state", "tasks");
+  const meta = readMeta(home, taskId);
+  if (["accepted", "review-ready", "cleaned"].includes(meta.status)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
+  if (meta.status === "waiting-decision") throw new ValidationError(`Task is waiting for a human decision: ${taskId}`);
+  for (const dependency of meta.dependencies || []) {
+    const file = path.join(root, dependency, "meta.json");
+    if (!fs.existsSync(file) || !dependencySatisfied(readJson(file))) throw new ValidationError(`Task is blocked by dependency: ${dependency}`);
+  }
+  return meta;
+}
+
+function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, leaseTtlMs, requireMessageAck = false, dispatchProfile }) {
   if (!owner) throw new ValidationError("An assignment owner is required");
   owner = String(owner).replace(/^@/, "");
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
-    const prior = fs.existsSync(metaFile(roots.foremanHome, taskId)) ? readJson(metaFile(roots.foremanHome, taskId)) : null;
+    const prior = assertTaskDispatchable(roots.foremanHome, taskId);
     const actualProjectId = projectId || prior?.projectId;
     if (!actualProjectId) throw new ValidationError("Task has no project binding");
     if (prior?.projectId && projectId && prior.projectId !== projectId) throw new ValidationError("Task project binding cannot be changed");
@@ -343,9 +409,11 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       ? (prior.generation || 0)
       : (prior?.generation || 0) + 1;
     const workspace = validateWorkspace(project, workspacePath || cwd || project.root);
+    const taskType = prior.type || "ship";
     const requestedResources = resources === undefined && preflight === undefined
-      ? [{ key: `workspace/${project.id}`, mode: "exclusive" }]
+      ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" ? "read" : "exclusive" }]
       : (resources === undefined ? preflight : resources);
+    if (taskType === "scout" && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
     let resourceLease;
     try {
       resourceLease = claimResourcesUnlocked({ roots, taskId, generation, owner, resources: requestedResources, ttlMs: leaseTtlMs, ignoreLeaseId: prior?.resourceLease?.leaseId });
@@ -365,6 +433,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
     const pending = {
       taskId,
       projectId: project.id,
+      type: taskType,
+      dependencies: prior.dependencies || [],
       owner,
       generation,
       workspace: workspace.path,
@@ -374,6 +444,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       backend: "herdr",
       endpoint: null,
       status: "pending",
+      dispatchProfile: dispatchProfile || prior.dispatchProfile || null,
     };
     atomicJson(metaFile(roots.foremanHome, taskId), pending);
     try {
@@ -386,18 +457,23 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       }
       if (!adapter || typeof adapter.verifyCompatibility !== "function" || typeof adapter.spawn !== "function" || typeof adapter.inspect !== "function" || typeof adapter.send !== "function") throw new DeliveryError("Herdr adapter is required");
       adapter.verifyCompatibility();
-      const spawned = adapter.spawn({ taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", brief });
+      const profile = dispatchProfile || prior.dispatchProfile || null;
+      if (profile) validateDispatchProfile(profile, typeof adapter.capabilities === "function" ? adapter.capabilities() : (adapter.dispatchCapabilities || {}));
+      const spawned = adapter.spawn({ taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", brief, dispatchProfile: profile });
       const endpoint = spawned?.endpoint || spawned?.endpointId;
       if (!endpoint) throw new DeliveryError("Herdr did not return an endpoint identity");
       const inspected = adapter.inspect(endpoint);
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
-      const delivered = adapter.send(endpoint, { taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", instructions: ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."], brief, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`) });
+      const messagePayload = { taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", instructions: ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."], brief, taskType, dispatchProfile: dispatchProfile || prior.dispatchProfile || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`) };
+      const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
+      const delivered = adapter.send(endpoint, messagePayload);
+      coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: delivered !== false && delivered?.delivered !== false, evidence: delivered });
       if (delivered === false || delivered?.delivered === false) throw new DeliveryError("Herdr did not confirm brief delivery");
-      const assigned = { ...pending, endpoint, status: "working", assignedAt: now() };
+      const assigned = { ...pending, endpoint, status: requireMessageAck ? "pending-ack" : "working", assignedAt: now(), briefMessageId: message.messageId, messageAckRequired: Boolean(requireMessageAck) };
       if (prior?.resourceLease) releaseResourcesUnlocked({ roots, leaseId: prior.resourceLease.leaseId });
       atomicJson(metaFile(roots.foremanHome, taskId), assigned);
       updateBacklog(roots.foremanHome, taskId, "[~]", project.id, brief, owner, generation);
-      appendHistory(roots.foremanHome, taskId, { at: now(), status: "working", owner, generation, workspace: workspace.path });
+      appendHistory(roots.foremanHome, taskId, { at: now(), status: assigned.status, owner, generation, workspace: workspace.path, messageId: message.messageId });
       return assigned;
     } catch (error) {
       releaseResourcesUnlocked({ roots, leaseId: resourceLease.leaseId });
@@ -467,10 +543,23 @@ function recordPackageUnlocked({ roots, taskId, raw, type }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `generation-${generation}-${type}.md`);
   atomicWrite(file, raw);
+  if (headers.ACK_MESSAGE_ID) {
+    const messageFile = coordination.messageFile(roots.foremanHome, headers.ACK_MESSAGE_ID);
+    if (!fs.existsSync(messageFile)) throw new StaleGenerationError("Worker acknowledgement references an unknown message");
+    const message = readJson(messageFile);
+    if (message.taskId !== taskId || message.worker !== meta.owner || message.generation !== meta.generation || headers.PAYLOAD_DIGEST !== message.payloadDigest) throw new StaleGenerationError("Worker acknowledgement does not match the current message");
+    const ack = { messageId: message.messageId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, payloadDigest: message.payloadDigest, packageFile: file, acknowledgedAt: now() };
+    coordination.updateMessageUnlocked({ roots, messageId: message.messageId, mutate: (item) => ({ ...item, status: "acknowledged", acknowledgedAt: now(), ack }) });
+  }
   if (type === "completion") atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "report.md"), raw);
   else atomicWrite(path.join(taskStateDir(roots.foremanHome, taskId), "progress"), raw);
+  if (type === "blocker") {
+    const next = { ...meta, status: "blocked", blockerPackage: file, blockerAt: now() };
+    atomicJson(metaFile(roots.foremanHome, taskId), next);
+    appendHistory(roots.foremanHome, taskId, { at: now(), status: "blocked", generation });
+  }
   if (type === "completion") {
-    const next = { ...meta, status: "review-ready", completionPackage: file };
+    const next = { ...meta, status: "review-ready", completionPackage: file, completionAt: now() };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     updateBacklog(roots.foremanHome, taskId, "[v]", meta.projectId, fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta.owner, meta.generation);
     appendHistory(roots.foremanHome, taskId, { at: now(), status: "review-ready", generation });
@@ -493,6 +582,7 @@ function acceptTask({ roots, taskId }) {
 function markLanded({ roots, taskId, evidence }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
+    if (meta.type === "scout") throw new ValidationError("Scout tasks do not require a landing commit");
     if (meta.status !== "accepted") throw new ValidationError("Task must be accepted before delivery is marked landed");
     if (!meta.workspace || !fs.existsSync(meta.workspace)) throw new CleanupRefusedError("Delivery cannot be proven without the bound workspace");
     const project = findProject(roots.foremanHome, meta.projectId);
@@ -526,7 +616,8 @@ function releaseEndpoint({ roots, taskId, adapter }) {
 function cleanupTask({ roots, taskId, discard = false, authorization = false, workspaceReleased = false }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
-    if (meta.deliveryState !== "landed" && !(discard && authorization)) throw new CleanupRefusedError("Cleanup refused while work is unlanded");
+    const deliveryComplete = meta.type === "scout" ? meta.status === "accepted" : meta.deliveryState === "landed";
+    if (!deliveryComplete && !(discard && authorization)) throw new CleanupRefusedError("Cleanup refused while work is unlanded");
     if (meta.endpoint) throw new CleanupRefusedError("Cleanup requires endpoint teardown proof");
     if (!workspaceReleased && !(discard && authorization)) throw new CleanupRefusedError("Client workspace release proof is required");
     if (meta.resourceLease) releaseResourcesUnlocked({ roots, leaseId: meta.resourceLease.leaseId });
@@ -542,10 +633,236 @@ function reconstructTask({ roots, taskId }) {
   return { id: taskId, brief: fs.readFileSync(path.join(dir, "brief.md"), "utf8"), meta, progress: fs.existsSync(path.join(taskStateDir(roots.foremanHome, taskId), "progress")) ? fs.readFileSync(path.join(taskStateDir(roots.foremanHome, taskId), "progress"), "utf8") : null, report: fs.existsSync(path.join(dir, "report.md")) ? fs.readFileSync(path.join(dir, "report.md"), "utf8") : null };
 }
 
+function acknowledgeTaskMessage({ roots, taskId, messageId, ack = {} }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    const file = coordination.messageFile(roots.foremanHome, messageId);
+    if (!fs.existsSync(file)) throw new ValidationError(`Unknown message: ${messageId}`);
+    const message = readJson(file);
+    if (message.taskId !== taskId || message.generation !== meta.generation || message.worker !== meta.owner) throw new StaleGenerationError("Message acknowledgement belongs to a stale assignment");
+    const acknowledged = coordination.updateMessageUnlocked({ roots, messageId, mutate: (item) => {
+      if (!ack.payloadDigest || ack.payloadDigest !== item.payloadDigest) throw new ValidationError("Message acknowledgement payload digest mismatch");
+      return { ...item, status: "acknowledged", acknowledgedAt: now(), ack: { ...ack, messageId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, payloadDigest: item.payloadDigest } };
+    }});
+    let next = meta;
+    if (meta.briefMessageId === messageId && meta.status === "pending-ack") {
+      next = { ...meta, status: "working", briefAcknowledgedAt: now() };
+      atomicJson(metaFile(roots.foremanHome, taskId), next);
+      appendHistory(roots.foremanHome, taskId, { at: now(), status: "working", owner: meta.owner, generation: meta.generation, reason: "brief-acknowledged" });
+    }
+    return { message: acknowledged, task: next };
+  });
+}
+
+function sendWorkerMessage({ roots, taskId, kind, payload, adapter, requireAck = true, maxAttempts }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
+    const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload, maxAttempts });
+    let result;
+    try { result = adapter.send(meta.endpoint, payload); }
+    catch (error) { result = { delivered: false, error: error.message }; }
+    const delivered = result !== false && result?.delivered !== false;
+    const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
+    if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+    const next = { ...meta, pendingMessageIds: [...new Set([...(meta.pendingMessageIds || []), message.messageId])], lastMessageAt: now() };
+    atomicJson(metaFile(roots.foremanHome, taskId), next);
+    return { message: updated, task: next, acknowledged: !requireAck };
+  });
+}
+
+function createDecision({ roots, taskId, finding, why, options, impact, evidence, recommendation, blocker = false }) {
+  if (!finding || !why || !Array.isArray(options) || options.length < 2) throw new ValidationError("Decision Package requires finding, rationale, and at least two options");
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    const id = `D-${crypto.randomBytes(10).toString("hex")}`;
+    const record = { schemaVersion: 1, decisionId: id, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, finding, whyHumanDecisionRequired: why, options, impact: impact || null, evidence: evidence || null, recommendation: recommendation === undefined ? "none available" : recommendation, blocker: Boolean(blocker), status: "pending", createdAt: now(), answeredAt: null, deliveredAt: null, acknowledgedAt: null, appliedAt: null, humanResponse: null };
+    const dir = path.join(taskDir(roots.foremanHome, taskId), "decisions");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    atomicJson(path.join(dir, `${id}.json`), record);
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, status: "waiting-decision", decisionId: id });
+    updateBacklog(roots.foremanHome, taskId, "[?]", meta.projectId, fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta.owner, meta.generation);
+    appendHistory(roots.foremanHome, taskId, { at: now(), status: "waiting-decision", decisionId: id, generation: meta.generation });
+    return record;
+  });
+}
+
+function answerDecision({ roots, taskId, decisionId, response }) {
+  if (typeof response !== "string" || !response) throw new ValidationError("Human decision must preserve non-empty verbatim text");
+  return withHomeLock(roots.foremanHome, () => {
+    const file = path.join(taskDir(roots.foremanHome, taskId), "decisions", `${decisionId}.json`);
+    if (!fs.existsSync(file)) throw new ValidationError(`Unknown decision: ${decisionId}`);
+    const record = readJson(file);
+    if (record.status !== "pending") throw new ValidationError("Decision is not awaiting a human response");
+    const next = { ...record, status: "answered", answeredAt: now(), humanResponse: response };
+    atomicJson(file, next);
+    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "decisions.md"), `${response}\n`);
+    return next;
+  });
+}
+
+function deliverDecision({ roots, taskId, decisionId, adapter }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    const file = path.join(taskDir(roots.foremanHome, taskId), "decisions", `${decisionId}.json`);
+    if (!fs.existsSync(file)) throw new ValidationError(`Unknown decision: ${decisionId}`);
+    const decision = readJson(file);
+    if (decision.status !== "answered") throw new ValidationError("Decision must be answered before delivery");
+    if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to deliver a decision");
+    if (decision.generation !== meta.generation || decision.worker !== meta.owner) throw new StaleGenerationError("Decision belongs to a stale assignment");
+    const payload = { decisionId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, response: decision.humanResponse, instructions: "Acknowledge this decision before resuming work." };
+    const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind: "human-decision", payload, explicitId: `M-${decisionId}` });
+    const result = adapter.send(meta.endpoint, payload);
+    const delivered = result !== false && result?.delivered !== false;
+    coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
+    if (!delivered) throw new DeliveryError("Human decision delivery failed");
+    const nextDecision = { ...decision, status: "delivered", deliveredAt: now(), messageId: message.messageId };
+    atomicJson(file, nextDecision);
+    return nextDecision;
+  });
+}
+
+function acknowledgeDecision({ roots, taskId, decisionId, messageId, ack }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const file = path.join(taskDir(roots.foremanHome, taskId), "decisions", `${decisionId}.json`);
+    if (!fs.existsSync(file)) throw new ValidationError(`Unknown decision: ${decisionId}`);
+    const decision = readJson(file);
+    if (decision.messageId !== messageId) throw new ValidationError("Decision acknowledgement message mismatch");
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (decision.generation !== meta.generation) throw new StaleGenerationError("Decision acknowledgement belongs to a stale generation");
+    const message = readJson(coordination.messageFile(roots.foremanHome, messageId));
+    if (ack?.payloadDigest !== message.payloadDigest) throw new ValidationError("Decision acknowledgement digest mismatch");
+    coordination.updateMessageUnlocked({ roots, messageId, mutate: (item) => ({ ...item, status: "acknowledged", acknowledgedAt: now(), ack: { ...ack, messageId, taskId, generation: meta.generation } }) });
+    const next = { ...decision, status: "acknowledged", acknowledgedAt: now() };
+    atomicJson(file, next);
+    return next;
+  });
+}
+
+function applyDecision({ roots, taskId, decisionId }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const file = path.join(taskDir(roots.foremanHome, taskId), "decisions", `${decisionId}.json`);
+    if (!fs.existsSync(file)) throw new ValidationError(`Unknown decision: ${decisionId}`);
+    const decision = readJson(file);
+    if (!["acknowledged", "delivered", "answered"].includes(decision.status)) throw new ValidationError("Decision is not ready to apply");
+    const meta = readMeta(roots.foremanHome, taskId);
+    const next = { ...decision, status: "applied", appliedAt: now() };
+    atomicJson(file, next);
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, status: "working", decisionId: null, decisionAppliedAt: now() });
+    updateBacklog(roots.foremanHome, taskId, "[~]", meta.projectId, fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta.owner, meta.generation);
+    appendHistory(roots.foremanHome, taskId, { at: now(), status: "working", reason: "decision-applied", decisionId });
+    return next;
+  });
+}
+
+function promoteScout({ roots, taskId, brief, dependencies = [] }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const scout = readMeta(roots.foremanHome, taskId);
+    if (scout.type !== "scout" || scout.status !== "accepted") throw new ValidationError("Only an accepted scout can be promoted");
+    const sourceReport = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "report.md"), "utf8");
+    const text = brief || `Implement accepted findings from scout ${taskId}.\n\nScout report:\n${sourceReport}`;
+    const normalized = normalizeDependencies([...new Set([taskId, ...dependencies])]);
+    validateDependenciesUnlocked({ home: roots.foremanHome, projectId: scout.projectId, dependencies: normalized.filter((id) => id !== taskId) });
+    const id = allocateTaskId(roots.foremanHome);
+    const dir = taskDir(roots.foremanHome, id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(taskStateDir(roots.foremanHome, id), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(dir, "decisions"), { recursive: true, mode: 0o700 });
+    atomicWrite(path.join(dir, "brief.md"), text);
+    atomicWrite(path.join(dir, "decisions.md"), "");
+    atomicWrite(path.join(dir, "report.md"), "");
+    atomicWrite(path.join(dir, "history.jsonl"), `${JSON.stringify({ at: now(), status: "queued", projectId: scout.projectId, promotedFrom: taskId })}\n`);
+    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, promotedFrom: taskId, owner: null, generation: 0, workspace: null, branch: null, resources: [], resourceLease: null, backend: "herdr", endpoint: null, status: "queued" });
+    updateBacklog(roots.foremanHome, id, "[ ]", scout.projectId, text);
+    return { id, projectId: scout.projectId, type: "ship", promotedFrom: taskId, dependencies: normalized, brief: text };
+  });
+}
+
+function triageBlocker({ roots, taskId, raw, adapter, followUpPayload, decision }) {
+  if (typeof raw !== "string" || !raw) throw new ValidationError("Blocker package must preserve non-empty original text");
+  const lines = Object.fromEntries(raw.split(/\r?\n/).slice(0, 24).map((line) => line.match(/^([A-Z _]+):\s*(.*)$/)).filter(Boolean).map((match) => [match[1].trim(), match[2]]));
+  const authority = /^(yes|true|1)$/i.test(lines.AUTHORITY || "") || /^(product|architecture|compatibility|security|operational|acceptance)$/i.test(lines.BLOCKER_CLASS || "");
+  const result = { kind: authority ? "authority" : "technical", rootCause: lines.ROOT_CAUSE || null, evidence: lines.EVIDENCE || null, nextAction: lines.NEXT_ACTION || null, canSelfResolve: /^(yes|true|1)$/i.test(lines.CAN_SELF_RESOLVE || ""), raw };
+  if (!authority && adapter && followUpPayload) result.followUp = sendWorkerMessage({ roots, taskId, kind: "blocker-triage-follow-up", payload: followUpPayload, adapter });
+  if (authority && decision) result.decision = createDecision({ roots, taskId, ...decision, finding: decision.finding || result.rootCause || "Worker authority blocker", evidence: decision.evidence || result.evidence });
+  return result;
+}
+
+function observeRuntime({ roots, adapter }) { return coordination.observeOnce({ roots, adapter }); }
+function reconcileFleet({ roots, adapter, emitEvents = true }) { return coordination.reconcileFleet({ roots, adapter, emitEvents }); }
+function drainWakeQueue({ roots, handler, limit }) { return coordination.drainWakeQueue({ roots, handler, limit }); }
+function recoverProcessingEvents({ roots, maxAgeMs }) { return coordination.recoverProcessingEvents({ roots, maxAgeMs }); }
+
+function restartReconcile({ roots, adapter, eventHandler, retryMessages: retry = true }) {
+  initHome(roots);
+  recoverProcessingEvents({ roots });
+  const retried = retry ? coordination.retryMessages({ roots, adapter }) : [];
+  const fleet = reconcileFleet({ roots, adapter, emitEvents: true });
+  const handled = drainWakeQueue({ roots, handler: eventHandler });
+  return { fleet, retried, handled };
+}
+
+function buildHandoff({ roots, taskId, reason }) { return coordination.buildHandoffPackage({ roots, taskId, reason }); }
+
+function recoverDeadWorker({ roots, taskId, adapter, owner, requireMessageAck = false }) {
+  const fleet = reconcileFleet({ roots, adapter, emitEvents: true });
+  const item = fleet.tasks.find((entry) => entry.taskId === taskId);
+  if (!item || !["dead", "missing"].includes(item.state)) throw new ValidationError("Automatic recovery requires confirmed dead or missing runtime evidence");
+  const handoff = buildHandoff({ roots, taskId, reason: item.state });
+  withHomeLock(roots.foremanHome, () => atomicWrite(path.join(taskStateDir(roots.foremanHome, taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`));
+  const meta = readMeta(roots.foremanHome, taskId);
+  return assignTask({ roots, taskId, owner: owner || `${meta.owner || "worker"}-recovery`, adapter, workspacePath: meta.workspace, resources: meta.resources, requireMessageAck });
+}
+
+function listTasks({ roots, projectId, statuses } = {}) {
+  initHome(roots);
+  const root = path.join(roots.foremanHome, "state", "tasks");
+  const allowed = statuses ? new Set(statuses) : null;
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root).filter((id) => fs.existsSync(metaFile(roots.foremanHome, id))).map((id) => readJson(metaFile(roots.foremanHome, id))).filter((meta) => (!projectId || meta.projectId === projectId) && (!allowed || allowed.has(meta.status)));
+}
+
+function dispatchReadyTasks({ roots, adapter, ownerForTask, maxConcurrency = Infinity, projectLimits = {}, assignmentOptions = {} }) {
+  const active = listTasks({ roots }).filter((meta) => ["working", "pending-ack", "blocked", "waiting-decision"].includes(meta.status));
+  const results = [];
+  const counts = new Map();
+  for (const meta of active) counts.set(meta.projectId, (counts.get(meta.projectId) || 0) + 1);
+  for (const task of listTasks({ roots, statuses: ["queued", "pending"] })) {
+    if (results.length + active.length >= maxConcurrency) break;
+    if ((counts.get(task.projectId) || 0) >= (projectLimits[task.projectId] || Infinity)) continue;
+    const owner = ownerForTask?.(task) || task.owner;
+    if (!owner) continue;
+    try {
+      const assignment = assignTask({ roots, taskId: task.taskId, owner, adapter, ...assignmentOptions });
+      results.push(assignment);
+      counts.set(task.projectId, (counts.get(task.projectId) || 0) + 1);
+    } catch (error) {
+      if (!(error instanceof ResourceBusyError) && !(error instanceof ValidationError)) throw error;
+    }
+  }
+  return results;
+}
+
+function validateDispatchProfile(profile, capabilities = {}) {
+  if (profile === undefined || profile === null) return null;
+  if (typeof profile !== "object" || !profile.name) throw new ValidationError("Dispatch profile must have a name");
+  for (const key of ["agentKind", "model", "reasoningEffort"]) if (profile[key] !== undefined && capabilities[key] === false) throw new ValidationError(`Runtime does not support dispatch profile field: ${key}`);
+  return { ...profile };
+}
+
 module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock,
   registerProject, createTask, assignTask, recordPackage, reconstructTask, acceptTask, markLanded, releaseEndpoint, cleanupTask,
+  acknowledgeTaskMessage, sendWorkerMessage, createDecision, answerDecision, deliverDecision, acknowledgeDecision, applyDecision, promoteScout, triageBlocker,
+  observeRuntime, reconcileFleet, drainWakeQueue, recoverProcessingEvents, recoverDeadWorker, buildHandoff,
+  restartReconcile,
+  listTasks, dispatchReadyTasks, validateDispatchProfile,
   claimResources, releaseResources, renewResources, listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,
+  createMessage: coordination.createMessage, acknowledgeMessage: coordination.acknowledgeMessage,
+  listMessages: coordination.listMessages, retryMessages: coordination.retryMessages,
+  createObserverEvent: coordination.createObserverEvent, listEvents: coordination.listEvents,
+  coordinationDirs: coordination.coordinationDirs,
+  DeterministicObserver: coordination.DeterministicObserver,
 };
