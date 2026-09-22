@@ -10,7 +10,7 @@ const {
   deliverDecision, acknowledgeDecision, applyDecision, restartReconcile,
   retryMessages, StaleGenerationError, ValidationError, HerdrAdapter,
   recoverDeadWorker, buildHandoff, migrateJsonRecord, reconcileFleet,
-  findProject, listResourceLeases,
+  findProject, listResourceLeases, readWorkerRegistry,
 } = require("../src/foreman");
 const { listEvents } = require("../src/coordination");
 
@@ -78,6 +78,7 @@ test("a decision cannot be applied until the current generation ACKs delivery", 
     const delivered = deliverDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, adapter: f.adapter });
     const message = listMessages({ roots: f.roots }).find((item) => item.messageId === delivered.messageId);
     acknowledgeDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
+    assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastAck, message.messageId);
     assert.equal(applyDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId }).status, "applied");
     assert.equal(assignment.generation, 1);
   } finally { f.cleanup(); }

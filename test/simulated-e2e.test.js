@@ -113,7 +113,7 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
       acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     }
     assert.deepEqual(f.adapter.list().map((worker) => worker.owner), ["worker-1", "worker-2"]);
-    assert.deepEqual(f.transport.messages.map(({ message }) => message.owner), ["worker-1", "worker-2"]);
+    assert.deepEqual(f.transport.messages.map(({ message }) => message.worker), ["worker-1", "worker-2"]);
     assert.equal(f.transport.messages[0].message.generation, 1);
     assert.equal(f.transport.messages[1].message.generation, 1);
 
@@ -140,8 +140,8 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     releaseEndpoint({ roots: f.roots, taskId: taskOne.id, adapter: f.adapter });
     releaseEndpoint({ roots: f.roots, taskId: taskTwo.id, adapter: f.adapter });
     assert.deepEqual(f.adapter.list(), []);
-    assert.equal(assignmentOne.workspace, f.projectRoot);
-    assert.equal(assignmentTwo.workspace, f.projectRoot);
+    assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
+    assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(cleanupTask({ roots: f.roots, taskId: taskOne.id, workspaceReleased: true }), true);
     assert.equal(cleanupTask({ roots: f.roots, taskId: taskTwo.id, workspaceReleased: true }), true);
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);

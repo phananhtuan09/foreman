@@ -9,8 +9,9 @@ function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1 } 
     if (args.join(" ") === "status client --json") return JSON.stringify({ version, protocol, endpoint_protocol_generation: endpointGeneration });
     if (args.join(" ") === "status server --json") return JSON.stringify({ running: true, compatible: true, endpoint_compatible: true, private_protocol_compatible: true, capabilities: { endpoint_protocol_generation: endpointGeneration } });
     if (args.join(" ") === "agent --help") return "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\n";
-    if (args.join(" ") === "pane --help") return "herdr pane split\nherdr pane close\n";
+    if (args.join(" ") === "pane --help") return "herdr pane split\nherdr pane close\nherdr pane process-info\n";
     if (args.join(" ") === "pane split --current --direction right --cwd /tmp/worktree --no-focus") return JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } });
+    if (args.join(" ") === "pane process-info --pane w1:p2") return JSON.stringify({ result: { process_info: { shell_pid: 42, foreground_processes: [{ pid: 42, name: "zsh" }] } } });
     if (args.join(" ") === "agent start worker-1 --kind codex --pane w1:p2") return JSON.stringify({ result: { type: "agent_started" } });
     if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: "working", cwd: "/tmp/worktree", pane_id: "w1:p2" }] } });
     if (args[0] === "agent" && args[1] === "prompt") return JSON.stringify({ result: { type: "agent_prompt_submitted" } });

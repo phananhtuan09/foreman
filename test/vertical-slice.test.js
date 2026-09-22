@@ -83,7 +83,7 @@ test("task intake preserves the original brief and validates project boundary", 
     assert.throws(() => createTask({ roots: f.roots, projectId: "other", brief: "x" }), ValidationError);
     assert.throws(() => validateWorkspace({ root: f.projectRoot }, path.join(f.base, "outside")), ValidationError);
     const workspace = validateWorkspace({ root: f.projectRoot }, f.projectRoot);
-    assert.equal(workspace.path, f.projectRoot);
+    assert.equal(workspace.path, fs.realpathSync(f.projectRoot));
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);
   } finally { f.cleanup(); }
 });
@@ -100,7 +100,7 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
     assert.equal(meta.projectId, "fixture");
     assert.equal(active.status, "working");
     assert.equal(meta.endpoint, "endpoint-1");
-    assert.equal(meta.workspace, f.projectRoot);
+    assert.equal(meta.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(meta.branch, "main");
   } finally { f.cleanup(); }
 });

@@ -285,6 +285,7 @@ Message, acknowledgement, event, decision, and worker-package records carry corr
 
 Every Foreman-to-worker message is persisted before runtime delivery.
 The same outbox is used for task briefs, steering, follow-up requests, human decisions, and recovery instructions.
+Runtime delivery wraps the original payload in an envelope containing the message and assignment identity, payload digest, and generation-bound acknowledgement path, so the worker can acknowledge without reading private outbox state.
 
 Each message records at least:
 
@@ -341,7 +342,8 @@ Foreman restart drains the event records even when the wake file was lost.
 Deduplication uses stable task, generation, event type, and evidence identity rather than event text alone.
 A duplicate wake may occur, but applying the same event more than once must not repeat a lifecycle transition or runtime action.
 
-Workers request an event through `foreman event emit <taskId> <type>`.
+Workers request an event through `foreman event emit <taskId> <type> --project <projectId> --worker <owner> --generation <generation> --endpoint <endpoint>`.
+All assignment identity fields are mandatory; Foreman never fills omitted worker identity from current task state.
 A type without a dot is stored as `worker.<type>`.
 Workers cannot emit `message.*` or `task.*` supervisor events.
 The same payload for the same assignment is stored once.

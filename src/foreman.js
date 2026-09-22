@@ -138,7 +138,11 @@ function initHome(roots) {
   if (!fs.existsSync(done)) atomicWrite(done, "## Done\n\n");
   const resources = resourceFile(roots.foremanHome);
   if (!fs.existsSync(resources)) atomicJson(resources, { schemaVersion: 1, version: 1, leases: [] });
-  ensureVersionedRecord(projectsFile, "Project registry", (value) => ({ ...value, schemaVersion: SUPPORTED_SCHEMA_VERSION }));
+  ensureVersionedRecord(projectsFile, "Project registry", (value) => ({
+    ...value,
+    schemaVersion: SUPPORTED_SCHEMA_VERSION,
+    projects: (value.projects || []).map((project) => ({ ...project, root: canonical(project.root) })),
+  }));
   ensureVersionedRecord(sequence, "Task sequence", (value) => ({ ...value, schemaVersion: SUPPORTED_SCHEMA_VERSION }));
   ensureVersionedRecord(resources, "Resource lease state", (value) => ({ ...value, schemaVersion: SUPPORTED_SCHEMA_VERSION }));
   return roots;
@@ -537,9 +541,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!endpoint) throw new DeliveryError("Herdr did not return an endpoint identity");
       const inspected = adapter.inspect(endpoint);
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
-      const messagePayload = { taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", instructions: ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."], brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`) };
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", instructions: ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."], brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`), connection: { foremanRoot: roots.foremanRoot, foremanHome: roots.foremanHome, command: path.join(__dirname, "..", "bin", "foreman") } };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
-      const delivered = adapter.send(endpoint, messagePayload);
+      const delivered = adapter.send(endpoint, coordination.deliveryEnvelope({ roots, message }));
       coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: delivered !== false && delivered?.delivered !== false, evidence: delivered });
       if (delivered === false || delivered?.delivered === false) throw new DeliveryError("Herdr did not confirm brief delivery");
       const assigned = { ...pending, endpoint, status: "pending-ack", assignedAt: now(), briefMessageId: message.messageId, messageAckRequired: true, dispatchProfile: profile };
@@ -550,7 +554,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       for (const priorMessage of coordination.listMessages({ roots }).filter((item) => item.taskId === taskId && item.generation !== generation && ["pending", "delivered"].includes(item.status))) {
         coordination.failMessageUnlocked({ roots, messageId: priorMessage.messageId, reason: "assignment generation was replaced" });
       }
-      coordination.registerWorkerUnlocked({ roots, taskId, projectId: project.id, worker: owner, endpoint, generation, status: "active", pid: Number.isInteger(inspected?.pid) ? inspected.pid : (Number.isInteger(spawned?.pid) ? spawned.pid : undefined), adapter: "herdr", lastAck: null, lastHeartbeat: now() });
+      coordination.registerWorkerUnlocked({ roots, taskId, projectId: project.id, worker: owner, endpoint, generation, status: "active", pid: Number.isInteger(inspected?.pid) ? inspected.pid : (Number.isInteger(spawned?.pid) ? spawned.pid : undefined), adapter: "herdr", lastAck: null, lastHeartbeat: null });
       return assigned;
     } catch (error) {
       releaseResourcesUnlocked({ roots, leaseId: resourceLease.leaseId });
@@ -644,6 +648,7 @@ function applyPackageUnlocked({ roots, taskId, raw, type, sourceName, writeCanon
     if (message.taskId !== taskId || message.projectId !== meta.projectId || message.worker !== meta.owner || message.generation !== meta.generation || message.endpoint !== meta.endpoint || headers.PAYLOAD_DIGEST !== message.payloadDigest) throw new StaleGenerationError("Worker acknowledgement does not match the current message");
     const ack = { messageId: message.messageId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, payloadDigest: message.payloadDigest, packageFile: file, acknowledgedAt: now() };
     coordination.updateMessageUnlocked({ roots, messageId: message.messageId, mutate: (item) => ({ ...item, status: "acknowledged", acknowledgedAt: now(), ack }) });
+    coordination.noteWorkerAckUnlocked({ roots, taskId, worker: meta.owner, generation: meta.generation, messageId: message.messageId });
     if (meta.briefMessageId === message.messageId && meta.status === "pending-ack") {
       const acknowledgedMeta = { ...meta, status: "working", briefAcknowledgedAt: now() };
       atomicJson(metaFile(roots.foremanHome, taskId), acknowledgedMeta);
@@ -704,6 +709,7 @@ function applyInboxAckUnlocked({ roots, taskId, raw, name }) {
     atomicJson(decisionFile, { ...decision, status: "acknowledged", acknowledgedAt: now() });
   }
   const updated = coordination.updateMessageUnlocked({ roots, messageId: ack.messageId, mutate: (item) => ({ ...item, status: "acknowledged", acknowledgedAt: now(), ack }) });
+  coordination.noteWorkerAckUnlocked({ roots, taskId, worker: meta.owner, generation: meta.generation, messageId: ack.messageId });
   if (meta.briefMessageId === ack.messageId && meta.status === "pending-ack") {
     const next = { ...meta, status: "working", briefAcknowledgedAt: now(), pendingMessageIds: (meta.pendingMessageIds || []).filter((id) => id !== ack.messageId) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
@@ -864,7 +870,7 @@ function sendWorkerMessage({ roots, taskId, kind, payload, adapter, requireAck =
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
     const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload, maxAttempts, maxAgeMs });
     let result;
-    try { result = adapter.send(meta.endpoint, payload); }
+    try { result = adapter.send(meta.endpoint, coordination.deliveryEnvelope({ roots, message })); }
     catch (error) { result = { delivered: false, error: error.message }; }
     const delivered = result !== false && result?.delivered !== false;
     const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
@@ -919,7 +925,7 @@ function deliverDecision({ roots, taskId, decisionId, adapter }) {
     if (decision.generation !== meta.generation || decision.worker !== meta.owner || !meta.endpoint) throw new StaleGenerationError("Decision belongs to a stale assignment");
     const payload = { decisionId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, response: decision.humanResponse, instructions: "Acknowledge this decision before resuming work." };
     const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind: "human-decision", payload, explicitId: `M-${decisionId}` });
-    const result = adapter.send(meta.endpoint, payload);
+    const result = adapter.send(meta.endpoint, coordination.deliveryEnvelope({ roots, message }));
     const delivered = result !== false && result?.delivered !== false;
     coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
     if (!delivered) throw new DeliveryError("Human decision delivery failed");
@@ -944,6 +950,7 @@ function acknowledgeDecision({ roots, taskId, decisionId, messageId, ack }) {
     if (message.taskId !== taskId || message.projectId !== meta.projectId || message.worker !== meta.owner || message.generation !== meta.generation || message.endpoint !== meta.endpoint || message.kind !== "human-decision" || ack?.payloadDigest !== message.payloadDigest || ack?.messageId && ack.messageId !== messageId || ack?.taskId && ack.taskId !== taskId || ack?.projectId && ack.projectId !== meta.projectId || ack?.worker && ack.worker !== meta.owner || ack?.generation !== undefined && Number(ack.generation) !== meta.generation) throw new ValidationError("Decision acknowledgement identity or digest mismatch");
     if (message.status === "failed") throw new ValidationError("A failed decision message cannot be acknowledged");
     coordination.updateMessageUnlocked({ roots, messageId, mutate: (item) => ({ ...item, status: "acknowledged", acknowledgedAt: now(), ack: { ...ack, messageId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, payloadDigest: message.payloadDigest, acknowledgedAt: ack.acknowledgedAt || ack.timestamp || now() } }) });
+    coordination.noteWorkerAckUnlocked({ roots, taskId, worker: meta.owner, generation: meta.generation, messageId });
     const next = { ...decision, status: "acknowledged", acknowledgedAt: now() };
     atomicJson(file, next);
     return next;
@@ -1022,8 +1029,8 @@ function triageBlocker({ roots, taskId, raw, adapter, followUpPayload, decision,
   return result;
 }
 
-function emitWorkerEvent({ roots, taskId, eventType, worker, generation, payload }) {
-  return withHomeLock(roots.foremanHome, () => coordination.emitWorkerEventUnlocked({ roots, taskId, eventType, worker, generation, payload }));
+function emitWorkerEvent({ roots, taskId, projectId, eventType, worker, generation, endpoint, payload }) {
+  return withHomeLock(roots.foremanHome, () => coordination.emitWorkerEventUnlocked({ roots, taskId, projectId, eventType, worker, generation, endpoint, payload }));
 }
 
 function recordWorkerHeartbeat({ roots, taskId, worker, generation, pid, endpoint }) {

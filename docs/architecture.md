@@ -16,6 +16,7 @@ It then compares project, owner, generation, endpoint, workspace, branch, lease,
 `state/connections/registry.json` is the derived worker registry.
 Runtime classification still decides `dead`, `missing`, and `unknown`.
 Runtime delivery and worker acknowledgement are separate states.
+Delivered messages include a self-contained identity envelope and generation-bound acknowledgement path; workers do not read the private outbox to construct an acknowledgement.
 Retries use the same message ID with bounded backoff, age, and attempts; a terminal failure produces one deduplicated actionable event.
 
 Task ownership changes create a new generation.

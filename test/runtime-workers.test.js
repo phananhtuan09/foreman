@@ -116,12 +116,12 @@ test("runtime workers share the current branch with disjoint resource leases", a
       const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
       acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     }
-    assert.equal(assignmentOne.workspace, f.projectRoot);
-    assert.equal(assignmentTwo.workspace, f.projectRoot);
+    assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
+    assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentOne.branch, "main");
     assert.equal(assignmentTwo.branch, "main");
-    assert.equal(f.transport.messages[0].message.workspaceMode, "shared-current-branch");
-    assert.equal(f.transport.messages[0].message.gitAuthority, "client");
+    assert.equal(f.transport.messages[0].message.payload.workspaceMode, "shared-current-branch");
+    assert.equal(f.transport.messages[0].message.payload.gitAuthority, "client");
     assert.throws(() => assignTask({ roots: f.roots, taskId: createTask({ roots: f.roots, projectId: "fixture", brief: "conflict" }).id, owner: "worker-3", adapter: f.adapter, resources: [{ key: "file/agent-one.txt", mode: "write" }] }), ResourceBusyError);
 
     await Promise.all([f.transport.wait(assignmentOne.endpoint), f.transport.wait(assignmentTwo.endpoint)]);

@@ -160,6 +160,29 @@ class HerdrCliTransport {
     throw new HerdrCompatibilityError("Herdr agent did not reach an interactive prompt");
   }
 
+  _waitForAvailableShell(paneId, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = this._runJson(["pane", "process-info", "--pane", paneId]);
+      const info = result?.result?.process_info;
+      if (info?.shell_pid && Array.isArray(info.foreground_processes)
+        && info.foreground_processes.some((process) => process.pid === info.shell_pid)) return;
+      this._sleep(50);
+    }
+    throw new HerdrCompatibilityError("Herdr pane did not reach an available shell prompt");
+  }
+
+  _startAgentWhenAvailable({ owner, agentKind, paneId }, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      try { return this._runJson(["agent", "start", owner, "--kind", agentKind, "--pane", paneId]); }
+      catch (error) {
+        if (!String(error.message).includes("agent_pane_busy") || Date.now() >= deadline) throw error;
+        this._sleep(50);
+      }
+    }
+  }
+
   _verifyCommandSurface() {
     const agentHelp = this._run(["agent", "--help"]);
     const hasVerb = (help, verb, prefix) => help.includes(`${prefix} ${verb}`) || new RegExp(`\\n\\s+${verb}(?:\\s|$)`, "m").test(help);
@@ -167,7 +190,7 @@ class HerdrCliTransport {
       if (!hasVerb(agentHelp, verb, "herdr agent")) throw new HerdrCompatibilityError(`Herdr agent verb is unavailable: ${verb}`);
     }
     const paneHelp = this._run(["pane", "--help"]);
-    for (const verb of ["split", "close"]) {
+    for (const verb of ["split", "close", "process-info"]) {
       if (!hasVerb(paneHelp, verb, "herdr pane")) throw new HerdrCompatibilityError(`Herdr pane verb is unavailable: ${verb}`);
     }
     if (!this.runner && !hasVerb(paneHelp, "send-keys", "herdr pane")) throw new HerdrCompatibilityError("Herdr pane verb is unavailable: send-keys");
@@ -216,9 +239,15 @@ class HerdrCliTransport {
     const split = this._runJson(["pane", "split", "--current", "--direction", this.paneDirection, "--cwd", cwd, "--no-focus"]);
     const paneId = split?.result?.pane?.pane_id || split?.result?.pane_id;
     if (!paneId) throw new HerdrCompatibilityError("Herdr pane split did not return a pane identity");
-    this._runJson(["agent", "start", owner, "--kind", agentKind, "--pane", paneId]);
-    this._ensureInteractiveReady(paneId);
-    return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
+    try {
+      this._waitForAvailableShell(paneId);
+      this._startAgentWhenAvailable({ owner, agentKind, paneId });
+      this._ensureInteractiveReady(paneId);
+      return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
+    } catch (error) {
+      try { this._run(["pane", "close", paneId]); } catch (_) {}
+      throw error;
+    }
   }
 
   list() {

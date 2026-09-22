@@ -105,6 +105,22 @@ function initCoordination(home) {
 
 function messageFile(home, messageId) { return path.join(coordinationDirs(home).messages, `${messageId}.json`); }
 
+function deliveryEnvelope({ roots, message }) {
+  return {
+    schemaVersion: 1,
+    messageId: message.messageId,
+    taskId: message.taskId,
+    projectId: message.projectId,
+    worker: message.worker,
+    generation: message.generation,
+    endpoint: message.endpoint,
+    kind: message.kind,
+    payloadDigest: message.payloadDigest,
+    ackPath: path.join(roots.foremanHome, "state", "tasks", message.taskId, "inbox", `generation-${message.generation}-ack-${message.messageId}.json`),
+    payload: message.payload,
+  };
+}
+
 function safeToken(value, label) {
   const text = String(value || "");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(text)) throw new EventValidationError(`${label} is invalid`);
@@ -210,23 +226,27 @@ function updateMessageUnlocked({ roots, messageId: id, mutate }) {
 
 function acknowledgeMessage({ roots, messageId: id, ack }) {
   const { withHomeLock } = require("./foreman");
-  return withHomeLock(roots.foremanHome, () => updateMessageUnlocked({ roots, messageId: id, mutate: (message) => {
-    if (!ack || ack.messageId !== id || ack.taskId !== message.taskId || ack.projectId !== message.projectId || ack.worker !== message.worker || Number(ack.generation) !== message.generation || ack.payloadDigest !== message.payloadDigest) {
-      throw new MessageValidationError("Acknowledgement identity or payload digest does not match the message");
-    }
-    const taskFile = path.join(roots.foremanHome, "state", "tasks", message.taskId, "meta.json");
-    if (!fs.existsSync(taskFile)) throw new MessageValidationError("Acknowledgement task metadata is missing");
-    const meta = validateTaskMetaRecord(readJson(taskFile), message.taskId);
-    if (meta.projectId !== message.projectId || meta.owner !== message.worker || meta.generation !== message.generation || meta.endpoint !== message.endpoint) {
-      throw new MessageValidationError("Acknowledgement does not match the current assignment");
-    }
-    if (message.status === "failed") throw new MessageValidationError("A failed message cannot be acknowledged");
-    if (message.status === "acknowledged") return message;
-    message.status = "acknowledged";
-    message.acknowledgedAt = isoNow();
-    message.ack = { ...ack, acknowledgedAt: ack.acknowledgedAt || ack.timestamp || isoNow() };
-    return message;
-  }}));
+  return withHomeLock(roots.foremanHome, () => {
+    const acknowledged = updateMessageUnlocked({ roots, messageId: id, mutate: (message) => {
+      if (!ack || ack.messageId !== id || ack.taskId !== message.taskId || ack.projectId !== message.projectId || ack.worker !== message.worker || Number(ack.generation) !== message.generation || ack.payloadDigest !== message.payloadDigest) {
+        throw new MessageValidationError("Acknowledgement identity or payload digest does not match the message");
+      }
+      const taskFile = path.join(roots.foremanHome, "state", "tasks", message.taskId, "meta.json");
+      if (!fs.existsSync(taskFile)) throw new MessageValidationError("Acknowledgement task metadata is missing");
+      const meta = validateTaskMetaRecord(readJson(taskFile), message.taskId);
+      if (meta.projectId !== message.projectId || meta.owner !== message.worker || meta.generation !== message.generation || meta.endpoint !== message.endpoint) {
+        throw new MessageValidationError("Acknowledgement does not match the current assignment");
+      }
+      if (message.status === "failed") throw new MessageValidationError("A failed message cannot be acknowledged");
+      if (message.status === "acknowledged") return message;
+      message.status = "acknowledged";
+      message.acknowledgedAt = isoNow();
+      message.ack = { ...ack, acknowledgedAt: ack.acknowledgedAt || ack.timestamp || isoNow() };
+      return message;
+    }});
+    noteWorkerAckUnlocked({ roots, taskId: acknowledged.taskId, worker: acknowledged.worker, generation: acknowledged.generation, messageId: acknowledged.messageId });
+    return acknowledged;
+  });
 }
 
 function listMessages({ roots, statuses } = {}) {
@@ -299,7 +319,7 @@ function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 
     if (!force && message.nextAttemptAt && Date.now() < Date.parse(message.nextAttemptAt)) continue;
     if (!adapter || typeof adapter.send !== "function") continue;
     let result;
-    try { result = adapter.send(message.endpoint || message.worker, message.payload); }
+    try { result = adapter.send(message.endpoint || message.worker, deliveryEnvelope({ roots, message })); }
     catch (error) { result = { delivered: false, error: error.message }; }
     results.push(markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: result !== false && result?.delivered !== false, evidence: result }));
   }
@@ -395,7 +415,9 @@ function readClaim(file) {
 
 function signalWake(roots) {
   initCoordination(roots.foremanHome);
-  const pending = walkWorkerEvents(roots.foremanHome).filter((event) => event.status === "pending");
+  const pending = walkWorkerEvents(roots.foremanHome)
+    .filter((event) => event.status === "pending")
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.eventId.localeCompare(right.eventId));
   const latest = pending[pending.length - 1] || null;
   const signal = { schemaVersion: 1, version: 1, pending: pending.length > 0, pendingCount: pending.length, lastEventId: latest ? latest.eventId : null, lastEventType: latest ? latest.eventType : null, taskId: latest ? latest.taskId : null, updatedAt: isoNow() };
   atomicJson(path.join(coordinationDirs(roots.foremanHome).wake, "foreman.json"), signal);
@@ -612,14 +634,13 @@ function syncRegistryUnlocked({ roots, tasks }) {
   for (const item of tasks || []) {
     const meta = item.meta;
     if (!meta?.owner || !meta.taskId || !Number.isInteger(meta.generation) || meta.generation < 1 || !meta.endpoint) continue;
-    const alive = ["working", "idle", "blocked", "done"].includes(item.state);
     const runtimePid = Number.isInteger(item.worker?.pid) ? item.worker.pid : undefined;
-    registerWorkerUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, endpoint: meta.endpoint, generation: meta.generation, status: registryStatus(item.state), pid: runtimePid, adapter: meta.backend || "herdr", lastHeartbeat: alive ? isoNow() : undefined });
+    registerWorkerUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, endpoint: meta.endpoint, generation: meta.generation, status: registryStatus(item.state), pid: runtimePid, adapter: meta.backend || "herdr" });
   }
   return writeRegistryUnlocked(roots.foremanHome);
 }
 
-function emitWorkerEventUnlocked({ roots, taskId, eventType, worker, generation, payload }) {
+function emitWorkerEventUnlocked({ roots, taskId, projectId, eventType, worker, generation, endpoint, payload }) {
   initCoordination(roots.foremanHome);
   const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
   if (!fs.existsSync(taskMetaFile)) throw new EventValidationError("Event task does not exist");
@@ -627,13 +648,14 @@ function emitWorkerEventUnlocked({ roots, taskId, eventType, worker, generation,
   const typeToken = String(eventType || "");
   if (!/^[a-z][a-z0-9._-]{0,63}$/.test(typeToken) || typeToken.startsWith("message.") || typeToken.startsWith("task.")) throw new EventValidationError("Event type is invalid");
   const normalized = typeToken.includes(".") ? typeToken : `worker.${typeToken}`;
-  const boundWorker = worker || meta.owner;
-  const boundGeneration = generation === undefined || generation === null || generation === "" ? meta.generation : Number(generation);
-  if (!meta.owner || !meta.endpoint || boundWorker !== meta.owner || boundGeneration !== meta.generation) {
-    quarantineExternal({ roots, taskId, name: `event-${normalized}.json`, raw: JSON.stringify({ taskId, eventType: normalized, worker: boundWorker, generation: boundGeneration, payload: payload ?? null }), reason: "event identity does not match the current assignment" });
+  const boundGeneration = Number(generation);
+  if (!projectId || !worker || !endpoint || !Number.isInteger(boundGeneration)
+    || !meta.owner || !meta.endpoint || projectId !== meta.projectId || worker !== meta.owner
+    || boundGeneration !== meta.generation || endpoint !== meta.endpoint) {
+    quarantineExternal({ roots, taskId, name: `event-${normalized}.json`, raw: JSON.stringify({ taskId, projectId: projectId || null, eventType: normalized, worker: worker || null, generation: Number.isFinite(boundGeneration) ? boundGeneration : null, endpoint: endpoint || null, payload: payload ?? null }), reason: "event identity does not match the current assignment" });
     throw new EventValidationError("Event identity does not match the current assignment");
   }
-  return createObserverEvent({ roots, eventType: normalized, dedupKey: `worker-emit:${taskId}:${boundGeneration}:${normalized}:${digest(payload ?? null)}`, taskId, projectId: meta.projectId, worker: boundWorker, generation: boundGeneration, endpoint: meta.endpoint, evidence: { payload: payload ?? null, emittedBy: "worker" }, source: "worker" });
+  return createObserverEvent({ roots, eventType: normalized, dedupKey: `worker-emit:${taskId}:${boundGeneration}:${normalized}:${digest(payload ?? null)}`, taskId, projectId, worker, generation: boundGeneration, endpoint, evidence: { payload: payload ?? null, emittedBy: "worker" }, source: "worker" });
 }
 
 function activeTaskMetas(roots) {
@@ -866,7 +888,7 @@ class WakeManager {
     initCoordination(this.roots.foremanHome);
     this.running = true;
     const dir = coordinationDirs(this.roots.foremanHome).wake;
-    this.watcher = fs.watch(dir, () => {
+    const scheduleWake = () => {
       if (!this.running) return;
       clearTimeout(this.timer);
       this.timer = setTimeout(() => {
@@ -875,7 +897,9 @@ class WakeManager {
           if (signal?.pendingCount > 0 && typeof this.onWake === "function") this.onWake(signal);
         } catch (_) {}
       }, 30);
-    });
+    };
+    this.watcher = fs.watch(dir, scheduleWake);
+    scheduleWake();
     return this;
   }
 
@@ -929,7 +953,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, EventValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord, validateEventRecord, quarantineExternal,
-  digest, initCoordination, coordinationDirs, messageFile, createMessageUnlocked, createMessage,
+  digest, initCoordination, coordinationDirs, messageFile, deliveryEnvelope, createMessageUnlocked, createMessage,
   updateMessageUnlocked, acknowledgeMessage, listMessages, markMessageDeliveryUnlocked, retryMessages, retryMessagesUnlocked, failMessageUnlocked,
   eventId, createObserverEvent, listEvents, drainWakeQueue, recoverProcessingEvents, recoverProcessingEventsUnlocked, retainHandledEvents,
   signalWake, readWakeSignal, registerWorkerUnlocked, retireWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, syncRegistryUnlocked, readWorkerRegistry, emitWorkerEventUnlocked,
