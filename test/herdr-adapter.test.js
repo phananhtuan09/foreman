@@ -1,19 +1,21 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { HerdrCliTransport, HerdrCompatibilityError } = require("../src/herdr");
+const { HerdrAdapter, HerdrCliTransport, HerdrCompatibilityError } = require("../src/herdr");
 
-function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1 } = {}) {
+function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1, agentHelp, paneHelp } = {}) {
   const calls = [];
+  let agentStatus = "working";
   const runner = (args) => {
     calls.push(args);
     if (args.join(" ") === "status client --json") return JSON.stringify({ version, protocol, endpoint_protocol_generation: endpointGeneration });
     if (args.join(" ") === "status server --json") return JSON.stringify({ running: true, compatible: true, endpoint_compatible: true, private_protocol_compatible: true, capabilities: { endpoint_protocol_generation: endpointGeneration } });
-    if (args.join(" ") === "agent --help") return "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\n";
-    if (args.join(" ") === "pane --help") return "herdr pane split\nherdr pane close\nherdr pane process-info\n";
+    if (args.join(" ") === "agent --help") return agentHelp || "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\nherdr agent send-keys\n";
+    if (args.join(" ") === "pane --help") return paneHelp || "herdr pane split\nherdr pane close\nherdr pane process-info\nherdr pane send-keys\nherdr pane read\n";
     if (args.join(" ") === "pane split --current --direction right --cwd /tmp/worktree --no-focus") return JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } });
     if (args.join(" ") === "pane process-info --pane w1:p2") return JSON.stringify({ result: { process_info: { shell_pid: 42, foreground_processes: [{ pid: 42, name: "zsh" }] } } });
     if (args.join(" ") === "agent start worker-1 --kind codex --pane w1:p2") return JSON.stringify({ result: { type: "agent_started" } });
-    if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: "working", cwd: "/tmp/worktree", pane_id: "w1:p2" }] } });
+    if (args[0] === "agent" && args[1] === "send-keys" && args[3] === "ctrl-c") { agentStatus = "idle"; return ""; }
+    if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: agentStatus, cwd: "/tmp/worktree", pane_id: "w1:p2" }] } });
     if (args[0] === "agent" && args[1] === "prompt") return JSON.stringify({ result: { type: "agent_prompt_submitted" } });
     if (args[0] === "agent" && args[1] === "read") return "worker output";
     if (args.join(" ") === "pane close w1:p2") return JSON.stringify({ result: { type: "pane_closed" } });
@@ -49,6 +51,12 @@ test("Herdr 0.9 transport gates the contract and maps worker lifecycle commands"
     });
     assert.deepEqual(transport.send("worker-1", { taskId: "T-000001" }), { delivered: true });
     assert.equal(transport.read("worker-1"), "worker output");
+    assert.deepEqual(transport.interrupt("worker-1"), { interrupted: true, endpoint: "worker-1" });
+    const adapter = new HerdrAdapter({ transport });
+    const interrupted = adapter.interrupt("worker-1");
+    assert.equal(interrupted.verified, true);
+    assert.equal(interrupted.inspection.status, "idle");
+    assert.equal(adapter.relaunch, undefined);
     assert.deepEqual(transport.stop("worker-1"), { stopped: true });
 
     assert.ok(fake.calls.some((args) => args[0] === "pane" && args[1] === "split"));
@@ -67,4 +75,20 @@ test("Herdr transport accepts a newer compatible release but rejects endpoint ge
 
   const incompatible = new HerdrCliTransport({ runner: fakeHerdr({ endpointGeneration: 2 }).runner });
   assert.throws(() => incompatible.verifyCompatibility(), HerdrCompatibilityError);
+  const missingInterrupt = new HerdrCliTransport({ runner: fakeHerdr({ agentHelp: "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\n" }).runner });
+  assert.throws(() => missingInterrupt.verifyCompatibility(), /send-keys/);
+});
+
+test("adapter interrupt fails closed unless a later inspection shows the endpoint survived idle", () => {
+  let status = "working";
+  const transport = {
+    verifyCompatibility: () => ({ compatible: true, protocol: 22, endpointProtocolGeneration: 1 }),
+    interrupt() { return { interrupted: true }; },
+    inspect(endpoint) { return { endpoint, owner: "worker-1", cwd: "/tmp/worktree", status }; },
+  };
+  const adapter = new HerdrAdapter({ transport });
+  assert.throws(() => adapter.interrupt("worker-1"), /not verified/);
+  transport.interrupt = () => { status = "idle"; return { interrupted: true }; };
+  assert.equal(adapter.interrupt("worker-1").verified, true);
+  assert.equal(typeof adapter.relaunch, "undefined");
 });

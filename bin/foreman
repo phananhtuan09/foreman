@@ -2,39 +2,181 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const {
-  resolveRoots, initHome, registerProject, createTask, listTasks, fleetStatus,
-  projectStatus, restartReconcile, emitWorkerEvent, recordWorkerHeartbeat,
-} = require("../src/foreman");
+const core = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
 function arg(name, fallback) {
   const index = process.argv.indexOf(name);
-  return index >= 0 && process.argv[index + 1] !== undefined ? process.argv[index + 1] : fallback;
+  return index >= 0 && process.argv[index + 1] !== undefined && !String(process.argv[index + 1]).startsWith("--") ? process.argv[index + 1] : fallback;
 }
-function roots() { return resolveRoots({ foremanRoot: process.env.FOREMAN_ROOT || process.cwd(), foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd() }); }
-function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
+function flag(name) { return process.argv.includes(name); }
+function args(name) {
+  const values = [];
+  for (let index = 2; index < process.argv.length; index += 1) {
+    if (process.argv[index] === name && process.argv[index + 1] !== undefined && !String(process.argv[index + 1]).startsWith("--")) values.push(process.argv[++index]);
+  }
+  return values;
+}
+function roots() { return core.resolveRoots({ foremanRoot: process.env.FOREMAN_ROOT || process.cwd(), foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd() }); }
 function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) }); }
+function armObserver(roots) {
+  try {
+    if (core.listTasks({ roots }).some((task) => ["working", "pending-ack", "blocked", "waiting-decision"].includes(task.status))) {
+      core.startObserver({ roots });
+    }
+  } catch (_) {
+    // The lifecycle result remains authoritative; the next explicit reconcile can retry supervision.
+  }
+}
+function output(value) {
+  if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+function briefText() {
+  const briefFile = arg("--brief-file");
+  return briefFile ? fs.readFileSync(path.resolve(briefFile), "utf8") : arg("--brief");
+}
+function resourceClaims() {
+  const raw = arg("--resources");
+  if (raw === undefined) return undefined;
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error("resources must be a JSON array");
+  return parsed;
+}
+
+const usage = [
+  "usage:",
+  "  init",
+  "  project register --id ID --root PATH [--name NAME]",
+  "  task create --project ID (--brief TEXT|--brief-file FILE) [--type ship|scout] [--dependency ID]",
+  "  task list [--project ID] [--json]",
+  "  task dispatch --task ID --owner OWNER [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
+  "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
+  "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
+  "  task recover --task ID [--owner OWNER]",
+  "  task accept --task ID",
+  "  task mark-landed --task ID --commit SHA [--workspace PATH]",
+  "  task release-endpoint --task ID",
+  "  task release-lease --task ID",
+  "  task cleanup --task ID [--workspace-released] [--discard --authorize]",
+  "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
+  "  decision answer --task ID --decision ID --response TEXT",
+  "  decision deliver --task ID --decision ID",
+  "  decision acknowledge --task ID --decision ID --message ID --digest DIGEST",
+  "  decision apply --task ID --decision ID",
+  "  status [--project ID] [--json]",
+  "  reconcile",
+  "  observer once [--interval MS]",
+  "  observer start [--interval MS]",
+  "  observer stop",
+  "  observer run [--interval MS]",
+  "  event emit TASK TYPE --project PROJECT --worker OWNER --generation N --endpoint ENDPOINT [--payload JSON]",
+  "  worker heartbeat --task TASK --worker OWNER --generation N [--pid N] [--endpoint ENDPOINT]",
+].join("\n");
 
 function main() {
   const command = process.argv[2];
-  const r = roots();
-  const usage = "usage: init | project register --id ID --root PATH | task create --project ID (--brief TEXT|--brief-file FILE) | task list [--project ID] | status [--project ID] | reconcile | event emit TASK TYPE --project PROJECT --worker OWNER --generation N --endpoint ENDPOINT [--payload JSON] | worker heartbeat --task TASK --worker OWNER --generation N [--pid N]";
-  if (!command || command === "--help" || command === "-h" || command === "help") { process.stdout.write(`${usage}\n`); return; }
-  if (command === "init") { output(initHome(r)); return; }
-  if (command === "project" && process.argv[3] === "register") {
-    output(registerProject({ roots: r, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") })); return;
+  const action = process.argv[3];
+  const home = roots();
+  if (!command || command === "--help" || command === "-h" || command === "help") { output(usage); return; }
+  if (command === "init") { output(core.initHome(home)); return; }
+  if (command === "project" && action === "register") {
+    output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));
+    return;
   }
-  if (command === "task" && process.argv[3] === "create") {
-    const briefFile = arg("--brief-file");
-    const brief = briefFile ? fs.readFileSync(path.resolve(briefFile), "utf8") : arg("--brief");
-    output(createTask({ roots: r, projectId: arg("--project"), brief, type: arg("--type", "ship") })); return;
+  if (command === "task" && action === "create") {
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
+    return;
   }
-  if (command === "task" && process.argv[3] === "list") { output(listTasks({ roots: r, projectId: arg("--project") })); return; }
-  if (command === "status") { const adapter = runtimeAdapter(); output(arg("--project") ? projectStatus({ roots: r, projectId: arg("--project"), adapter }) : fleetStatus({ roots: r, adapter })); return; }
-  if (command === "reconcile") { output(restartReconcile({ roots: r, adapter: runtimeAdapter() })); return; }
-  if (command === "event" && process.argv[3] === "emit") {
+  if (command === "task" && action === "list") {
+    const tasks = core.listTasks({ roots: home, projectId: arg("--project") }).map((meta) => ({ taskId: meta.taskId, meta, state: meta.status, issues: [] }));
+    output(flag("--json") ? tasks.map((item) => item.meta) : core.renderUserReport({ tasks }, home));
+    return;
+  }
+  if (command === "task" && action === "dispatch") {
+    const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint") });
+    armObserver(home);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "schedule") {
+    const projectLimits = {};
+    for (const entry of args("--project-limit")) {
+      const splitAt = entry.indexOf("=");
+      if (splitAt <= 0) throw new Error(`Invalid project limit: ${entry}`);
+      projectLimits[entry.slice(0, splitAt)] = Number(entry.slice(splitAt + 1));
+    }
+    const max = arg("--max");
+    const owner = arg("--owner");
+    const result = core.dispatchReadyTasks({ roots: home, adapter: runtimeAdapter(), ownerForTask: owner ? () => owner : undefined, maxConcurrency: max === undefined ? Infinity : Number(max), projectLimits });
+    armObserver(home);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "adopt") {
+    const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
+    armObserver(home);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "recover") {
+    const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
+    armObserver(home);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task") })); return; }
+  if (command === "task" && action === "mark-landed") {
+    output(core.markLanded({ roots: home, taskId: arg("--task"), evidence: { target: "local-only", commit: arg("--commit"), workspace: arg("--workspace") } }));
+    return;
+  }
+  if (command === "task" && action === "release-endpoint") { output(core.releaseEndpoint({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "release-lease") { output(core.releaseTaskLease({ roots: home, taskId: arg("--task") })); return; }
+  if (command === "task" && action === "cleanup") {
+    output(core.cleanupTask({ roots: home, taskId: arg("--task"), discard: flag("--discard"), authorization: flag("--authorize"), workspaceReleased: flag("--workspace-released") }));
+    return;
+  }
+  if (command === "decision" && action === "create") {
+    output(core.createDecision({ roots: home, taskId: arg("--task"), finding: arg("--finding"), why: arg("--why"), options: args("--option"), impact: arg("--impact"), evidence: arg("--evidence"), recommendation: arg("--recommendation") }));
+    return;
+  }
+  if (command === "decision" && action === "answer") {
+    output(core.answerDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), response: arg("--response") }));
+    return;
+  }
+  if (command === "decision" && action === "deliver") {
+    output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
+    return;
+  }
+  if (command === "decision" && action === "acknowledge") {
+    output(core.acknowledgeDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), messageId: arg("--message"), ack: { payloadDigest: arg("--digest") } }));
+    return;
+  }
+  if (command === "decision" && action === "apply") {
+    output(core.applyDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision") }));
+    return;
+  }
+  if (command === "status") {
+    const adapter = runtimeAdapter();
+    const status = arg("--project") ? core.projectStatus({ roots: home, projectId: arg("--project"), adapter }) : core.fleetStatus({ roots: home, adapter });
+    output(flag("--json") ? status : core.renderUserReport(status, home));
+    return;
+  }
+  if (command === "reconcile") {
+    const result = core.restartReconcile({ roots: home, adapter: runtimeAdapter() });
+    armObserver(home);
+    output(result);
+    return;
+  }
+  if (command === "observer" && action === "once") { output(core.runObserverOnce({ roots: home, adapter: runtimeAdapter() })); return; }
+  if (command === "observer" && action === "start") { output(core.startObserver({ roots: home, intervalMs: Number(arg("--interval", "1000")) })); return; }
+  if (command === "observer" && action === "stop") { output(core.stopObserver({ roots: home })); return; }
+  if (command === "observer" && action === "run") {
+    core.runObserverLoop({ roots: home, adapter: runtimeAdapter(), intervalMs: Number(arg("--interval", "1000")) });
+    return;
+  }
+  if (command === "event" && action === "emit") {
     const taskId = process.argv[4];
     const eventType = process.argv[5];
     if (!taskId || !eventType || taskId.startsWith("--") || eventType.startsWith("--")) { die(usage); return; }
@@ -43,14 +185,14 @@ function main() {
     let payload = null;
     if (payloadFile) payload = JSON.parse(fs.readFileSync(path.resolve(payloadFile), "utf8"));
     else if (payloadArg !== undefined) { try { payload = JSON.parse(payloadArg); } catch (_) { payload = payloadArg; } }
-    const generation = arg("--generation");
-    output(emitWorkerEvent({ roots: r, taskId, projectId: arg("--project"), eventType, worker: arg("--worker"), generation: generation === undefined ? undefined : Number(generation), endpoint: arg("--endpoint"), payload }));
+    const rawGeneration = arg("--generation");
+    output(core.emitWorkerEvent({ roots: home, taskId, projectId: arg("--project"), eventType, worker: arg("--worker"), generation: rawGeneration === undefined ? undefined : Number(rawGeneration), endpoint: arg("--endpoint"), payload }));
     return;
   }
-  if (command === "worker" && process.argv[3] === "heartbeat") {
-    const generation = arg("--generation");
+  if (command === "worker" && action === "heartbeat") {
+    const rawGeneration = arg("--generation");
     const pid = arg("--pid");
-    output(recordWorkerHeartbeat({ roots: r, taskId: arg("--task"), worker: arg("--worker"), generation: generation === undefined ? undefined : Number(generation), pid: pid === undefined ? undefined : Number(pid), endpoint: arg("--endpoint") }));
+    output(core.recordWorkerHeartbeat({ roots: home, taskId: arg("--task"), worker: arg("--worker"), generation: rawGeneration === undefined ? undefined : Number(rawGeneration), pid: pid === undefined ? undefined : Number(pid), endpoint: arg("--endpoint") }));
     return;
   }
   die(usage);

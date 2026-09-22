@@ -433,11 +433,11 @@ function readWakeSignal(roots) {
   return signal;
 }
 
-function drainWakeQueue({ roots, handler, limit = 100 }) {
+function drainWakeQueue({ roots, handler, limit = 100, eventFilter } = {}) {
   const { withHomeLock } = require("./foreman");
   initCoordination(roots.foremanHome);
   const processed = [];
-  for (const event of listEvents({ roots, state: "pending" }).slice(0, limit)) {
+  for (const event of listEvents({ roots, state: "pending" }).filter((item) => !eventFilter || eventFilter(item)).slice(0, limit)) {
     const file = workerEventFile(roots.foremanHome, event.taskId, event.eventId);
     const claimed = withHomeLock(roots.foremanHome, () => {
       if (!fs.existsSync(file)) return false;
@@ -453,11 +453,12 @@ function drainWakeQueue({ roots, handler, limit = 100 }) {
     });
     if (!claimed) continue;
     let result;
-    try { result = handler ? handler(event) : { handled: true }; }
-    catch (error) { result = { handled: false, error: error.message }; }
+    try {
+      result = typeof handler === "function" ? handler(event) : { handled: false, reason: "no handler" };
+    } catch (error) { result = { handled: false, error: error.message }; }
     const next = withHomeLock(roots.foremanHome, () => {
       const current = fs.existsSync(file) ? validateEventRecord(readJson(file), event.eventId) : event;
-      if (result && result.handled === false) {
+      if (!result || result.handled !== true) {
         const pending = validateEventRecord({ ...current, status: "pending", processingStartedAt: null, handlingResult: result, lastHandlingFailureAt: isoNow() }, event.eventId);
         atomicJson(file, pending);
         try { fs.unlinkSync(claimPath(file)); } catch (_) {}

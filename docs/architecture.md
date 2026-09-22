@@ -11,7 +11,10 @@ JSON records carry `schemaVersion: 1`; unsupported or malformed active records f
 Worker files are external input: valid current-generation packages are applied idempotently, while invalid packages and acknowledgements are copied byte-for-byte to the task quarantine.
 
 The supervision cycle applies inbox records and recovers event claims before one runtime listing.
-It then compares project, owner, generation, endpoint, workspace, branch, lease, message, and package evidence and persists actionable events under `state/events/worker/<taskId>/`.
+Events stay pending unless a handler actually applies them.
+Restart then performs the required dead, missing, idle, blocked, or completion follow-up.
+Recovery composes inspect, stop, and spawn.
+Reconciliation compares project, owner, generation, endpoint, workspace, branch, lease, message, and package evidence and persists actionable events under `state/events/worker/<taskId>/`.
 `state/wake/foreman.json` signals that pending events exist.
 `state/connections/registry.json` is the derived worker registry.
 Runtime classification still decides `dead`, `missing`, and `unknown`.

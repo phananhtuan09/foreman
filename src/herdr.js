@@ -19,10 +19,12 @@ function isBelow(actual, required) {
  * remain in the transport so task state never depends on Herdr identifiers.
  */
 class HerdrAdapter {
-  constructor({ transport, requiredProtocol, requiredEndpointGeneration } = {}) {
+  constructor({ transport, requiredProtocol, requiredEndpointGeneration, interruptTimeoutMs = 2000, interruptPollMs = 50 } = {}) {
     this.transport = transport;
     this.requiredProtocol = requiredProtocol;
     this.requiredEndpointGeneration = requiredEndpointGeneration;
+    this.interruptTimeoutMs = interruptTimeoutMs;
+    this.interruptPollMs = interruptPollMs;
   }
 
   verifyCompatibility() {
@@ -64,18 +66,21 @@ class HerdrAdapter {
   interrupt(endpoint) {
     this.verifyCompatibility();
     if (typeof this.transport.interrupt !== "function") throw new HerdrCompatibilityError("Herdr worker interruption is unavailable");
-    return this.transport.interrupt(endpoint);
-  }
-
-  relaunch(endpoint, request) {
-    this.verifyCompatibility();
-    if (typeof this.transport.relaunch === "function") return this.transport.relaunch(endpoint, request);
-    if (endpoint && typeof this.transport.stop === "function") {
-      const stopped = this.transport.stop(endpoint);
-      if (stopped === false || stopped?.stopped === false) throw new HerdrCompatibilityError("Herdr endpoint relaunch stop was not confirmed");
+    const result = this.transport.interrupt(endpoint);
+    if (!result || result.interrupted === false) throw new HerdrCompatibilityError("Herdr interrupt was not confirmed");
+    const deadline = Date.now() + Math.max(0, Number(this.interruptTimeoutMs) || 0);
+    let inspection;
+    while (true) {
+      try { inspection = this.inspect(endpoint); } catch (_) { inspection = null; }
+      const status = String(inspection?.status || inspection?.agent_status || "").toLowerCase();
+      if (inspection && ["idle", "waiting", "blocked", "done", "completed", "complete"].includes(status)) {
+        return { interrupted: true, verified: true, inspection };
+      }
+      if (Date.now() >= deadline) break;
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(wait, 0, 0, Math.max(1, Number(this.interruptPollMs) || 1));
     }
-    if (typeof this.transport.spawn !== "function") throw new HerdrCompatibilityError("Herdr relaunch is unavailable");
-    return this.transport.spawn(request);
+    throw new HerdrCompatibilityError("Herdr interrupt outcome is not verified");
   }
 
   stop(endpoint) {
@@ -186,14 +191,18 @@ class HerdrCliTransport {
   _verifyCommandSurface() {
     const agentHelp = this._run(["agent", "--help"]);
     const hasVerb = (help, verb, prefix) => help.includes(`${prefix} ${verb}`) || new RegExp(`\\n\\s+${verb}(?:\\s|$)`, "m").test(help);
-    for (const verb of ["start", "list", "prompt", "read"]) {
+    for (const verb of ["start", "list", "prompt", "read", "send-keys"]) {
       if (!hasVerb(agentHelp, verb, "herdr agent")) throw new HerdrCompatibilityError(`Herdr agent verb is unavailable: ${verb}`);
     }
     const paneHelp = this._run(["pane", "--help"]);
     for (const verb of ["split", "close", "process-info"]) {
       if (!hasVerb(paneHelp, verb, "herdr pane")) throw new HerdrCompatibilityError(`Herdr pane verb is unavailable: ${verb}`);
     }
-    if (!this.runner && !hasVerb(paneHelp, "send-keys", "herdr pane")) throw new HerdrCompatibilityError("Herdr pane verb is unavailable: send-keys");
+    if (!this.runner) {
+      for (const verb of ["send-keys", "read"]) {
+        if (!hasVerb(paneHelp, verb, "herdr pane")) throw new HerdrCompatibilityError(`Herdr pane verb is unavailable: ${verb}`);
+      }
+    }
   }
 
   verifyCompatibility() {
@@ -290,7 +299,7 @@ class HerdrCliTransport {
 
   interrupt(endpoint) {
     this._run(["agent", "send-keys", endpoint, "ctrl-c"]);
-    return { interrupted: true };
+    return { interrupted: true, endpoint };
   }
 
   read(endpoint, { source = "recent-unwrapped", lines = 120 } = {}) {
