@@ -1,6 +1,6 @@
 # Foreman architecture
 
-Foreman keeps global fleet state in a private file home and treats each registered Git project as an exact identity.
+Foreman keeps global fleet state in a private file home and treats each registered project as an exact identity: the Git common directory for Git projects and the canonical root path for projects without Git.
 `src/foreman.js` owns task, assignment, decision, resource, cleanup, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, generation-bound inbox reconciliation, worker event spool, wake signal, worker registry, restart reconciliation, and handoff snapshots.
 `src/herdr.js` is the narrow Herdr adapter.

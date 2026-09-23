@@ -155,7 +155,7 @@ function withHomeLock(home, fn) {
 }
 
 function gitTop(root) {
-  try { return canonical(execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()); }
+  try { return canonical(execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()); }
   catch (error) { throw new ValidationError(`Not a Git worktree: ${root}`); }
 }
 
@@ -178,21 +178,39 @@ function gitBranch(root) {
   }
 }
 
+function projectVcs(project) { return project.vcs || "git"; }
+
+function workspaceBelongsToProject(project, workspace) {
+  if (projectVcs(project) === "none") return canonical(workspace) === project.root;
+  return gitCommonDir(workspace) === gitCommonDir(project.root);
+}
+
 function validateWorkspace(project, workspacePath) {
   const workspace = canonical(workspacePath || project.root);
+  if (projectVcs(project) === "none") {
+    if (workspace !== project.root) throw new ValidationError("Workspace must be the project root for a project without Git");
+    return { path: workspace, branch: null };
+  }
   if (gitTop(workspace) !== workspace) throw new ValidationError("Workspace must be a Git worktree root");
   if (gitCommonDir(workspace) !== gitCommonDir(project.root)) throw new ValidationError("Workspace belongs to a different Git project");
   const branch = gitBranch(workspace);
   return { path: workspace, branch };
 }
 
-function captureWorkspaceFingerprint(workspace) {
-  const status = execFileSync("git", ["-C", workspace, "status", "--porcelain=v1", "--untracked-files=all"], { encoding: "utf8" });
-  const head = execFileSync("git", ["-C", workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const tracked = execFileSync("git", ["-C", workspace, "ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
-  const untracked = execFileSync("git", ["-C", workspace, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
-  const paths = [...new Set([...tracked, ...untracked])].sort();
-  const content = crypto.createHash("sha256");
+const FILE_FINGERPRINT_EXCLUDES = new Set(["node_modules", ".git", "dist", "build"]);
+
+function listWorkspaceFiles(workspace, relative = "") {
+  const files = [];
+  for (const entry of fs.readdirSync(path.join(workspace, relative), { withFileTypes: true })) {
+    if (FILE_FINGERPRINT_EXCLUDES.has(entry.name)) continue;
+    const child = relative ? path.join(relative, entry.name) : entry.name;
+    if (entry.isDirectory()) files.push(...listWorkspaceFiles(workspace, child));
+    else files.push(child);
+  }
+  return files;
+}
+
+function hashWorkspacePaths(workspace, paths, content) {
   for (const relative of paths) {
     const absolute = path.join(workspace, relative);
     let entry;
@@ -206,15 +224,30 @@ function captureWorkspaceFingerprint(workspace) {
     }
     content.update(`${entry}\0`);
   }
+}
+
+function captureWorkspaceFingerprint(workspace, mode = "git") {
+  if (mode === "files") {
+    const content = crypto.createHash("sha256");
+    hashWorkspacePaths(workspace, listWorkspaceFiles(workspace).sort(), content);
+    return { mode, head: "", status: "", content: content.digest("hex"), capturedAt: now() };
+  }
+  const status = execFileSync("git", ["-C", workspace, "status", "--porcelain=v1", "--untracked-files=all"], { encoding: "utf8" });
+  const head = execFileSync("git", ["-C", workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const tracked = execFileSync("git", ["-C", workspace, "ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
+  const untracked = execFileSync("git", ["-C", workspace, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
+  const paths = [...new Set([...tracked, ...untracked])].sort();
+  const content = crypto.createHash("sha256");
+  hashWorkspacePaths(workspace, paths, content);
   content.update(`index:${crypto.createHash("sha256").update(execFileSync("git", ["-C", workspace, "diff", "--cached", "--binary"], { encoding: "buffer" })).digest("hex")}\0`);
-  return { head, status, content: content.digest("hex"), capturedAt: now() };
+  return { mode, head, status, content: content.digest("hex"), capturedAt: now() };
 }
 
 function detectScoutMutation(meta) {
   if (!meta || meta.type !== "scout" || !meta.workspace) return null;
   if (!meta.scoutBaseline || typeof meta.scoutBaseline.head !== "string" || typeof meta.scoutBaseline.status !== "string" || typeof meta.scoutBaseline.content !== "string") return { reason: "missing-baseline" };
   let current;
-  try { current = captureWorkspaceFingerprint(meta.workspace); }
+  try { current = captureWorkspaceFingerprint(meta.workspace, meta.scoutBaseline.mode || "git"); }
   catch (error) { return { reason: "unreadable", error: error.message }; }
   if (current.head !== meta.scoutBaseline.head || current.status !== meta.scoutBaseline.status || current.content !== meta.scoutBaseline.content) return { reason: "workspace-changed", expected: meta.scoutBaseline, actual: current };
   return null;
@@ -253,7 +286,9 @@ function loadProjects(home) {
 function findProject(home, id) {
   const project = loadProjects(home).find((item) => item.id === id);
   if (!project || !project.enabled) throw new ValidationError(`Unknown or disabled project: ${id}`);
-  if (canonical(project.root) !== project.root || gitTop(project.root) !== project.root) throw new ValidationError(`Project root is no longer valid: ${id}`);
+  const invalid = new ValidationError(`Project root is no longer valid: ${id}`);
+  if (!fs.existsSync(project.root) || canonical(project.root) !== project.root) throw invalid;
+  if (projectVcs(project) === "none" ? !fs.statSync(project.root).isDirectory() : gitTop(project.root) !== project.root) throw invalid;
   return project;
 }
 
@@ -394,15 +429,19 @@ function listResourceLeases({ roots } = {}) {
   });
 }
 
-function registerProject({ roots, id, name = id, root, defaultBranch = "main", deliveryMode = "local-only" }) {
+function registerProject({ roots, id, name = id, root, deliveryMode = "local-only" }) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new ValidationError("Project id must be lowercase and path-independent");
-  const projectRoot = gitTop(canonical(root));
+  const resolved = canonical(root);
+  if (!fs.statSync(resolved).isDirectory()) throw new ValidationError(`Project root is not a directory: ${root}`);
+  let projectRoot = resolved;
+  let vcs = "none";
+  try { projectRoot = gitTop(resolved); vcs = "git"; } catch (_) {}
   if (deliveryMode !== "local-only") throw new ValidationError("Only local-only delivery is supported in milestone 1");
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const projects = loadProjects(roots.foremanHome);
     if (projects.some((p) => p.id === id || p.root === projectRoot)) throw new ValidationError("Duplicate project id or root");
-    const project = { id, name, root: projectRoot, defaultBranch, deliveryMode, enabled: true };
+    const project = { id, name, root: projectRoot, vcs, deliveryMode, enabled: true };
     atomicJson(projectFile(roots.foremanHome), { schemaVersion: 1, version: 1, projects: [...projects, project] });
     return project;
   });
@@ -468,13 +507,18 @@ function validateRoutingConfig(config) {
   const router = normalizeRoutingProfile(config.router, "router");
   if (!config.profiles || typeof config.profiles !== "object" || Array.isArray(config.profiles)) throw new ValidationError("Routing profiles must be an object");
   const profiles = {};
+  const inactiveProfiles = [];
   for (const [name, profile] of Object.entries(config.profiles)) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new ValidationError(`Invalid routing profile name: ${name}`);
-    profiles[name] = normalizeRoutingProfile(profile, name);
+    const normalized = normalizeRoutingProfile(profile, name);
+    const isActive = profile.isActive ?? true;
+    if (typeof isActive !== "boolean") throw new ValidationError(`Routing profile isActive must be a boolean: ${name}`);
+    if (isActive) profiles[name] = normalized;
+    else inactiveProfiles.push(name);
   }
-  if (!Object.keys(profiles).length) throw new ValidationError("At least one routing profile is required");
-  if (typeof config.default !== "string" || !profiles[config.default]) throw new ValidationError("Routing default must name a configured profile");
-  return { schemaVersion: 1, router, default: config.default, profiles };
+  if (!Object.keys(profiles).length) throw new ValidationError("At least one active routing profile is required");
+  if (typeof config.default !== "string" || !profiles[config.default]) throw new ValidationError("Routing default must name an active configured profile");
+  return { schemaVersion: 1, router, default: config.default, profiles, inactiveProfiles };
 }
 
 function loadRoutingConfig(root, { required = false } = {}) {
@@ -564,6 +608,7 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
     try {
       const output = routingRunner({ profile: config.router, prompt: routingPrompt(config, { type: meta.type, brief }), cwd: findProject(roots.foremanHome, meta.projectId).root, taskId, config });
       const choice = parseRoutingSelection(output);
+      if (config.inactiveProfiles.includes(choice.profile)) throw new ValidationError(`Model router selected an inactive profile: ${choice.profile}`);
       if (!config.profiles[choice.profile]) throw new ValidationError(`Model router selected an unknown profile: ${choice.profile}`);
       selectedName = choice.profile;
       selected = config.profiles[selectedName];
@@ -752,6 +797,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       ? (prior.generation || 0)
       : (prior?.generation || 0) + 1;
     const workspace = validateWorkspace(project, workspacePath || cwd || project.root);
+    const workspaceMode = projectVcs(project) === "none" ? "shared-directory" : "shared-current-branch";
     const taskType = prior.type || "ship";
     const requestedResources = resources === undefined && preflight === undefined
       ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" ? "read" : "exclusive" }]
@@ -792,7 +838,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
-      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(workspace.path) : null,
+      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(workspace.path, projectVcs(project) === "none" ? "files" : "git") : null,
     };
     fs.mkdirSync(path.join(taskStateDir(roots.foremanHome, taskId), "inbox"), { recursive: true, mode: 0o700 });
     atomicJson(metaFile(roots.foremanHome, taskId), pending);
@@ -838,7 +884,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
             if (inspectedPrior && inspectedPrior.status !== "missing" && inspectedPrior.status !== "stopped") throw new DeliveryError("Previous worker remains active; refusing reassignment");
           }
         }
-        spawned = adapter.spawn({ taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", brief, dispatchProfile: profile });
+        spawned = adapter.spawn({ taskId, projectId: project.id, owner, generation, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, dispatchProfile: profile });
         endpoint = spawned?.endpoint || spawned?.endpointId;
         if (!endpoint) throw new DeliveryError("Herdr did not return an endpoint identity");
         spawnedEndpoint = endpoint;
@@ -847,7 +893,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
       const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."];
       if (taskType === "scout") instructions.push("Do not modify production files. Foreman compares the workspace fingerprint before and after this scout.");
-      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode: "shared-current-branch", gitAuthority: "client", instructions, brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`), connection: { foremanRoot: roots.foremanRoot, foremanHome: roots.foremanHome, command: path.join(__dirname, "..", "bin", "foreman") } };
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`), connection: { foremanRoot: roots.foremanRoot, foremanHome: roots.foremanHome, command: path.join(__dirname, "..", "bin", "foreman") } };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
       const delivered = adapter.send(endpoint, coordination.deliveryEnvelope({ roots, message }));
@@ -1091,6 +1137,8 @@ function acceptTask({ roots, taskId }) {
     if (!meta.completionPackage || !fs.existsSync(meta.completionPackage)) throw new ValidationError("A valid completion package is required before acceptance");
     if (meta.type === "scout") assertScoutUnmodified(roots, meta);
     const next = { ...meta, status: "accepted", acceptedAt: now() };
+    // Without Git there is no commit to prove, so accepted ship work is already in the project.
+    if (meta.type !== "scout" && projectVcs(findProject(roots.foremanHome, meta.projectId)) === "none") next.deliveryState = "landed";
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     archiveBacklog(roots.foremanHome, taskId, meta.projectId, fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta.owner, meta.generation);
     appendHistory(roots.foremanHome, taskId, { at: now(), status: "accepted", generation: meta.generation });
@@ -1105,11 +1153,12 @@ function markLanded({ roots, taskId, evidence }) {
     if (meta.status !== "accepted") throw new ValidationError("Task must be accepted before delivery is marked landed");
     if (!meta.workspace || !fs.existsSync(meta.workspace)) throw new CleanupRefusedError("Delivery cannot be proven without the bound workspace");
     const project = findProject(roots.foremanHome, meta.projectId);
+    if (projectVcs(project) === "none") throw new ValidationError("Projects without Git are landed on acceptance");
     if (gitCommonDir(meta.workspace) !== gitCommonDir(project.root)) throw new ValidationError("Workspace belongs to a different Git project");
     if (evidence?.workspace && canonical(evidence.workspace) !== canonical(meta.workspace)) throw new ValidationError("Landing evidence belongs to a different workspace");
     if (!evidence || evidence.target !== "local-only" || typeof evidence.commit !== "string" || !/^[0-9a-f]{7,64}$/.test(evidence.commit)) throw new ValidationError("Explicit local-only landing evidence is required");
     try { execFileSync("git", ["-C", project.root, "cat-file", "-e", `${evidence.commit}^{commit}`], { stdio: "pipe" }); } catch (_) { throw new ValidationError("Landing commit does not exist"); }
-    try { execFileSync("git", ["-C", project.root, "merge-base", "--is-ancestor", evidence.commit, project.defaultBranch], { stdio: "pipe" }); } catch (_) { throw new CleanupRefusedError("Landing commit is not reachable from the configured default branch"); }
+    try { execFileSync("git", ["-C", project.root, "merge-base", "--is-ancestor", evidence.commit, meta.branch], { stdio: "pipe" }); } catch (_) { throw new CleanupRefusedError("Landing commit is not reachable from the task branch"); }
     const next = { ...meta, deliveryState: "landed" };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     return next;
@@ -1121,7 +1170,7 @@ function releaseEndpoint({ roots, taskId, adapter }) {
     const meta = readMeta(roots.foremanHome, taskId);
     if (!meta.endpoint) return meta;
     const project = findProject(roots.foremanHome, meta.projectId);
-    if (meta.workspace && (!fs.existsSync(meta.workspace) || gitCommonDir(meta.workspace) !== gitCommonDir(project.root))) throw new CleanupRefusedError("Endpoint cleanup is bound to the task project workspace");
+    if (meta.workspace && (!fs.existsSync(meta.workspace) || !workspaceBelongsToProject(project, meta.workspace))) throw new CleanupRefusedError("Endpoint cleanup is bound to the task project workspace");
     if (!adapter || typeof adapter.stop !== "function" || typeof adapter.inspect !== "function") throw new CleanupRefusedError("Endpoint teardown cannot be verified");
     const stopped = adapter.stop(meta.endpoint);
     if (stopped === false || stopped?.stopped === false) throw new CleanupRefusedError("Endpoint teardown was not confirmed");
@@ -1141,7 +1190,7 @@ function cleanupTask({ roots, taskId, discard = false, authorization = false, wo
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const project = findProject(roots.foremanHome, meta.projectId);
-    if (meta.workspace && fs.existsSync(meta.workspace) && gitCommonDir(meta.workspace) !== gitCommonDir(project.root)) throw new CleanupRefusedError("Cleanup workspace belongs to another project");
+    if (meta.workspace && fs.existsSync(meta.workspace) && !workspaceBelongsToProject(project, meta.workspace)) throw new CleanupRefusedError("Cleanup workspace belongs to another project");
     const deliveryComplete = meta.type === "scout" ? meta.status === "accepted" : meta.deliveryState === "landed";
     if (!deliveryComplete && !(discard && authorization)) throw new CleanupRefusedError("Cleanup refused while work is unlanded");
     if (meta.endpoint) throw new CleanupRefusedError("Cleanup requires endpoint teardown proof");
@@ -1173,7 +1222,8 @@ function releaseTaskLease({ roots, taskId }) {
 }
 
 function projectForWorkerCwd(home, cwd, projectId) {
-  const top = gitTop(cwd);
+  let top;
+  try { top = gitTop(cwd); } catch (_) { return projectWithoutGitForWorkerCwd(home, canonical(cwd), projectId); }
   const common = gitCommonDir(top);
   if (!isWithin(top, canonical(cwd))) throw new ValidationError("Worker cwd is outside its Git worktree");
   if (projectId) {
@@ -1182,12 +1232,22 @@ function projectForWorkerCwd(home, cwd, projectId) {
     return { project, workspace: validateWorkspace(project, top) };
   }
   const matches = loadProjects(home).filter((project) => {
-    if (!project.enabled || !fs.existsSync(project.root)) return false;
+    if (!project.enabled || projectVcs(project) === "none" || !fs.existsSync(project.root)) return false;
     try { return gitCommonDir(project.root) === common; } catch (_) { return false; }
   });
   if (matches.length !== 1) throw new ValidationError("Worker cwd does not identify exactly one registered project");
   const project = findProject(home, matches[0].id);
   return { project, workspace: validateWorkspace(project, top) };
+}
+
+function projectWithoutGitForWorkerCwd(home, cwd, projectId) {
+  const matches = projectId
+    ? [findProject(home, projectId)]
+    : loadProjects(home).filter((project) => project.enabled && projectVcs(project) === "none" && isWithin(project.root, cwd));
+  if (matches.length !== 1) throw new ValidationError("Worker cwd does not identify exactly one registered project");
+  const project = findProject(home, matches[0].id);
+  if (projectVcs(project) !== "none" || !isWithin(project.root, cwd)) throw new ValidationError("Worker cwd does not belong to the requested project");
+  return { project, workspace: validateWorkspace(project, project.root) };
 }
 
 function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId, type = "ship", explicit = false }) {
@@ -1240,7 +1300,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
       adopted: true,
       adoptedAt: now(),
       messageAckRequired: false,
-      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(bound.workspace.path) : null,
+      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(bound.workspace.path, projectVcs(bound.project) === "none" ? "files" : "git") : null,
     };
     const text = fs.readFileSync(path.join(taskDir(roots.foremanHome, id), "brief.md"), "utf8");
     try {
@@ -1813,7 +1873,7 @@ module.exports = {
   handleProductionEvent, runObserverOnce, runObserverLoop, startObserver, stopObserver,
   claimResources, releaseResources, renewResources, listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,
-  canonical, gitBranch, gitTop, gitCommonDir,
+  canonical, gitBranch, gitTop, gitCommonDir, projectVcs, workspaceBelongsToProject,
   createMessage: coordination.createMessage, acknowledgeMessage: coordination.acknowledgeMessage,
   listMessages: coordination.listMessages, retryMessages: coordination.retryMessages,
   createObserverEvent: coordination.createObserverEvent, listEvents: coordination.listEvents,

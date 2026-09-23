@@ -1,7 +1,7 @@
 # Foreman local runbook
 
 Set `FOREMAN_ROOT` to the tracked Foreman checkout and `FOREMAN_HOME` to a private runtime directory.
-Register a Git project, create a task, and dispatch through the CLI:
+Register a project, with or without Git, create a task, and dispatch through the CLI:
 
 ```sh
 bin/foreman init
@@ -20,9 +20,14 @@ bin/foreman reconcile
 bin/foreman status
 ```
 
+`task mark-landed` requires a commit reachable from the branch recorded at dispatch.
+Projects without Git skip it because `task accept` marks their ship work landed.
+
 Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
 Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
 Leave it `null` to use the tool's default.
+Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
+The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.
 Foreman passes Codex effort through `--config model_reasoning_effort=...` and Claude effort through `--effort`; `omp` profiles do not support this field.
 `init`, `routing init`, and `routing show` validate and read that file; they do not create or modify it.
 An older `FOREMAN_HOME/config/model-routing.json` is ignored, so copy any custom settings into the tracked file before using them.

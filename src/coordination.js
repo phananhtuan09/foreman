@@ -713,17 +713,18 @@ function taskConsistencyEvidence({ roots, meta, messages }) {
     issues.push({ type: "task.endpoint-missing", reason: "active assignment has no runtime endpoint" });
   }
   try {
-    const { findProject, gitBranch, gitCommonDir } = require("./foreman");
+    const { findProject, gitBranch, projectVcs, workspaceBelongsToProject } = require("./foreman");
     const project = findProject(roots.foremanHome, meta.projectId);
+    const hasGit = projectVcs(project) === "git";
     if (meta.workspace && (!fs.existsSync(meta.workspace) || fs.realpathSync(meta.workspace) !== meta.workspace)) {
       evidence.workspace = false; issues.push({ type: "task.workspace-missing", reason: "workspace is missing or not canonical" });
     }
-    if (meta.workspace && fs.existsSync(meta.workspace)) {
+    if (hasGit && meta.workspace && fs.existsSync(meta.workspace)) {
       try { if (gitBranch(meta.workspace) !== meta.branch) { evidence.branch = false; issues.push({ type: "task.branch-mismatch", expected: meta.branch, actual: gitBranch(meta.workspace) }); } }
       catch (error) { evidence.branch = false; issues.push({ type: "task.branch-unreadable", reason: error.message }); }
     }
-    if (meta.workspace && fs.existsSync(meta.workspace) && gitCommonDir(meta.workspace) !== gitCommonDir(project.root)) {
-      evidence.project = false; issues.push({ type: "task.project-mismatch", reason: "workspace belongs to a different Git project" });
+    if (meta.workspace && fs.existsSync(meta.workspace) && !workspaceBelongsToProject(project, meta.workspace)) {
+      evidence.project = false; issues.push({ type: "task.project-mismatch", reason: "workspace belongs to a different project" });
     }
   } catch (error) {
     evidence.project = false; issues.push({ type: "task.project-invalid", reason: error.message });

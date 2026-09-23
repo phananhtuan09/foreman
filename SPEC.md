@@ -162,7 +162,7 @@ Each project has:
   "id": "ai-agent-workflow",
   "name": "AI Agent Workflow",
   "root": "/absolute/canonical/path/ai-agent-workflow",
-  "defaultBranch": "main",
+  "vcs": "git",
   "deliveryMode": "local-only",
   "enabled": true
 }
@@ -171,7 +171,10 @@ Each project has:
 Rules:
 
 - `id` is stable, unique, lowercase, and path-independent.
-- `root` must resolve to an existing Git worktree when the project is enabled.
+- `root` must resolve to an existing directory when the project is enabled.
+- Registration inside a Git worktree stores the worktree root with `vcs: "git"`; any other directory is stored as given with `vcs: "none"`.
+- A record without `vcs` is a Git project.
+- Projects have no configured default branch; Git work happens on the branch that is current at dispatch.
 - Duplicate canonical roots are rejected.
 - A project outside the registry cannot receive work.
 - Initial delivery mode is `local-only`; adding `pull-request` requires its own accepted design and proof.
@@ -432,6 +435,8 @@ Foreman validates a selected dispatch profile against those capabilities before 
 
 For mutation work, the client prepares a workspace on the current branch. Foreman validates the workspace and binds it to the task and project in task metadata; Foreman never creates, switches, merges, or removes worktrees.
 
+For a project without Git, the workspace is the project root, the task has no branch, and workspace identity is the canonical root path.
+
 Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
 
 Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner, generation, expiry, and heartbeat renewal.
@@ -588,11 +593,15 @@ Recovery attempts are bounded; exhaustion produces an actionable anomaly instead
 
 ### 11.8 Cleanup
 
+Local-only landing evidence for a Git project is a commit reachable from the task's recorded branch.
+A project without Git has no commit to prove, so user acceptance of ship work marks it landed.
+
 Cleanup verifies delivery, workspace identity, resource lease, task generation, and endpoint binding. The client performs commit, merge, branch switching, reset, and workspace recycling. Unlanded work blocks lease release unless the user explicitly authorizes discard for that exact task.
 
 ### 11.9 Scout completion and promotion
 
 A scout completes with an evidence-backed report and enters review-ready without a landing requirement.
+In a project without Git, the scout mutation guard hashes every file except those under `node_modules`, `.git`, `dist`, and `build`.
 User acceptance closes the scout and permits release of its read-only runtime resources.
 If the report implies implementation work, Foreman creates a new ship task only after explicit user approval and links it to the source scout and accepted report.
 
@@ -823,5 +832,6 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
 - A routing profile may set `effort` for Codex or Claude through their tool-specific command flags; the adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
+- A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Scout isolation is a before/after workspace fingerprint, not a runtime sandbox.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.

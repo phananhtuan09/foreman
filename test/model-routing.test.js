@@ -75,7 +75,7 @@ test("routing config supports codex, claude, omp and reads the repository file",
     const initialized = initRoutingConfig({ roots: f.roots });
     assert.equal(initialized.file, path.join(f.roots.foremanRoot, "config", "model-routing.json"));
     assert.equal(initialized.config.router.tool, "codex");
-    assert.equal(initialized.config.default, "codex-sol");
+    assert.equal(initialized.config.default, "claude-sonnet");
     assert.equal(initialized.config.router.model, "gpt-6-luna");
     assert.deepEqual(initialized.config.profiles["codex-sol"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="medium"']);
     assert.equal(initialized.config.profiles["claude-opus"].model, "claude-opus-5-5");
@@ -154,6 +154,28 @@ test("task creation always routes and persists the selected worker profile", () 
     assert.equal(record.reason, "Broad architectural work.");
     assert.match(record.configDigest, /^[a-f0-9]{64}$/);
     assert.match(record.briefDigest, /^[a-f0-9]{64}$/);
+  } finally { f.cleanup(); }
+});
+
+test("inactive profiles are hidden from the router and never selected", () => {
+  const f = fixture();
+  try {
+    const configured = routingConfig();
+    configured.profiles["claude-deep"].isActive = false;
+    configured.profiles["omp-fast"].isActive = true;
+    const normalized = validateRoutingConfig(configured);
+    assert.deepEqual(Object.keys(normalized.profiles), ["codex-default", "omp-fast"]);
+    assert.deepEqual(normalized.inactiveProfiles, ["claude-deep"]);
+    assert.throws(() => validateRoutingConfig({ ...configured, default: "claude-deep" }), /active configured profile/);
+    assert.throws(() => validateRoutingConfig({ ...configured, profiles: { ...configured.profiles, "omp-fast": { ...configured.profiles["omp-fast"], isActive: "no" } } }), /isActive must be a boolean/);
+    fs.mkdirSync(path.join(f.roots.foremanRoot, "config"));
+    fs.writeFileSync(path.join(f.roots.foremanRoot, "config", "model-routing.json"), `${JSON.stringify(configured, null, 2)}\n`);
+    let prompt;
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Deep work.", routingRunner(input) { prompt = input.prompt; return { profile: "claude-deep" }; } });
+    assert.doesNotMatch(prompt, /claude-deep/);
+    assert.equal(task.routing.profile, "codex-default");
+    assert.equal(task.routing.source, "default");
+    assert.match(task.routing.error, /inactive profile/);
   } finally { f.cleanup(); }
 });
 

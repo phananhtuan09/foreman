@@ -30,7 +30,7 @@ test("live Herdr runtime dispatches a real worker and lands its artifact", { tim
 
     const roots = resolveRoots({ foremanRoot: project, foremanHome: home });
     initHome(roots);
-    registerProject({ roots, id: "live", root: project, defaultBranch: "main" });
+    registerProject({ roots, id: "live", root: project });
     const owner = `liveworker${process.pid}`.slice(0, 30).replace(/[^a-z0-9_-]/g, "");
     adapter = new HerdrAdapter({ transport: new HerdrCliTransport({ command: "herdr", agentKind: process.env.FOREMAN_AGENT_KIND || "codex" }) });
     assert.equal(adapter.verifyCompatibility(), true);
@@ -86,7 +86,7 @@ test("live worker connects from the current repository workspace", { timeout: 18
   let assignment;
   try {
     initHome(roots);
-    registerProject({ roots, id: "foreman", root: project, defaultBranch: "main" });
+    registerProject({ roots, id: "foreman", root: project });
     const task = createTask({ roots, projectId: "foreman", type: "scout", brief: "Do not modify any repository file. Acknowledge the received message by writing the required JSON fields to the envelope's ackPath. Then run the Foreman command from payload.connection.command with FOREMAN_ROOT and FOREMAN_HOME from payload.connection to send worker heartbeat and emit event type connected, using the exact assignment identity from the envelope. Stop after both commands succeed." });
     assignment = assignTask({ roots, taskId: task.id, owner, adapter, resources: [{ key: "workspace/foreman", mode: "read" }] });
     const deadline = Date.now() + 120000;

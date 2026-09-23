@@ -26,7 +26,7 @@ function fixture() {
   execFileSync("git", ["-C", projectRoot, "commit", "-m", "fixture"], { stdio: "pipe" });
   const roots = resolveRoots({ foremanRoot: projectRoot, foremanHome: home });
   initHome(roots);
-  registerProject({ roots, id: "fixture", root: projectRoot, name: "Fixture", defaultBranch: "main" });
+  registerProject({ roots, id: "fixture", root: projectRoot, name: "Fixture" });
   const endpoints = new Map();
   const adapter = {
     verifyCompatibility: () => ({ protocol: 1 }),

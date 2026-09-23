@@ -75,7 +75,7 @@ function fixture() {
 
   const roots = resolveRoots({ foremanRoot: projectRoot, foremanHome: home });
   initHome(roots);
-  registerProject({ roots, id: "fixture", root: projectRoot, name: "Fixture", defaultBranch: "main" });
+  registerProject({ roots, id: "fixture", root: projectRoot, name: "Fixture" });
   const transport = new SimulatedHerdrTransport();
   return {
     base,

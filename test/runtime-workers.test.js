@@ -88,7 +88,7 @@ function fixture() {
   execFileSync("git", ["-C", projectRoot, "commit", "-m", "fixture"], { stdio: "pipe" });
   const roots = resolveRoots({ foremanRoot: projectRoot, foremanHome: home });
   initHome(roots);
-  registerProject({ roots, id: "fixture", root: projectRoot, defaultBranch: "main" });
+  registerProject({ roots, id: "fixture", root: projectRoot });
   const transport = new RuntimeWorkerTransport();
   return { base, projectRoot, roots, transport, adapter: new HerdrAdapter({ transport }) };
 }
