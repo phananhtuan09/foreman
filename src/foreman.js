@@ -1105,6 +1105,7 @@ function applyPackageUnlocked({ roots, taskId, raw, type, sourceName, writeCanon
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     updateBacklog(roots.foremanHome, taskId, "[v]", meta.projectId, fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta.owner, meta.generation);
     appendHistory(roots.foremanHome, taskId, { at: now(), status: "review-ready", generation });
+    coordination.createObserverEvent({ roots, eventType: "task.review-ready", dedupKey: `${taskId}:${generation}:review-ready`, taskId, projectId: meta.projectId, worker: meta.owner, generation, endpoint: meta.endpoint, evidence: { completionAt: next.completionAt }, source: "foreman" });
   }
   return { file, generation, type };
 }
@@ -1621,6 +1622,18 @@ function handleProductionEvent({ roots, adapter, event }) {
   catch (error) { return { handled: false, error: error.message }; }
   if (event.projectId && event.projectId !== meta.projectId) return { handled: true, action: "ignored-cross-project" };
   if (event.generation !== null && event.generation !== undefined && Number(event.generation) !== meta.generation) return { handled: true, action: "ignored-stale-generation" };
+  if (type === "task.review-ready") {
+    if (meta.status !== "review-ready" || !meta.completionPackage) return { handled: true, action: "review-no-longer-pending" };
+    const paneId = process.env.HERDR_PANE_ID;
+    if (!paneId || !adapter) return { handled: false, reason: "Foreman session endpoint is unavailable" };
+    try {
+      const session = adapter.inspect(paneId);
+      if (session?.paneId !== paneId || path.resolve(session.cwd || "") !== roots.foremanRoot) return { handled: false, reason: "Foreman session endpoint identity is invalid" };
+      const delivered = adapter.send(paneId, `[Foreman wake] Task ${meta.taskId} in project ${meta.projectId} is review-ready in FOREMAN_HOME=${roots.foremanHome}. Read its current durable state and original completion report, then tell the user the outcome in Vietnamese. Do not accept the task automatically.`);
+      if (delivered === false || delivered?.delivered === false) return { handled: false, reason: "Foreman session delivery failed" };
+      return { handled: true, action: "notified-foreman-session", paneId };
+    } catch (error) { return { handled: false, reason: error.message }; }
+  }
   if (type === "worker.dead" || type === "worker.missing") {
     if (["review-ready", "accepted", "cleaned"].includes(meta.status)) return { handled: true, action: "terminal" };
     try {
@@ -1845,6 +1858,16 @@ function supervisedTasks(roots) {
   return listTasks({ roots }).filter((meta) => ["working", "pending-ack", "blocked", "waiting-decision"].includes(meta.status));
 }
 
+function observerNeeded(roots) {
+  if (supervisedTasks(roots).length > 0) return true;
+  if (!process.env.HERDR_PANE_ID) return false;
+  return coordination.listEvents({ roots, state: "pending" }).some((event) => {
+    if (event.eventType !== "task.review-ready" || !event.taskId) return false;
+    try { return readMeta(roots.foremanHome, event.taskId).status === "review-ready"; }
+    catch (_) { return false; }
+  });
+}
+
 function observerStateFile(home) { return path.join(home, "state", "observer", "supervisor.json"); }
 
 function readObserverSupervisor(home) {
@@ -1868,7 +1891,7 @@ function runObserverLoop({ roots, adapter, intervalMs = 1000 }) {
   wake.start();
   observer.start();
   let stopped = false;
-  const timer = setInterval(() => { if (!supervisedTasks(roots).length) stop(); }, Math.max(Number(intervalMs) || 1000, 200));
+  const timer = setInterval(() => { if (!observerNeeded(roots)) stop(); }, Math.max(Number(intervalMs) || 1000, 200));
   function onStop() { stop(); process.exit(0); }
   function stop() {
     if (stopped) return;
@@ -1889,7 +1912,7 @@ function startObserver({ roots, adapter, intervalMs = 1000, foreground = false }
   initHome(roots);
   const existing = readObserverSupervisor(roots.foremanHome);
   if (observerAlive(existing)) return { started: false, alreadyRunning: true, pid: existing.pid };
-  if (!supervisedTasks(roots).length) return { started: false, reason: "no supervised work" };
+  if (!observerNeeded(roots)) return { started: false, reason: "no supervised work" };
   if (foreground) return runObserverLoop({ roots, adapter, intervalMs });
   const child = require("node:child_process").spawn(process.execPath, [path.join(__dirname, "..", "bin", "foreman"), "observer", "run", "--interval", String(intervalMs)], {
     detached: true,

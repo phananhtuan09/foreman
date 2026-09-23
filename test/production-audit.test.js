@@ -112,6 +112,35 @@ test("unknown runtime evidence is reported and does not spawn a replacement", ()
   } finally { f.cleanup(); }
 });
 
+test("review-ready wake retries until the bound Foreman pane receives it", () => {
+  const f = fixture();
+  const previousPane = process.env.HERDR_PANE_ID;
+  process.env.HERDR_PANE_ID = "foreman-pane";
+  try {
+    const task = createTask({ roots: f.roots, projectId: "alpha", brief: "report findings" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
+    acknowledgeBrief(f.roots, task, assignment);
+    recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "finished"), type: "completion" });
+    const pending = () => listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "task.review-ready");
+    assert.equal(pending().length, 1);
+
+    restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
+    assert.equal(pending().length, 1);
+
+    f.workers.set("foreman-pane", { endpoint: "foreman-pane", paneId: "foreman-pane", owner: "foreman", cwd: f.alphaRoot, status: "idle" });
+    const before = f.counts().sends;
+    restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
+    assert.equal(pending().length, 0);
+    assert.equal(f.counts().sends, before + 1);
+    restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
+    assert.equal(f.counts().sends, before + 1);
+  } finally {
+    if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = previousPane;
+    f.cleanup();
+  }
+});
+
 test("adoption binds an active unassigned worker without resending the task", () => {
   const f = fixture();
   try {

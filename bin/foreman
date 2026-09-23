@@ -22,9 +22,7 @@ function roots() { return core.resolveRoots({ foremanRoot: process.env.FOREMAN_R
 function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) }); }
 function armObserver(roots) {
   try {
-    if (core.listTasks({ roots }).some((task) => ["working", "pending-ack", "blocked", "waiting-decision"].includes(task.status))) {
-      core.startObserver({ roots });
-    }
+    core.startObserver({ roots });
   } catch (_) {
     // The lifecycle result remains authoritative; the next explicit reconcile can retry supervision.
   }
