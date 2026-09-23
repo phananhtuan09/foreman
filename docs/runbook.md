@@ -20,41 +20,12 @@ bin/foreman reconcile
 bin/foreman status
 ```
 
-`init` creates `FOREMAN_HOME/config/model-routing.json` if it does not exist and never overwrites an existing file.
-The file has one fixed `router`, one `default` profile name, and named worker `profiles`:
-
-```json
-{
-  "schemaVersion": 1,
-  "router": {
-    "tool": "codex",
-    "command": ["codex", "exec", "--sandbox", "read-only", "--ephemeral"],
-    "model": "default",
-    "whenToUse": "Classify every new Foreman task."
-  },
-  "default": "codex-default",
-  "profiles": {
-    "codex-default": {
-      "tool": "codex",
-      "command": ["codex"],
-      "model": "default",
-      "whenToUse": "General coding and debugging."
-    },
-    "claude-deep": {
-      "tool": "claude",
-      "command": ["claude", "--dangerously-skip-permissions"],
-      "model": "claude-opus",
-      "whenToUse": "Large architecture and difficult reasoning."
-    },
-    "omp-fast": {
-      "tool": "omp",
-      "command": ["omp", "--auto-approve"],
-      "model": "fast-model",
-      "whenToUse": "Small isolated changes."
-    }
-  }
-}
-```
+Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
+Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
+Leave it `null` to use the tool's default.
+Foreman passes Codex effort through `--config model_reasoning_effort=...` and Claude effort through `--effort`; `omp` profiles do not support this field.
+`init`, `routing init`, and `routing show` validate and read that file; they do not create or modify it.
+An older `FOREMAN_HOME/config/model-routing.json` is ignored, so copy any custom settings into the tracked file before using them.
 
 `command` accepts either an argument array or a shell-like string, but Foreman always executes it without a shell.
 The command executable must match `tool`, and model flags belong in `model` rather than `command`.

@@ -149,7 +149,7 @@ class HerdrCliTransport {
     Atomics.wait(wait, 0, 0, ms);
   }
 
-  _ensureInteractiveReady(paneId, timeoutMs = 15000) {
+  _ensureInteractiveReady(paneId, owner, timeoutMs = 15000) {
     if (this.runner) return;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -161,6 +161,10 @@ class HerdrCliTransport {
         continue;
       }
       if (/Ask Codex to do anything|Ask Claude to do anything|Ask Gemini to do anything|Ask .* to do anything/i.test(output)) return;
+      try {
+        const inspection = this.inspect(owner);
+        if (inspection.paneId === paneId && ["idle", "waiting"].includes(inspection.status)) return;
+      } catch (_) {}
       this._sleep(250);
     }
     throw new HerdrCompatibilityError("Herdr agent did not reach an interactive prompt");
@@ -266,7 +270,7 @@ class HerdrCliTransport {
     try {
       this._waitForAvailableShell(paneId);
       this._startAgentWhenAvailable({ owner, agentKind, paneId, agentArgs });
-      this._ensureInteractiveReady(paneId);
+      this._ensureInteractiveReady(paneId, owner);
       return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
     } catch (error) {
       try { this._run(["pane", "close", paneId]); } catch (_) {}

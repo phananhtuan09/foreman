@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "router": {
+    "tool": "codex",
+    "command": ["codex", "exec", "--sandbox", "read-only", "--ephemeral"],
+    "model": "gpt-6-luna",
+    "effort": null,
+    "whenToUse": "Classify every new Foreman task and select one configured worker profile."
+  },
+  "default": "codex-sol",
+  "profiles": {
+    "codex-sol": {
+      "tool": "codex",
+      "command": ["codex", "--yolo"],
+      "model": "gpt-6-sol",
+      "effort": "medium",
+      "whenToUse": "General coding, debugging, testing, and multi-step repository work."
+    },
+    "codex-luna": {
+      "tool": "codex",
+      "command": ["codex", "--yolo"],
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "whenToUse": "Small, focused, and repeatable coding tasks."
+    },
+    "claude-sonnet": {
+      "tool": "claude",
+      "command": ["claude", "--dangerously-skip-permissions"],
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "whenToUse": "General coding and debugging tasks suited to Claude Code."
+    },
+    "claude-opus": {
+      "tool": "claude",
+      "command": ["claude", "--dangerously-skip-permissions"],
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "whenToUse": "Large architecture changes and difficult multi-step reasoning suited to Claude Code."
+    }
+  }
+}

@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const test = require("node:test");
 const { HerdrAdapter, HerdrCliTransport, HerdrCompatibilityError } = require("../src/herdr");
+const { loadRoutingConfig } = require("../src/foreman");
 
 function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1, agentHelp, paneHelp } = {}) {
   const calls = [];
@@ -100,6 +102,34 @@ test("Herdr starts a routed coding tool with configured arguments and model", ()
     if (previous === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = previous;
   }
+});
+
+test("Herdr spawn command matches every profile in model-routing.json", () => {
+  const previous = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "1";
+  try {
+    const config = loadRoutingConfig(path.join(__dirname, ".."), { required: true });
+    for (const [name, profile] of Object.entries(config.profiles)) {
+      const fake = fakeHerdr();
+      const transport = new HerdrCliTransport({ runner: fake.runner });
+      transport.spawn({ owner: "worker-1", cwd: "/tmp/worktree", dispatchProfile: { name, ...profile } });
+      const actual = fake.calls.find((args) => args[0] === "agent" && args[1] === "start");
+      assert.deepEqual(actual, ["agent", "start", "worker-1", "--kind", profile.tool, "--pane", "w1:p2", "--", ...profile.command.slice(1), "--model", profile.model], name);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = previous;
+  }
+});
+
+test("Herdr accepts an idle Claude endpoint when its prompt has no legacy hint text", () => {
+  const transport = new HerdrCliTransport();
+  transport._run = (args) => {
+    if (args[0] === "pane" && args[1] === "read") return "❯\n";
+    if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", pane_id: "w1:p2", agent_status: "idle", cwd: "/tmp/worktree" }] } });
+    throw new Error(`Unexpected Herdr command: ${args.join(" ")}`);
+  };
+  assert.doesNotThrow(() => transport._ensureInteractiveReady("w1:p2", "worker-1", 100));
 });
 
 test("adapter interrupt fails closed unless a later inspection shows the endpoint survived idle", () => {

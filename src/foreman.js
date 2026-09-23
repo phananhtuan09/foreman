@@ -125,7 +125,7 @@ function resolveRoots({ foremanRoot = process.env.FOREMAN_ROOT || process.cwd(),
 }
 
 function initHome(roots) {
-  for (const dir of ["config", "data", "data/tasks", "state", "state/tasks"]) {
+  for (const dir of ["data", "data/tasks", "state", "state/tasks"]) {
     fs.mkdirSync(path.join(roots.foremanHome, dir), { recursive: true, mode: 0o700 });
   }
   coordination.initCoordination(roots.foremanHome);
@@ -408,28 +408,7 @@ function registerProject({ roots, id, name = id, root, defaultBranch = "main", d
   });
 }
 
-function routingConfigFile(home) { return path.join(home, "config", "model-routing.json"); }
-
-function defaultRoutingConfig() {
-  return {
-    schemaVersion: 1,
-    router: {
-      tool: "codex",
-      command: ["codex", "exec", "--sandbox", "read-only", "--ephemeral"],
-      model: "default",
-      whenToUse: "Classify every new Foreman task and select one configured worker profile.",
-    },
-    default: "codex-default",
-    profiles: {
-      "codex-default": {
-        tool: "codex",
-        command: ["codex"],
-        model: "default",
-        whenToUse: "General coding, debugging, testing, and repository investigation.",
-      },
-    },
-  };
-}
+function routingConfigFile(root) { return path.join(root, "config", "model-routing.json"); }
 
 function parseCommandString(value) {
   const parts = [];
@@ -472,7 +451,16 @@ function normalizeRoutingProfile(profile, name) {
   if (command.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) throw new ValidationError(`Routing profile command must not duplicate its model field: ${name}`);
   if (typeof profile.model !== "string" || !profile.model.trim()) throw new ValidationError(`Routing profile model is required: ${name}`);
   if (typeof profile.whenToUse !== "string" || !profile.whenToUse.trim()) throw new ValidationError(`Routing profile whenToUse is required: ${name}`);
-  return { tool, command, model: profile.model.trim(), whenToUse: profile.whenToUse.trim() };
+  const effort = profile.effort ?? null;
+  if (effort !== null && tool === "omp") throw new ValidationError(`Routing effort is not supported for tool: ${tool}`);
+  const allowedEfforts = tool === "codex" ? ["none", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"];
+  if (effort !== null && !allowedEfforts.includes(effort)) throw new ValidationError(`Unsupported routing effort: ${name}`);
+  const commandSetsEffort = tool === "claude"
+    ? command.some((arg) => arg === "--effort" || arg.startsWith("--effort="))
+    : command.some((arg) => arg.startsWith("model_reasoning_effort="));
+  if (effort !== null && commandSetsEffort) throw new ValidationError(`Routing profile command must not duplicate its effort field: ${name}`);
+  if (effort !== null) command.push(...(tool === "codex" ? ["--config", `model_reasoning_effort="${effort}"`] : ["--effort", effort]));
+  return { tool, command, model: profile.model.trim(), effort, whenToUse: profile.whenToUse.trim() };
 }
 
 function validateRoutingConfig(config) {
@@ -489,8 +477,8 @@ function validateRoutingConfig(config) {
   return { schemaVersion: 1, router, default: config.default, profiles };
 }
 
-function loadRoutingConfig(home, { required = false } = {}) {
-  const file = routingConfigFile(home);
+function loadRoutingConfig(root, { required = false } = {}) {
+  const file = routingConfigFile(root);
   if (!fs.existsSync(file)) {
     if (required) throw new ValidationError(`Model routing config does not exist: ${file}`);
     return null;
@@ -500,9 +488,8 @@ function loadRoutingConfig(home, { required = false } = {}) {
 
 function initRoutingConfig({ roots }) {
   initHome(roots);
-  const file = routingConfigFile(roots.foremanHome);
-  if (!fs.existsSync(file)) atomicJson(file, defaultRoutingConfig());
-  return { file, config: loadRoutingConfig(roots.foremanHome, { required: true }) };
+  const file = routingConfigFile(roots.foremanRoot);
+  return { file, config: loadRoutingConfig(roots.foremanRoot, { required: true }) };
 }
 
 function modelArgs(profile) {
@@ -512,7 +499,7 @@ function modelArgs(profile) {
 }
 
 function routingPrompt(config, task) {
-  const candidates = Object.entries(config.profiles).map(([name, profile]) => ({ profile: name, tool: profile.tool, model: profile.model, whenToUse: profile.whenToUse }));
+  const candidates = Object.entries(config.profiles).map(([name, profile]) => ({ profile: name, tool: profile.tool, model: profile.model, effort: profile.effort, whenToUse: profile.whenToUse }));
   return [
     "You are Foreman's model router.",
     "Select exactly one configured profile for the task.",
@@ -565,7 +552,7 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
   const meta = readMeta(roots.foremanHome, taskId);
   if (meta.status !== "routing") throw new ValidationError(`Task is not awaiting model routing: ${taskId}`);
   const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
-  const config = loadRoutingConfig(roots.foremanHome);
+  const config = loadRoutingConfig(roots.foremanRoot);
   let selectedName = null;
   let selected = null;
   let source = "unconfigured";
@@ -1817,7 +1804,7 @@ function validateDispatchProfile(profile, capabilities = {}) {
 module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
-  registerProject, createTask, routeTask, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, defaultRoutingConfig, runRouterCommand,
+  registerProject, createTask, routeTask, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, recordPackage, reconstructTask, acceptTask, markLanded, releaseEndpoint, releaseTaskLease, cleanupTask,
   acknowledgeTaskMessage, sendWorkerMessage, createDecision, answerDecision, deliverDecision, acknowledgeDecision, applyDecision, promoteScout, triageBlocker,
   observeRuntime, reconcileFleet, drainWakeQueue, recoverProcessingEvents, recoverDeadWorker, buildHandoff, reconcileInbox, reconcileInboxUnlocked,

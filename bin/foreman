@@ -90,7 +90,7 @@ function main() {
     return;
   }
   if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home })); return; }
-  if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanHome, { required: true })); return; }
+  if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanRoot, { required: true })); return; }
   if (command === "routing" && action === "route") { output(core.routeTask({ roots: home, taskId: arg("--task") })); return; }
   if (command === "project" && action === "register") {
     output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));

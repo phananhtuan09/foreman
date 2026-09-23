@@ -127,7 +127,8 @@ foreman/
 ├── AGENTS.md                  supervisor contract and router
 ├── SPEC.md                    product and architecture authority
 ├── docs/                      detailed durable architecture and runbooks
-├── skills/                    conditionally loaded supervisor procedures
+├── .agents/skills/            conditionally loaded Foreman workflows for Codex
+├── config/model-routing.json  tracked model routing configuration
 ├── bin/                       deterministic helpers and runtime adapters
 ├── adapters/
 │   └── herdr/                 Herdr-specific mechanics and compatibility checks
@@ -135,7 +136,6 @@ foreman/
 ├── legacy/
 │   ├── foreman-agent/         preserved repo-scoped experiment
 │   └── tests/                 preserved experiment tests
-├── config/                    private operational choices; gitignored
 ├── data/                      durable private fleet records; gitignored
 ├── state/                     runtime records, locks, and events; gitignored
 └── projects/                  optional client-owned workspace mount; not managed by Foreman
@@ -144,7 +144,8 @@ foreman/
 Definitions:
 
 - `FOREMAN_ROOT`: tracked source checkout containing instructions, scripts, adapters, tests, and this specification.
-- `FOREMAN_HOME`: private operational root containing `config/`, `data/`, and `state/`; client-owned workspaces live outside Foreman home.
+- `FOREMAN_HOME`: private operational root containing `data/` and `state/`; client-owned workspaces live outside Foreman home.
+- Model routing reads the tracked `FOREMAN_ROOT/config/model-routing.json`; it does not read a same-named file in `FOREMAN_HOME`.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
 
@@ -798,14 +799,14 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - The same proof covers concurrent assignments in two projects, cross-project package refusal, one restart listing, fleet and project status agreement, disabled or missing or relocated projects, cleanup that cannot address the other project, and idle-endpoint reuse only after the prior assignment is terminal and its messages and lease are released.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
-- Mandatory task-intake routing is implemented through `config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
+- Mandatory task-intake routing is implemented through the tracked `FOREMAN_ROOT/config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
 - Routing supports the `codex`, `claude`, and `omp` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
 - Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
 - A compatible dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
 - `bin/foreman` is a thin wrapper over the core modules for dispatch, schedule, adopt, recover, decision lifecycle, accept, mark-landed, endpoint release, lease release, cleanup, reconcile, observer, and wake-driven follow-up.
 - Default `status` and `task list` render the grouped Vietnamese report.
 - `--json` keeps the machine-readable record.
-- Production distribution artifacts are present under `AGENTS.md`, `skills/`, `docs/`, `bin/`, and `adapters/herdr/`.
+- Production distribution artifacts are present under `AGENTS.md`, `.agents/skills/`, `docs/`, `bin/`, and `adapters/herdr/`.
 - `legacy/` remains preserved but is not a production entry point.
 
 ### 20.2 Runtime proof
@@ -820,7 +821,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Task briefs are strictly ACK-gated: an assignment remains `pending-ack` and stays `[ ]` until a current-generation ACK is verified.
 - Disabling brief ACK-gating is rejected rather than treated as a valid dispatch mode.
 - Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
-- Reasoning-effort routing remains unsupported until the runtime exposes a verified cross-tool contract for it.
+- A routing profile may set `effort` for Codex or Claude through their tool-specific command flags; the adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - Scout isolation is a before/after workspace fingerprint, not a runtime sandbox.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
