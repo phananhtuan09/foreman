@@ -28,7 +28,7 @@ Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex al
 Leave it `null` to use the tool's default.
 Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
 The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.
-Foreman passes Codex effort through `--config model_reasoning_effort=...` and Claude effort through `--effort`; `omp` profiles do not support this field.
+Foreman passes Codex effort through `--config model_reasoning_effort=...`, Claude effort through `--effort`, and OMP effort through `--thinking`.
 `init`, `routing init`, and `routing show` validate and read that file; they do not create or modify it.
 An older `FOREMAN_HOME/config/model-routing.json` is ignored, so copy any custom settings into the tracked file before using them.
 

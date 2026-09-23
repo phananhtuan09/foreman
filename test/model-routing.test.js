@@ -43,6 +43,10 @@ function routingConfig() {
       whenToUse: "Route every new task.",
     },
     default: "codex-default",
+    groups: {
+      ordinary: { whenToUse: "Routine work under the current design.", profiles: ["codex-default", "omp-fast"] },
+      deep: { whenToUse: "Work requiring a new design.", profiles: ["claude-deep"] },
+    },
     profiles: {
       "codex-default": {
         tool: "codex",
@@ -75,25 +79,40 @@ test("routing config supports codex, claude, omp and reads the repository file",
     const initialized = initRoutingConfig({ roots: f.roots });
     assert.equal(initialized.file, path.join(f.roots.foremanRoot, "config", "model-routing.json"));
     assert.equal(initialized.config.router.tool, "codex");
-    assert.equal(initialized.config.default, "claude-sonnet");
+    assert.equal(initialized.config.default, "codex-luna");
     assert.equal(initialized.config.router.model, "gpt-6-luna");
-    assert.deepEqual(initialized.config.profiles["codex-sol"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="medium"']);
+    assert.deepEqual(initialized.config.profiles["codex-luna"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="max"']);
+    assert.deepEqual(initialized.config.profiles["omp-luna"].command, ["omp", "--auto-approve", "--thinking", "max"]);
+    assert.equal(initialized.config.profiles["omp-luna"].model, "openai-codex/gpt-6-luna");
     assert.equal(initialized.config.profiles["claude-opus"].model, "claude-opus-5-5");
     assert.deepEqual(loadRoutingConfig(f.roots.foremanRoot), initialized.config);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "config", "model-routing.json")), false);
     const normalized = validateRoutingConfig(routingConfig());
     assert.deepEqual(Object.keys(normalized.profiles), ["codex-default", "claude-deep", "omp-fast"]);
+    assert.deepEqual(normalized.groups.ordinary.profiles, ["codex-default", "omp-fast"]);
+    assert.deepEqual(normalized.groups.deep.profiles, ["claude-deep"]);
     const withEffort = routingConfig();
     withEffort.router.effort = "low";
     withEffort.profiles["codex-default"].effort = "high";
     withEffort.profiles["claude-deep"].effort = "xhigh";
+    withEffort.profiles["omp-fast"].effort = "medium";
     const normalizedEffort = validateRoutingConfig(withEffort);
     assert.deepEqual(normalizedEffort.router.command.slice(-2), ["--config", 'model_reasoning_effort="low"']);
     assert.deepEqual(normalizedEffort.profiles["codex-default"].command.slice(-2), ["--config", 'model_reasoning_effort="high"']);
     assert.deepEqual(normalizedEffort.profiles["claude-deep"].command.slice(-2), ["--effort", "xhigh"]);
+    assert.deepEqual(normalizedEffort.profiles["omp-fast"].command.slice(-2), ["--thinking", "medium"]);
     assert.throws(() => validateRoutingConfig({ ...withEffort, router: { ...withEffort.router, effort: "ultra" } }), ValidationError);
-    assert.throws(() => validateRoutingConfig({ ...withEffort, profiles: { ...withEffort.profiles, "omp-fast": { ...withEffort.profiles["omp-fast"], effort: "low" } } }), ValidationError);
+    assert.throws(() => validateRoutingConfig({ ...withEffort, profiles: { ...withEffort.profiles, "omp-fast": { ...withEffort.profiles["omp-fast"], command: ["omp", "--thinking", "low"] } } }), /must not duplicate its effort field/);
     assert.throws(() => validateRoutingConfig({ ...routingConfig(), router: { ...routingConfig().router, tool: "unknown" } }), ValidationError);
+    const invalidGroups = routingConfig();
+    invalidGroups.groups.ordinary.profiles.push("missing-profile");
+    assert.throws(() => validateRoutingConfig(invalidGroups), /Unknown routing group profile/);
+    invalidGroups.groups.ordinary.profiles.pop();
+    invalidGroups.groups.deep.profiles.push("codex-default");
+    assert.throws(() => validateRoutingConfig(invalidGroups), /belongs to multiple groups/);
+    invalidGroups.groups.deep.profiles.pop();
+    invalidGroups.groups.ordinary.profiles.pop();
+    assert.throws(() => validateRoutingConfig(invalidGroups), /has no group/);
   } finally { f.cleanup(); }
 });
 
@@ -129,6 +148,10 @@ test("task creation always routes and persists the selected worker profile", () 
   try {
     const configured = routingConfig();
     configured.profiles["claude-deep"].effort = "high";
+    configured.groups = {
+      routine: { whenToUse: "Small changes under the current contract.", profiles: ["omp-fast", "codex-default"] },
+      research: { whenToUse: "Design a new cross-system protocol.", profiles: ["claude-deep"] },
+    };
     fs.mkdirSync(path.join(f.roots.foremanRoot, "config"));
     fs.writeFileSync(path.join(f.roots.foremanRoot, "config", "model-routing.json"), `${JSON.stringify(configured, null, 2)}\n`);
     fs.mkdirSync(path.join(f.roots.foremanHome, "config"));
@@ -140,7 +163,13 @@ test("task creation always routes and persists the selected worker profile", () 
       brief: "Refactor the lifecycle architecture across the repository.",
       routingRunner(input) { request = input; return { profile: "claude-deep", reason: "Broad architectural work." }; },
     });
-    assert.match(request.prompt, /claude-deep/);
+    const groups = JSON.parse(request.prompt.match(/^Groups: (.+)$/m)[1]);
+    assert.deepEqual(groups.map(({ group, whenToUse, profiles }) => ({
+      group, whenToUse, profiles: profiles.map(({ profile }) => profile),
+    })), [
+      { group: "routine", whenToUse: "Small changes under the current contract.", profiles: ["omp-fast", "codex-default"] },
+      { group: "research", whenToUse: "Design a new cross-system protocol.", profiles: ["claude-deep"] },
+    ]);
     assert.match(request.prompt, /Refactor the lifecycle architecture/);
     assert.equal(task.routing.profile, "claude-deep");
     assert.equal(task.routing.source, "router");
@@ -166,6 +195,7 @@ test("inactive profiles are hidden from the router and never selected", () => {
     const normalized = validateRoutingConfig(configured);
     assert.deepEqual(Object.keys(normalized.profiles), ["codex-default", "omp-fast"]);
     assert.deepEqual(normalized.inactiveProfiles, ["claude-deep"]);
+    assert.deepEqual(Object.keys(normalized.groups), ["ordinary"]);
     assert.throws(() => validateRoutingConfig({ ...configured, default: "claude-deep" }), /active configured profile/);
     assert.throws(() => validateRoutingConfig({ ...configured, profiles: { ...configured.profiles, "omp-fast": { ...configured.profiles["omp-fast"], isActive: "no" } } }), /isActive must be a boolean/);
     fs.mkdirSync(path.join(f.roots.foremanRoot, "config"));

@@ -830,7 +830,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Task briefs are strictly ACK-gated: an assignment remains `pending-ack` and stays `[ ]` until a current-generation ACK is verified.
 - Disabling brief ACK-gating is rejected rather than treated as a valid dispatch mode.
 - Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
-- A routing profile may set `effort` for Codex or Claude through their tool-specific command flags; the adapter-level `reasoningEffort` capability remains unsupported.
+- A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; the adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Scout isolation is a before/after workspace fingerprint, not a runtime sandbox.

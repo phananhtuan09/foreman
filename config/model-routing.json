@@ -13,7 +13,17 @@
     "effort": null,
     "whenToUse": "Classify every new Foreman task and select one configured worker profile."
   },
-  "default": "claude-sonnet",
+  "default": "codex-luna",
+  "groups": {
+    "ordinary": {
+      "whenToUse": "Mechanical edits, initial bug investigation and fixes, features within an existing design, UI, tests, and reviews. Use when the brief does not establish a need for deep redesign; file count alone does not make a task deep.",
+      "profiles": ["codex-luna", "omp-luna", "claude-sonnet", "codex-sol"]
+    },
+    "deep": {
+      "whenToUse": "New architecture or data-model design, difficult concurrency or security reasoning, or a bug still unexplained after earlier investigation. File count or initial investigation alone is not enough.",
+      "profiles": ["claude-opus"]
+    }
+  },
   "profiles": {
     "codex-sol": {
       "tool": "codex",
@@ -23,7 +33,7 @@
       ],
       "model": "gpt-6-sol",
       "effort": "medium",
-      "whenToUse": "Tooling-heavy work verified by running commands: failing builds or test suites, dependency, CI, or build configuration, and scripted batch changes. Not for product logic or UI behavior changes, which belong to claude-sonnet.",
+      "whenToUse": "Use for tooling-heavy builds, tests, dependencies, CI, or scripted batch edits when this profile is explicitly requested.",
       "isActive": false
     },
     "codex-luna": {
@@ -34,7 +44,17 @@
       ],
       "model": "gpt-6-luna",
       "effort": "max",
-      "whenToUse": "Mechanical, fully specified changes whose files and expected result are already known: renames, text or constant changes, config edits, and repetitive edits that follow an existing pattern. Not for tasks that need investigation to find a cause or to compare behavior."
+      "whenToUse": "Preferred within its group unless another tool is explicitly requested or needs native capabilities this tool lacks."
+    },
+    "omp-luna": {
+      "tool": "omp",
+      "command": [
+        "omp",
+        "--auto-approve"
+      ],
+      "model": "openai-codex/gpt-6-luna",
+      "effort": "max",
+      "whenToUse": "Use when OMP is explicitly requested or its native capabilities are needed."
     },
     "claude-sonnet": {
       "tool": "claude",
@@ -44,7 +64,7 @@
       ],
       "model": "claude-sonnet-5",
       "effort": "high",
-      "whenToUse": "Default for most repository work: bug fixes, including ones that need investigation, feature changes within the existing design, tests, and reviews or parity checks across several screens or files. The number of files or screens alone does not call for a larger model."
+      "whenToUse": "Use when Claude is explicitly requested or codex-luna is not active."
     },
     "claude-opus": {
       "tool": "claude",
@@ -54,7 +74,7 @@
       ],
       "model": "claude-opus-5-5",
       "effort": "high",
-      "whenToUse": "Only for work that needs new design or unusually deep reasoning: architecture or cross-module redesign, data model or migration changes, concurrency, security-sensitive logic, or a bug whose cause is still unknown after earlier investigation. Choose it only when the brief states or clearly implies one of these."
+      "whenToUse": "Use for architecture, migration, concurrency, or security work in this group."
     }
   }
 }
