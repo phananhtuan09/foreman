@@ -1,6 +1,6 @@
 ---
 name: foreman-recovery
-description: Recover a confirmed dead or missing worker with a durable generation-bound handoff.
+description: Use within a foreman-control or foreman-supervisor workflow when Foreman evidence confirms a worker is dead or missing and its assignment needs a bounded handoff. Do not trigger for unknown or unconfirmed liveness.
 ---
 
 # Recovery procedure

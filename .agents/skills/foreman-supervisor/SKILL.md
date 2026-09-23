@@ -1,6 +1,6 @@
 ---
 name: foreman-supervisor
-description: Run one bounded Foreman supervision/restart pass over the local fleet.
+description: Use within a foreman-control workflow when it needs fleet or project status, restart reconciliation, or supervision of active worker events and follow-up. Foreman-control remains the entrypoint for user requests.
 ---
 
 # Foreman supervisor procedure
@@ -10,8 +10,7 @@ description: Run one bounded Foreman supervision/restart pass over the local fle
 2. Read the returned fleet and project status from the same reconciliation snapshot.
 3. Treat `pending-ack`, `unknown`, mismatch, quarantine, and delivery-failed events as
    actionable evidence; do not promote them by inference.
-4. For a confirmed dead or missing assignment, inspect the durable handoff and invoke
-   the recovery path only within its bounded attempt budget.
+4. For a confirmed dead or missing assignment, read `.agents/skills/foreman-recovery/SKILL.md`, inspect the durable handoff, and invoke recovery only within its bounded attempt budget.
 5. Ask for human authority only for a persisted Decision Package.  Apply a decision only
    after the current assignment has acknowledged its decision message.
 6. Keep cleanup and landing evidence explicit and project-bound.
