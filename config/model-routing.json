@@ -23,7 +23,8 @@
       ],
       "model": "gpt-6-sol",
       "effort": "medium",
-      "whenToUse": "General coding, debugging, testing, and multi-step repository work."
+      "whenToUse": "Tooling-heavy work verified by running commands: failing builds or test suites, dependency, CI, or build configuration, and scripted batch changes. Not for product logic or UI behavior changes, which belong to claude-sonnet.",
+      "isActive": false
     },
     "codex-luna": {
       "tool": "codex",
@@ -33,7 +34,7 @@
       ],
       "model": "gpt-6-luna",
       "effort": "max",
-      "whenToUse": "Small, focused, and repeatable coding tasks."
+      "whenToUse": "Mechanical, fully specified changes whose files and expected result are already known: renames, text or constant changes, config edits, and repetitive edits that follow an existing pattern. Not for tasks that need investigation to find a cause or to compare behavior."
     },
     "claude-sonnet": {
       "tool": "claude",
@@ -43,7 +44,7 @@
       ],
       "model": "claude-sonnet-5",
       "effort": "high",
-      "whenToUse": "General coding and debugging tasks suited to Claude Code."
+      "whenToUse": "Default for most repository work: bug fixes, including ones that need investigation, feature changes within the existing design, tests, and reviews or parity checks across several screens or files. The number of files or screens alone does not call for a larger model."
     },
     "claude-opus": {
       "tool": "claude",
@@ -53,7 +54,7 @@
       ],
       "model": "claude-opus-5-5",
       "effort": "high",
-      "whenToUse": "Large architecture changes and difficult multi-step reasoning suited to Claude Code."
+      "whenToUse": "Only for work that needs new design or unusually deep reasoning: architecture or cross-module redesign, data model or migration changes, concurrency, security-sensitive logic, or a bug whose cause is still unknown after earlier investigation. Choose it only when the brief states or clearly implies one of these."
     }
   }
 }
