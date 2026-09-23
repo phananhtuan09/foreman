@@ -44,6 +44,12 @@ Use `routing route --task <id>` to resume a task left in `routing` after an inte
 An event with no handler, or a handler that does not apply it, stays `pending`.
 `status --project <id>` filters the same reconciled snapshot.
 `observer start` and `observer stop` run the deterministic watcher only while supervised work remains.
+Each observer pass applies new worker acknowledgements from the task inbox and skips the pass while another command holds the home lock.
+`status`, `reconcile`, and dispatch commands restart the observer when it has stopped while supervised work remains.
+Commands wait up to 5 seconds for the home lock before failing.
+A lock left by a process that died on this host is removed automatically; a lock from another host or a live process is never broken.
+The task brief tells the worker how to acknowledge, where to write its completion or blocker package, and the exact `event emit` command that wakes Foreman afterwards.
+A delivered but unacknowledged message is redelivered only after a 5-minute acknowledgement timeout that doubles per attempt, and it fails at its attempt limit.
 `observer run` is the foreground loop used by `observer start`.
 
 If a worker is missing, wait for the configured confirmation window and inspect the pending `worker.missing` event and `handoff.json`.

@@ -90,15 +90,29 @@ function ensureVersionedRecord(file, kind, migrate) {
   return migrateJsonRecord({ file, kind, migrate });
 }
 
+// A lock without a readable owner is only considered abandoned once it is clearly older than a normal acquisition.
+const UNOWNED_LOCK_STALE_MS = 30 * 1000;
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+}
+
 class HomeLock {
-  constructor(home) { this.home = home; this.dir = path.join(home, "state", ".lock"); this.held = false; }
+  constructor(home, { waitMs = 5000 } = {}) { this.home = home; this.dir = path.join(home, "state", ".lock"); this.held = false; this.waitMs = waitMs; }
   acquire() {
     fs.mkdirSync(path.dirname(this.dir), { recursive: true, mode: 0o700 });
-    try {
-      fs.mkdirSync(this.dir, { mode: 0o700 });
-    } catch (error) {
-      if (error.code === "EEXIST") throw new HomeLockError(`Foreman home is locked: ${this.home}`);
-      throw error;
+    // Observer passes hold the lock briefly, so wait a bounded time instead of failing a concurrent command at once.
+    const deadline = Date.now() + this.waitMs;
+    for (;;) {
+      try {
+        fs.mkdirSync(this.dir, { mode: 0o700 });
+        break;
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        if (this.breakAbandoned()) continue;
+        if (Date.now() >= deadline) throw new HomeLockError(`Foreman home is locked: ${this.home}`);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
     }
     try {
       atomicWrite(path.join(this.dir, "owner.json"), `${JSON.stringify({ pid: process.pid, host: os.hostname(), acquiredAt: now() })}\n`);
@@ -107,6 +121,31 @@ class HomeLock {
     } catch (error) {
       fs.rmSync(this.dir, { recursive: true, force: true });
       throw error;
+    }
+  }
+  // Removes a lock whose owner process died on this host. The breaker directory lets only one
+  // process recover at a time, and it re-reads the owner so a freshly acquired lock is never removed.
+  breakAbandoned() {
+    const breaker = `${this.dir}-breaker`;
+    try { fs.mkdirSync(breaker, { mode: 0o700 }); }
+    catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try { if (Date.now() - fs.statSync(breaker).mtimeMs > UNOWNED_LOCK_STALE_MS) fs.rmSync(breaker, { recursive: true, force: true }); } catch (_) {}
+      return false;
+    }
+    try {
+      let stat;
+      try { stat = fs.statSync(this.dir); } catch (_) { return true; }
+      let owner = null;
+      try { owner = JSON.parse(fs.readFileSync(path.join(this.dir, "owner.json"), "utf8")); } catch (_) {}
+      const abandoned = owner && Number.isInteger(owner.pid)
+        ? owner.host === os.hostname() && !pidAlive(owner.pid)
+        : Date.now() - stat.mtimeMs > UNOWNED_LOCK_STALE_MS;
+      if (!abandoned) return false;
+      fs.rmSync(this.dir, { recursive: true, force: true });
+      return true;
+    } finally {
+      fs.rmSync(breaker, { recursive: true, force: true });
     }
   }
   release() {
@@ -781,6 +820,20 @@ function assertIdleEndpointReusable({ roots, adapter, endpoint, workspace, owner
   return { inspection, holders };
 }
 
+function shellQuote(value) { return `'${String(value).replace(/'/g, "'\\''")}'`; }
+
+// Workers only learn the reporting contract from the brief, so spell it out with the exact assignment identity.
+function workerProtocolInstructions({ roots, taskId, projectId, owner, generation, endpoint }) {
+  const inbox = path.join(taskStateDir(roots.foremanHome, taskId), "inbox");
+  const emit = (type) => [`FOREMAN_ROOT=${shellQuote(roots.foremanRoot)}`, `FOREMAN_HOME=${shellQuote(roots.foremanHome)}`, shellQuote(path.join(__dirname, "..", "bin", "foreman")), "event", "emit", taskId, type, "--project", projectId, "--worker", owner, "--generation", String(generation), "--endpoint", shellQuote(endpoint)].join(" ");
+  return [
+    "Before acting on any Foreman message, write its acknowledgement to the envelope's ackPath as JSON with schemaVersion 1, the envelope's messageId, taskId, projectId, worker, generation, and payloadDigest, and timestamp set to the current ISO time.",
+    `When the work is complete, write a completion package to ${path.join(inbox, `generation-${generation}-completion.md`)} covering outcome, changed surface, direct evidence, unresolved checks, risk, and delivery state, then run: ${emit("done")}`,
+    `When only the user can unblock the work, write a blocker package to ${path.join(inbox, `generation-${generation}-blocker.md`)} with the finding, why user authority is needed, options, and your recommendation, then stop and run: ${emit("blocked")}`,
+    `Start every package with exactly these five header lines, each on its own line, then one blank line and the body; use TYPE: blocker for a blocker package:\nTASK: ${taskId}\nPROJECT: ${projectId}\nAGENT: ${owner}\nGENERATION: ${generation}\nTYPE: completion`,
+  ];
+}
+
 function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, leaseTtlMs, requireMessageAck = true, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint }) {
   if (!owner) throw new ValidationError("An assignment owner is required");
   if (requireMessageAck === false) throw new ValidationError("Task brief ACK-gating cannot be disabled");
@@ -893,6 +946,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
       const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."];
       if (taskType === "scout") instructions.push("Do not modify production files. Foreman compares the workspace fingerprint before and after this scout.");
+      instructions.push(...workerProtocolInstructions({ roots, taskId, projectId: project.id, owner, generation, endpoint }));
       const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null, reportPath: path.join(taskStateDir(roots.foremanHome, taskId), "inbox", `generation-${generation}-completion.md`), connection: { foremanRoot: roots.foremanRoot, foremanHome: roots.foremanHome, command: path.join(__dirname, "..", "bin", "foreman") } };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
@@ -1099,7 +1153,14 @@ function applyInboxAckUnlocked({ roots, taskId, raw, name }) {
   return updated;
 }
 
-function reconcileInboxUnlocked({ roots, taskId }) {
+function unappliedInboxAck(roots, name) {
+  const match = name.match(/^generation-\d+-ack-(.+)\.json$/);
+  if (!match) return false;
+  const file = coordination.messageFile(roots.foremanHome, match[1]);
+  return fs.existsSync(file) && readJson(file).status !== "acknowledged";
+}
+
+function reconcileInboxUnlocked({ roots, taskId, settleMs = 0, acknowledgementsOnly = false }) {
   const dir = path.join(taskStateDir(roots.foremanHome, taskId), "inbox");
   if (!fs.existsSync(dir)) return { applied: [], quarantined: [] };
   const applied = [];
@@ -1107,8 +1168,11 @@ function reconcileInboxUnlocked({ roots, taskId }) {
   const inboxNames = fs.readdirSync(dir).filter((name) => name !== "quarantine" && !name.endsWith(".tmp"));
   inboxNames.sort((left, right) => Number(right.endsWith(".json")) - Number(left.endsWith(".json")) || left.localeCompare(right));
   for (const name of inboxNames) {
+    if (acknowledgementsOnly && !unappliedInboxAck(roots, name)) continue;
     const file = path.join(dir, name);
-    if (!fs.statSync(file).isFile()) continue;
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) continue;
+    if (settleMs > 0 && Date.now() - stat.mtimeMs < settleMs) continue;
     const raw = fs.readFileSync(file);
     const text = raw.toString("utf8");
     const packageMatch = name.match(/^generation-(\d+)-(progress|completion|blocker)\.md$/);

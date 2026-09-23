@@ -10,9 +10,9 @@ const {
   deliverDecision, acknowledgeDecision, applyDecision, restartReconcile,
   retryMessages, StaleGenerationError, ValidationError, HerdrAdapter,
   recoverDeadWorker, buildHandoff, migrateJsonRecord, reconcileFleet,
-  findProject, listResourceLeases, readWorkerRegistry,
+  findProject, listResourceLeases, readWorkerRegistry, withHomeLock, HomeLock, HomeLockError,
 } = require("../src/foreman");
-const { listEvents } = require("../src/coordination");
+const { listEvents, observeOnce, DeterministicObserver } = require("../src/coordination");
 
 function fixture() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-gaps-"));
@@ -207,5 +207,151 @@ test("startup migrates legacy home records and accepts an external linked worktr
     assert.equal(state.state, "working");
     assert.equal(state.issues.some((issue) => issue.type === "task.project-mismatch"), false);
     assert.equal(assignment.workspace, fs.realpathSync(linked));
+  } finally { f.cleanup(); }
+});
+
+function briefMessageFile(roots, assignment) { return path.join(roots.foremanHome, "state", "messages", `${assignment.briefMessageId}.json`); }
+
+function ageBriefAttempt(roots, assignment, ageMs) {
+  const file = briefMessageFile(roots, assignment);
+  const message = JSON.parse(fs.readFileSync(file, "utf8"));
+  message.lastAttemptAt = new Date(Date.now() - ageMs).toISOString();
+  fs.writeFileSync(file, `${JSON.stringify(message, null, 2)}\n`);
+  return message;
+}
+
+function writeBriefAck(roots, task, assignment) {
+  const message = JSON.parse(fs.readFileSync(briefMessageFile(roots, assignment), "utf8"));
+  const file = path.join(roots.foremanHome, "state", "tasks", task.id, "inbox", `generation-${assignment.generation}-ack-${message.messageId}.json`);
+  fs.writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, messageId: message.messageId, taskId: task.id, projectId: task.projectId, worker: assignment.owner, generation: assignment.generation, payloadDigest: message.payloadDigest, timestamp: new Date().toISOString() })}\n`);
+  return file;
+}
+
+test("a delivered brief waits for the acknowledgement timeout before redelivery and fails at its attempt bound", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "wait for ack" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
+    let sends = 0;
+    const adapter = { send: () => { sends += 1; return { delivered: true }; } };
+    ageBriefAttempt(f.roots, assignment, 60 * 1000);
+    retryMessages({ roots: f.roots, adapter });
+    assert.equal(sends, 0);
+    ageBriefAttempt(f.roots, assignment, 5 * 60 * 1000);
+    assert.equal(retryMessages({ roots: f.roots, adapter })[0].attempts, 2);
+    assert.equal(sends, 1);
+    const message = ageBriefAttempt(f.roots, assignment, 60 * 60 * 1000);
+    message.attempts = message.maxAttempts;
+    fs.writeFileSync(briefMessageFile(f.roots, assignment), `${JSON.stringify(message, null, 2)}\n`);
+    assert.equal(retryMessages({ roots: f.roots, adapter })[0].status, "failed");
+    assert.equal(sends, 1);
+    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "message.delivery-failed").length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("a runtime worker bound to a task by name is not reported as an orphan when it also has a pane ID", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "bound pane" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
+    const adapter = { list: () => [{ pane_id: "w1:p1", name: assignment.endpoint, agent_status: "working" }, { pane_id: "w1:p2", name: "stranger", agent_status: "idle" }] };
+    const result = reconcileFleet({ roots: f.roots, adapter });
+    assert.equal(result.tasks[0].worker.name, assignment.endpoint);
+    const orphans = listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "worker.orphan");
+    assert.deepEqual(orphans.map((event) => event.endpoint), ["w1:p2"]);
+  } finally { f.cleanup(); }
+});
+
+test("an observer pass applies a settled direct brief ACK and leaves an in-progress one for later", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "observer ack" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
+    const metaPath = path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json");
+    const ackFile = writeBriefAck(f.roots, task, assignment);
+    observeOnce({ roots: f.roots, adapter: f.adapter });
+    assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).status, "pending-ack");
+    const settled = new Date(Date.now() - 5000);
+    fs.utimesSync(ackFile, settled, settled);
+    observeOnce({ roots: f.roots, adapter: f.adapter });
+    assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).status, "working");
+    const acknowledged = JSON.parse(fs.readFileSync(briefMessageFile(f.roots, assignment), "utf8"));
+    assert.equal(acknowledged.status, "acknowledged");
+    observeOnce({ roots: f.roots, adapter: f.adapter });
+    assert.equal(JSON.parse(fs.readFileSync(briefMessageFile(f.roots, assignment), "utf8")).acknowledgedAt, acknowledged.acknowledgedAt);
+  } finally { f.cleanup(); }
+});
+
+test("the observer loop skips a pass while another process holds the home lock", async () => {
+  const f = fixture();
+  const observer = new DeterministicObserver({ roots: f.roots, adapter: f.adapter, intervalMs: 100 });
+  try {
+    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    fs.mkdirSync(lock);
+    observer.start();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const listsWhileLocked = f.lists;
+    fs.rmSync(lock, { recursive: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(listsWhileLocked, 0);
+    assert.ok(f.lists > 0);
+  } finally { observer.stop(); f.cleanup(); }
+});
+
+test("a worker that follows only the brief protocol acknowledges, reports completion, and wakes Foreman", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "protocol" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
+    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
+    const instructions = message.payload.instructions.join("\n");
+    const completionPath = instructions.match(/completion package to (\S+)/)[1];
+    const doneCommand = instructions.match(/then run: (.+ event emit .+ done .+)$/m)[1];
+    assert.equal(completionPath, message.payload.reportPath);
+    assert.match(instructions, /GENERATION: 1/);
+    const envelope = JSON.parse(JSON.stringify(require("../src/coordination").deliveryEnvelope({ roots: f.roots, message })));
+    fs.writeFileSync(envelope.ackPath, JSON.stringify({ schemaVersion: 1, messageId: envelope.messageId, taskId: envelope.taskId, projectId: envelope.projectId, worker: envelope.worker, generation: envelope.generation, payloadDigest: envelope.payloadDigest, timestamp: new Date().toISOString() }));
+    const headerBlock = instructions.match(/^TASK: .+\nPROJECT: .+\nAGENT: .+\nGENERATION: \d+\nTYPE: completion$/m)[0];
+    fs.writeFileSync(completionPath, `${headerBlock}\n\noutcome: done\n`);
+    execFileSync("/bin/sh", ["-c", doneCommand], { stdio: "pipe" });
+    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.taskId === task.id && event.eventType === "worker.done").length, 1);
+    restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+  } finally { f.cleanup(); }
+});
+
+test("a command waits briefly for another process to release the home lock", () => {
+  const f = fixture();
+  try {
+    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    fs.mkdirSync(lock);
+    const holder = require("node:child_process").spawn(process.execPath, ["-e", `setTimeout(() => require("node:fs").rmSync(${JSON.stringify(lock)}, { recursive: true }), 300)`], { stdio: "ignore" });
+    try { assert.equal(withHomeLock(f.roots.foremanHome, () => "acquired"), "acquired"); } finally { holder.kill(); }
+  } finally { f.cleanup(); }
+});
+
+test("an abandoned home lock is recovered only when its owner is provably gone", () => {
+  const f = fixture();
+  try {
+    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    const holdLock = (owner, ageMs = 0) => {
+      fs.rmSync(lock, { recursive: true, force: true });
+      fs.mkdirSync(lock);
+      if (owner) fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner));
+      const at = new Date(Date.now() - ageMs);
+      fs.utimesSync(lock, at, at);
+    };
+    const deadPid = require("node:child_process").spawnSync(process.execPath, ["-e", ""]).pid;
+    holdLock({ pid: deadPid, host: os.hostname() });
+    assert.equal(withHomeLock(f.roots.foremanHome, () => "recovered"), "recovered");
+    holdLock({ pid: process.pid, host: os.hostname() });
+    assert.throws(() => new HomeLock(f.roots.foremanHome, { waitMs: 200 }).acquire(), HomeLockError);
+    holdLock({ pid: deadPid, host: `${os.hostname()}-elsewhere` });
+    assert.throws(() => new HomeLock(f.roots.foremanHome, { waitMs: 200 }).acquire(), HomeLockError);
+    holdLock(null);
+    assert.throws(() => new HomeLock(f.roots.foremanHome, { waitMs: 200 }).acquire(), HomeLockError);
+    holdLock(null, 60 * 1000);
+    assert.equal(withHomeLock(f.roots.foremanHome, () => "recovered"), "recovered");
+    assert.equal(fs.existsSync(`${lock}-breaker`), false);
   } finally { f.cleanup(); }
 });

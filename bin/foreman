@@ -172,6 +172,8 @@ function main() {
   if (command === "status") {
     const adapter = runtimeAdapter();
     const status = arg("--project") ? core.projectStatus({ roots: home, projectId: arg("--project"), adapter }) : core.fleetStatus({ roots: home, adapter });
+    // A status check also revives supervision if the observer has stopped while work is still active.
+    armObserver(home);
     output(flag("--json") ? status : core.renderUserReport(status, home));
     return;
   }

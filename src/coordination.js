@@ -294,7 +294,7 @@ function failMessageUnlocked({ roots, messageId: id, reason }) {
   return item;
 }
 
-function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, maxBackoffMs = 60 * 60 * 1000 }) {
+function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, ackTimeoutMs = 5 * 60 * 1000, maxBackoffMs = 60 * 60 * 1000 }) {
   const messages = listMessages({ roots, statuses: ["pending", "delivered"] });
   const results = [];
   for (const message of messages) {
@@ -314,7 +314,13 @@ function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 
       results.push(failMessageUnlocked({ roots, messageId: message.messageId, reason: "message age limit exceeded" }));
       continue;
     }
-    const backoffMs = Math.min(maxBackoffMs, Math.max(0, baseBackoffMs) * (2 ** Math.max(0, message.attempts - 1)));
+    // A delivered message is already in the worker's input; redeliver only after the worker had time to acknowledge it.
+    const delivered = message.status === "delivered";
+    if (!force && delivered && message.attempts >= message.maxAttempts) {
+      results.push(failMessageUnlocked({ roots, messageId: message.messageId, reason: "acknowledgement attempts exhausted" }));
+      continue;
+    }
+    const backoffMs = Math.min(maxBackoffMs, Math.max(0, delivered ? ackTimeoutMs : baseBackoffMs) * (2 ** Math.max(0, message.attempts - 1)));
     if (!force && message.lastAttemptAt && Date.now() - Date.parse(message.lastAttemptAt) < backoffMs) continue;
     if (!force && message.nextAttemptAt && Date.now() < Date.parse(message.nextAttemptAt)) continue;
     if (!adapter || typeof adapter.send !== "function") continue;
@@ -326,9 +332,9 @@ function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 
   return results;
 }
 
-function retryMessages({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, maxBackoffMs = 60 * 60 * 1000 }) {
+function retryMessages({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, ackTimeoutMs = 5 * 60 * 1000, maxBackoffMs = 60 * 60 * 1000 }) {
   const { withHomeLock } = require("./foreman");
-  return withHomeLock(roots.foremanHome, () => retryMessagesUnlocked({ roots, adapter, force, maxAgeMs, baseBackoffMs, maxBackoffMs }));
+  return withHomeLock(roots.foremanHome, () => retryMessagesUnlocked({ roots, adapter, force, maxAgeMs, baseBackoffMs, ackTimeoutMs, maxBackoffMs }));
 }
 
 function eventId(input) {
@@ -812,9 +818,10 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
     }
   }
   const knownEndpoints = new Set(states.map((item) => item.meta.endpoint).filter(Boolean));
+  const boundWorkers = new Set(states.map((item) => item.worker).filter(Boolean));
   for (const worker of workers) {
     const endpoint = worker.endpoint || worker.endpointId || worker.pane_id || worker.name;
-    if (endpoint && !knownEndpoints.has(endpoint) && emitEvents) createObserverEvent({ roots, eventType: "worker.orphan", dedupKey: `orphan:${endpoint}`, worker: worker.owner || worker.name, endpoint, evidence: worker, source: "reconciliation" });
+    if (endpoint && !boundWorkers.has(worker) && !knownEndpoints.has(endpoint) && emitEvents) createObserverEvent({ roots, eventType: "worker.orphan", dedupKey: `orphan:${endpoint}`, worker: worker.owner || worker.name, endpoint, evidence: worker, source: "reconciliation" });
   }
   syncRegistryUnlocked({ roots, tasks: states });
   return { workers, tasks: states };
@@ -829,9 +836,14 @@ function reconcileFleet({ roots, adapter, emitEvents = true, missingConfirmation
   });
 }
 
-function observeOnce({ roots, adapter, missingConfirmationMs = 1000 }) {
-  const { withHomeLock } = require("./foreman");
-  const result = withHomeLock(roots.foremanHome, () => reconcileFleetUnlocked({ roots, adapter, emitEvents: true, missingConfirmationMs }));
+function observeOnce({ roots, adapter, missingConfirmationMs = 1000, inboxSettleMs = 2000 }) {
+  const { withHomeLock, reconcileInboxUnlocked } = require("./foreman");
+  const result = withHomeLock(roots.foremanHome, () => {
+    // Workers write acknowledgements without emitting an event, so each pass applies new ones.
+    // Files are written in place; leave ones that may still be in progress for a later pass.
+    for (const { taskId } of activeTaskMetas(roots)) reconcileInboxUnlocked({ roots, taskId, settleMs: inboxSettleMs, acknowledgementsOnly: true });
+    return reconcileFleetUnlocked({ roots, adapter, emitEvents: true, missingConfirmationMs });
+  });
   atomicJson(path.join(coordinationDirs(roots.foremanHome).observer, "last-observation.json"), { schemaVersion: 1, observedAt: isoNow(), taskCount: result.tasks.length, workerCount: result.workers.length, tasks: result.tasks.map(({ taskId, meta, state, consistency, missingSince, missingCount, worker }) => ({ taskId, state, evidence: { generation: meta.generation, consistency, worker: worker || null }, missingSince, missingCount })) });
   return result;
 }
@@ -863,7 +875,8 @@ class DeterministicObserver {
     this.running = true;
     const tick = () => {
       if (!this.running) return;
-      try { this.runOnce(); } finally { this.timer = setTimeout(tick, this.intervalMs); }
+      // A busy home lock or transient runtime failure skips this pass; the next tick observes again.
+      try { this.runOnce(); } catch (_) {} finally { this.timer = setTimeout(tick, this.intervalMs); }
     };
     tick();
     return this;
