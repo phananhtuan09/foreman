@@ -17,6 +17,9 @@ Project code changes belong to assigned workers in their leased workspaces.
 ## Foreman development (`DEV` only)
 
 - `AGENTS.md` defines the supervisor role and request routing.
+- `AGENTS.md` and `.agents/skills/` are the canonical instruction and skill sources.
+  `CLAUDE.md` imports this file, and each skill under `.claude/skills/` mirrors the canonical skill's name and description while referring to its `.agents/skills/` source.
+  Keep full skill instructions in `.agents/skills/`; update the Claude skill reference when its name or description changes.
 - `SPEC.md` defines the product and architecture contract.
 - `docs/architecture.md` is a reference for Foreman's implementation and state model; consult it when the development task needs that detail.
 - `bin/foreman` is the shell entry point and must call core modules instead of duplicating lifecycle logic.
