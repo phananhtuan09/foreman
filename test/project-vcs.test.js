@@ -5,8 +5,8 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage, acceptTask, markLanded,
-  releaseEndpoint, cleanupTask, listMessages, acknowledgeTaskMessage, fleetStatus, HerdrAdapter, ValidationError,
+  resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage, acceptTask,
+  fleetStatus, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
 function fixture() {
@@ -51,11 +51,8 @@ function packageFor(task, assignment, type, body) {
   return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, "", body].join("\n");
 }
 
-function dispatchAndAck(f, task, resources) {
-  const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources });
-  const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
-  acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
-  return assignment;
+function dispatch(f, task, resources) {
+  return assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources });
 }
 
 test("registration records Git presence without a default branch", () => {
@@ -71,14 +68,14 @@ test("registration records Git presence without a default branch", () => {
   } finally { f.cleanup(); }
 });
 
-test("ship work in a project without Git dispatches, lands on acceptance, and cleans up", () => {
+test("acceptance deletes task records and releases a ship lease in a project without Git", () => {
   const f = fixture();
   try {
     const root = plainProject(f.base, "plain");
     registerProject({ roots: f.roots, id: "plain", root });
     const task = createTask({ roots: f.roots, projectId: "plain", brief: "edit readme" });
     assert.throws(() => assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, workspacePath: path.join(root, "node_modules") }), /project root/);
-    const assignment = dispatchAndAck(f, task);
+    const assignment = dispatch(f, task);
     assert.equal(assignment.workspace, root);
     assert.equal(assignment.branch, null);
     assert.equal(f.workers.get(assignment.endpoint).workspaceMode, "shared-directory");
@@ -86,10 +83,11 @@ test("ship work in a project without Git dispatches, lands on acceptance, and cl
     assert.deepEqual(state.issues.filter((issue) => /project|branch|workspace/.test(issue.type)), []);
     fs.writeFileSync(path.join(root, "README.md"), "edited\n");
     recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "edited README"), type: "completion" });
-    assert.equal(acceptTask({ roots: f.roots, taskId: task.id }).deliveryState, "landed");
-    assert.throws(() => markLanded({ roots: f.roots, taskId: task.id, evidence: { target: "local-only", commit: "abcdef1" } }), /landed on acceptance/);
-    releaseEndpoint({ roots: f.roots, taskId: task.id, adapter: f.adapter });
-    assert.equal(cleanupTask({ roots: f.roots, taskId: task.id, workspaceReleased: true }), true);
+    const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(accepted.deleted, true);
+    assert.equal(accepted.workspaceRetained, root);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });
 
@@ -99,38 +97,30 @@ test("scout in a project without Git detects file changes outside excluded direc
     const root = plainProject(f.base, "plain");
     registerProject({ roots: f.roots, id: "plain", root });
     const clean = createTask({ roots: f.roots, projectId: "plain", type: "scout", brief: "read only" });
-    const cleanAssignment = dispatchAndAck(f, clean, [{ key: "file/README.md", mode: "read" }]);
+    const cleanAssignment = dispatch(f, clean, [{ key: "file/README.md", mode: "read" }]);
     fs.writeFileSync(path.join(root, "node_modules", "dep", "index.js"), "module.exports = 2;\n");
     recordPackage({ roots: f.roots, taskId: clean.id, raw: packageFor(clean, cleanAssignment, "completion", "no edits"), type: "completion" });
-    acceptTask({ roots: f.roots, taskId: clean.id });
+    acceptTask({ roots: f.roots, taskId: clean.id, adapter: f.adapter });
 
     const dirty = createTask({ roots: f.roots, projectId: "plain", type: "scout", brief: "read only" });
     const dirtyAssignment = assignTask({ roots: f.roots, taskId: dirty.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
-    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === dirtyAssignment.briefMessageId);
-    acknowledgeTaskMessage({ roots: f.roots, taskId: dirty.id, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
     fs.writeFileSync(path.join(root, "notes.txt"), "scout wrote this\n");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: dirty.id, raw: packageFor(dirty, dirtyAssignment, "completion", "claimed no edits"), type: "completion" }), /Scout modified production files/);
   } finally { f.cleanup(); }
 });
 
-test("landing evidence must be reachable from the task branch", () => {
+test("Git ship work can be accepted without a separate landing step", () => {
   const f = fixture();
   try {
     const root = gitProject(f.base, "repo", "develop");
     registerProject({ roots: f.roots, id: "repo", root });
     const task = createTask({ roots: f.roots, projectId: "repo", brief: "change on current branch" });
-    const assignment = dispatchAndAck(f, task);
+    const assignment = dispatch(f, task);
     assert.equal(assignment.branch, "develop");
-    execFileSync("git", ["-C", root, "switch", "-c", "elsewhere"], { stdio: "pipe" });
-    fs.writeFileSync(path.join(root, "other.txt"), "other\n");
-    execFileSync("git", ["-C", root, "add", "other.txt"]);
-    execFileSync("git", ["-C", root, "commit", "-m", "other"], { stdio: "pipe" });
-    const elsewhere = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    execFileSync("git", ["-C", root, "switch", "develop"], { stdio: "pipe" });
-    const landed = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "done"), type: "completion" });
-    assert.equal(acceptTask({ roots: f.roots, taskId: task.id }).deliveryState, undefined);
-    assert.throws(() => markLanded({ roots: f.roots, taskId: task.id, evidence: { target: "local-only", commit: elsewhere } }), /task branch/);
-    assert.equal(markLanded({ roots: f.roots, taskId: task.id, evidence: { target: "local-only", commit: landed } }).deliveryState, "landed");
+    const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(accepted.deleted, true);
+    assert.equal(accepted.workspaceRetained, root);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });

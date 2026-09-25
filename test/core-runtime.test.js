@@ -6,9 +6,9 @@ const { spawn, execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage,
-  acknowledgeTaskMessage, listMessages, observeRuntime, listEvents, drainWakeQueue,
+  listMessages, observeRuntime, listEvents, drainWakeQueue,
   recoverProcessingEvents, recoverDeadWorker, createDecision, answerDecision,
-  deliverDecision, createTask: intake, acceptTask, cleanupTask, releaseEndpoint,
+  deliverDecision, createTask: intake, acceptTask,
   dispatchReadyTasks, ResourceBusyError, HerdrAdapter, StaleGenerationError,
 } = require("../src/foreman");
 
@@ -96,15 +96,14 @@ function packageFor(task, assignment, type, body, extra = {}) {
   return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, ...Object.entries(extra).map(([key, value]) => `${key}: ${value}`), "", body].join("\n");
 }
 
-test("real child workers complete an ACK-gated assignment and survive observer/restart reconciliation", async () => {
+test("real child workers complete a direct assignment and survive observer/restart reconciliation", async () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "one", brief: "write a runtime artifact" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-real", adapter: f.adapter, requireMessageAck: true, resources: [{ key: "file/worker-real.out", mode: "write" }] });
-    let message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-real", adapter: f.adapter, resources: [{ key: "file/worker-real.out", mode: "write" }] });
+    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
     assert.equal(message.status, "delivered");
-    assert.equal(assignment.status, "pending-ack");
-    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
+    assert.equal(assignment.status, "working");
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "working");
     await f.transport.wait(assignment.endpoint);
     assert.equal(fs.readFileSync(path.join(f.one, "worker-real.out"), "utf8"), "worker-real completed\n");
@@ -124,14 +123,11 @@ test("real child workers complete an ACK-gated assignment and survive observer/r
     const completion = packageFor(task, assignment, "completion", "runtime worker verified completion");
     recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
-    acceptTask({ roots: f.roots, taskId: task.id });
-    execFileSync("git", ["-C", f.one, "add", "worker-real.out"]);
-    execFileSync("git", ["-C", f.one, "commit", "-m", "runtime artifact"], { stdio: "pipe" });
-    const commit = execFileSync("git", ["-C", f.one, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const { markLanded } = require("../src/foreman");
-    markLanded({ roots: f.roots, taskId: task.id, evidence: { target: "local-only", commit } });
-    releaseEndpoint({ roots: f.roots, taskId: task.id, adapter: f.adapter });
-    assert.equal(cleanupTask({ roots: f.roots, taskId: task.id, workspaceReleased: true }), true);
+    const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(accepted.deleted, true);
+    assert.equal(accepted.workerStopped, true);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });
 

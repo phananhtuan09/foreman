@@ -6,8 +6,8 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, adoptExistingWorker,
-  recordPackage, acceptTask, markLanded, releaseEndpoint, releaseTaskLease, cleanupTask,
-  listMessages, acknowledgeTaskMessage, restartReconcile, drainWakeQueue, listEvents,
+  recordPackage, acceptTask,
+  listMessages, restartReconcile, drainWakeQueue, listEvents,
   createObserverEvent, fleetStatus, projectStatus, renderUserReport, runObserverLoop,
   startObserver, stopObserver, validateDispatchProfile, CleanupRefusedError, ValidationError, HerdrAdapter,
 } = require("../src/foreman");
@@ -65,11 +65,6 @@ function packageFor(task, assignment, type, body, extra = []) {
   return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, ...extra, "", body].join("\n");
 }
 
-function acknowledgeBrief(roots, task, assignment) {
-  const message = listMessages({ roots }).find((item) => item.messageId === assignment.briefMessageId);
-  acknowledgeTaskMessage({ roots, taskId: task.id, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
-}
-
 test("dispatch profiles fail closed when runtime capability evidence is missing", () => {
   assert.throws(() => validateDispatchProfile({ name: "modelled", model: "x" }, { agentKind: true }), /model/);
   assert.deepEqual(validateDispatchProfile({ name: "kind-only", agentKind: "codex" }, { agentKind: true }), { name: "kind-only", agentKind: "codex" });
@@ -80,7 +75,6 @@ test("an event without a handler stays pending and production reconcile follows 
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", brief: "keep the event" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    acknowledgeBrief(f.roots, task, assignment);
     const custom = createObserverEvent({ roots: f.roots, eventType: "worker.custom-gap", dedupKey: "custom-gap", taskId: task.id, projectId: "alpha", worker: assignment.owner, generation: assignment.generation, endpoint: assignment.endpoint, evidence: { reason: "unhandled" } });
     assert.equal(drainWakeQueue({ roots: f.roots }).find((event) => event.eventId === custom.event.eventId).status, "pending");
     assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.eventId === custom.event.eventId), true);
@@ -119,7 +113,6 @@ test("review-ready wake retries until the bound Foreman pane receives it", () =>
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", brief: "report findings" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
-    acknowledgeBrief(f.roots, task, assignment);
     recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "finished"), type: "completion" });
     const pending = () => listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "task.review-ready");
     assert.equal(pending().length, 1);
@@ -174,7 +167,6 @@ test("an unmodified scout still reaches review-ready", () => {
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", type: "scout", brief: "read only audit" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
-    acknowledgeBrief(f.roots, task, assignment);
     const clean = packageFor(task, assignment, "completion", "no files changed");
     const unchanged = recordPackage({ roots: f.roots, taskId: task.id, raw: clean, type: "completion" });
     assert.equal(unchanged.type, "completion");
@@ -188,7 +180,6 @@ test("scout fingerprint detects content changes after a dirty baseline", () => {
     fs.writeFileSync(path.join(f.alphaRoot, "README.md"), "dirty baseline\n");
     const task = createTask({ roots: f.roots, projectId: "alpha", type: "scout", brief: "do not write" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
-    acknowledgeBrief(f.roots, task, assignment);
     fs.writeFileSync(path.join(f.alphaRoot, "README.md"), "changed after baseline\n");
     const raw = packageFor(task, assignment, "completion", "claimed no edits");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw, type: "completion" }), /Scout modified production files/);
@@ -200,7 +191,6 @@ test("scout guard fail-closes when the scout writes a production file", () => {
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", type: "scout", brief: "do not write" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
-    acknowledgeBrief(f.roots, task, assignment);
     fs.writeFileSync(path.join(f.alphaRoot, "sneak.txt"), "scout wrote this\n");
     const raw = packageFor(task, assignment, "completion", "claimed no edits");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw, type: "completion" }), /Scout modified production files/);
@@ -219,16 +209,14 @@ test("scout guard fail-closes when the scout writes a production file", () => {
   } finally { f.cleanup(); }
 });
 
-test("two projects stay isolated across concurrent assignment, restart, status, cleanup, and idle reuse", () => {
+test("two projects stay isolated across concurrent assignment, restart, status, and acceptance", () => {
   const f = fixture();
   try {
     const alpha = createTask({ roots: f.roots, projectId: "alpha", brief: "alpha work" });
     const beta = createTask({ roots: f.roots, projectId: "beta", brief: "beta work" });
     const alphaAssignment = assignTask({ roots: f.roots, taskId: alpha.id, owner: "alpha-worker", adapter: f.adapter, resources: [{ key: "file/alpha", mode: "write" }] });
     const betaAssignment = assignTask({ roots: f.roots, taskId: beta.id, owner: "beta-worker", adapter: f.adapter, resources: [{ key: "file/beta", mode: "write" }] });
-    acknowledgeBrief(f.roots, alpha, alphaAssignment);
-    acknowledgeBrief(f.roots, beta, betaAssignment);
-    assert.equal(alphaAssignment.status, "pending-ack");
+    assert.equal(alphaAssignment.status, "working");
     assert.notEqual(alphaAssignment.endpoint, betaAssignment.endpoint);
     const cross = packageFor({ id: beta.id, projectId: "alpha" }, betaAssignment, "completion", "cross project");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: beta.id, raw: cross, type: "completion" }), /does not match the current assignment/);
@@ -271,11 +259,13 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
 
     const betaMetaPath = path.join(f.roots.foremanHome, "state", "tasks", beta.id, "meta.json");
     const betaMeta = JSON.parse(fs.readFileSync(betaMetaPath, "utf8"));
-    const moved = { ...betaMeta, workspace: fs.realpathSync(f.alphaRoot) };
+    const completionPackage = path.join(f.roots.foremanHome, "state", "tasks", beta.id, "inbox", "generation-1-completion.md");
+    fs.mkdirSync(path.dirname(completionPackage), { recursive: true });
+    fs.writeFileSync(completionPackage, packageFor(beta, { ...betaAssignment, owner: betaMeta.owner }, "completion", "beta done"));
+    const moved = { ...betaMeta, status: "review-ready", completionPackage, workspace: fs.realpathSync(f.alphaRoot) };
     fs.writeFileSync(betaMetaPath, `${JSON.stringify(moved, null, 2)}\n`);
     const stopsBefore = f.counts().stops;
-    assert.throws(() => cleanupTask({ roots: f.roots, taskId: beta.id, workspaceReleased: true }), CleanupRefusedError);
-    assert.throws(() => releaseEndpoint({ roots: f.roots, taskId: beta.id, adapter: f.adapter }), CleanupRefusedError);
+    assert.throws(() => acceptTask({ roots: f.roots, taskId: beta.id, adapter: f.adapter }), CleanupRefusedError);
     assert.equal(f.counts().stops, stopsBefore);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id, "meta.json"), "utf8")).endpoint, alphaAssignment.endpoint);
     fs.writeFileSync(betaMetaPath, `${JSON.stringify(betaMeta, null, 2)}\n`);
@@ -284,23 +274,18 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
     const next = createTask({ roots: f.roots, projectId: "alpha", brief: "reuse the idle endpoint" });
     assert.throws(() => assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker", adapter: f.adapter, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/next", mode: "write" }] }), /non-terminal|not released|not reconciled/);
     recordPackage({ roots: f.roots, taskId: alpha.id, raw: packageFor(alpha, alphaAssignment, "completion", "alpha done"), type: "completion" });
-    acceptTask({ roots: f.roots, taskId: alpha.id });
-    const commit = execFileSync("git", ["-C", f.alphaRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    markLanded({ roots: f.roots, taskId: alpha.id, evidence: { target: "local-only", commit, workspace: f.alphaRoot } });
-    releaseTaskLease({ roots: f.roots, taskId: alpha.id });
-    f.transport.send = () => ({ delivered: false });
-    assert.throws(() => assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker", adapter: f.adapter, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/next", mode: "write" }] }), /brief delivery/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id, "meta.json"), "utf8")).endpoint, alphaAssignment.endpoint);
+    const accepted = acceptTask({ roots: f.roots, taskId: alpha.id, adapter: f.adapter });
+    assert.equal(accepted.deleted, true);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id)), false);
+    assert.throws(() => assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker", adapter: f.adapter, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/next", mode: "write" }] }), /endpoint|idle|missing/);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", next.id, "meta.json"), "utf8")).status, "queued");
-    f.transport.send = (endpoint) => f.workers.has(endpoint) ? { delivered: true } : { delivered: false };
     const otherProject = createTask({ roots: f.roots, projectId: "beta", brief: "cannot reuse alpha endpoint" });
-    assert.throws(() => assignTask({ roots: f.roots, taskId: otherProject.id, owner: "alpha-worker", adapter: f.adapter, workspacePath: f.betaRoot, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/beta-next", mode: "write" }] }), /workspace|project|idle/);
+    assert.throws(() => assignTask({ roots: f.roots, taskId: otherProject.id, owner: "alpha-worker", adapter: f.adapter, workspacePath: f.betaRoot, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/beta-next", mode: "write" }] }), /workspace|project|idle|endpoint/);
     const spawnsBefore = f.counts().spawns;
-    const reused = assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker", adapter: f.adapter, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/next", mode: "write" }] });
-    assert.equal(reused.endpoint, alphaAssignment.endpoint);
-    assert.equal(reused.status, "pending-ack");
-    assert.equal(f.counts().spawns, spawnsBefore);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id, "meta.json"), "utf8")).endpoint, null);
+    const dispatched = assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker-2", adapter: f.adapter, workspacePath: f.alphaRoot, resources: [{ key: "file/next", mode: "write" }] });
+    assert.notEqual(dispatched.endpoint, alphaAssignment.endpoint);
+    assert.equal(dispatched.status, "working");
+    assert.equal(f.counts().spawns, spawnsBefore + 1);
   } finally { f.cleanup(); }
 });
 
@@ -310,7 +295,6 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", brief: "chờ duyệt báo cáo" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    acknowledgeBrief(f.roots, task, assignment);
     recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "xong"), type: "completion" });
     const report = renderUserReport(fleetStatus({ roots: f.roots, adapter: f.adapter, emitEvents: false }), f.roots);
     assert.match(report, /### Cần bạn duyệt/);
@@ -320,18 +304,21 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
     const listed = execFileSync(process.execPath, [bin, "task", "list"], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome }, encoding: "utf8" });
     assert.match(listed, /Cần bạn duyệt/);
     assert.doesNotMatch(listed, /^\s*\{/);
+    const taskMetaFile = path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json");
+    const taskMeta = JSON.parse(fs.readFileSync(taskMetaFile, "utf8"));
+    fs.writeFileSync(taskMetaFile, `${JSON.stringify({ ...taskMeta, endpoint: null }, null, 2)}\n`);
     const accepted = execFileSync(process.execPath, [bin, "task", "accept", "--task", task.id], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome }, encoding: "utf8" });
-    assert.equal(JSON.parse(accepted).status, "accepted");
+    assert.equal(JSON.parse(accepted).deleted, true);
     const help = execFileSync(process.execPath, [bin, "help"], { encoding: "utf8" });
-    for (const phrase of ["task dispatch", "task schedule", "task adopt", "task recover", "task accept", "task mark-landed", "task release-endpoint", "task cleanup", "decision apply", "observer once", "observer start", "observer stop"]) {
+    for (const phrase of ["task dispatch", "task schedule", "task adopt", "task recover", "task accept", "decision apply", "observer once", "observer start", "observer stop"]) {
       assert.match(help, new RegExp(phrase));
     }
+    for (const removed of ["task mark-landed", "task release-endpoint", "task release-lease", "task cleanup"]) assert.doesNotMatch(help, new RegExp(removed));
     const idle = startObserver({ roots: f.roots });
     assert.equal(idle.started, false);
     assert.equal(stopObserver({ roots: f.roots }).reason, "not running");
     const running = createTask({ roots: f.roots, projectId: "alpha", brief: "still running" });
     const runningAssignment = assignTask({ roots: f.roots, taskId: running.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/other", mode: "write" }] });
-    acknowledgeBrief(f.roots, running, runningAssignment);
     loop.push(runObserverLoop({ roots: f.roots, adapter: f.adapter, intervalMs: 500 }));
     loop[0].stop();
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "observer", "supervisor.json")), false);

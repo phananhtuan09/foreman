@@ -13,11 +13,6 @@ const {
   recordPackage,
   reconstructTask,
   acceptTask,
-  markLanded,
-  releaseEndpoint,
-  cleanupTask,
-  listMessages,
-  acknowledgeTaskMessage,
   HerdrAdapter,
 } = require("../src/foreman");
 
@@ -108,14 +103,12 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
 
     const assignmentOne = assignTask({ roots: f.roots, taskId: taskOne.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/src/one", mode: "write" }] });
     const assignmentTwo = assignTask({ roots: f.roots, taskId: taskTwo.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/two", mode: "write" }] });
-    for (const [task, assignment] of [[taskOne, assignmentOne], [taskTwo, assignmentTwo]]) {
-      const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
-      acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
-    }
     assert.deepEqual(f.adapter.list().map((worker) => worker.owner), ["worker-1", "worker-2"]);
-    assert.deepEqual(f.transport.messages.map(({ message }) => message.worker), ["worker-1", "worker-2"]);
-    assert.equal(f.transport.messages[0].message.generation, 1);
-    assert.equal(f.transport.messages[1].message.generation, 1);
+    assert.deepEqual(f.transport.messages.map(({ endpoint }) => endpoint), [assignmentOne.endpoint, assignmentTwo.endpoint]);
+    assert.match(f.transport.messages[0].message, new RegExp(`Task ${taskOne.id} \\| project fixture`));
+    assert.match(f.transport.messages[1].message, new RegExp(`Task ${taskTwo.id} \\| project fixture`));
+    assert.match(f.transport.messages[0].message, /GENERATION: 1/);
+    assert.match(f.transport.messages[1].message, /GENERATION: 1/);
 
     const progressOne = workerPackage(taskOne, assignmentOne, "progress", "worker one is halfway done");
     const progressTwo = workerPackage(taskTwo, assignmentTwo, "progress", "worker two is halfway done");
@@ -131,27 +124,20 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     assert.equal(reconstructTask({ roots: f.roots, taskId: taskOne.id }).report, completionOne);
     assert.equal(reconstructTask({ roots: f.roots, taskId: taskTwo.id }).report, completionTwo);
 
-    acceptTask({ roots: f.roots, taskId: taskOne.id });
-    acceptTask({ roots: f.roots, taskId: taskTwo.id });
-    const commit = execFileSync("git", ["-C", f.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    markLanded({ roots: f.roots, taskId: taskOne.id, evidence: { target: "local-only", commit } });
-    markLanded({ roots: f.roots, taskId: taskTwo.id, evidence: { target: "local-only", commit } });
-
-    releaseEndpoint({ roots: f.roots, taskId: taskOne.id, adapter: f.adapter });
-    releaseEndpoint({ roots: f.roots, taskId: taskTwo.id, adapter: f.adapter });
+    const acceptedOne = acceptTask({ roots: f.roots, taskId: taskOne.id, adapter: f.adapter });
+    const acceptedTwo = acceptTask({ roots: f.roots, taskId: taskTwo.id, adapter: f.adapter });
+    assert.equal(acceptedOne.deleted, true);
+    assert.equal(acceptedTwo.deleted, true);
     assert.deepEqual(f.adapter.list(), []);
     assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
-    assert.equal(cleanupTask({ roots: f.roots, taskId: taskOne.id, workspaceReleased: true }), true);
-    assert.equal(cleanupTask({ roots: f.roots, taskId: taskTwo.id, workspaceReleased: true }), true);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", taskOne.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", taskTwo.id)), false);
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);
 
     const backlog = fs.readFileSync(path.join(f.roots.foremanHome, "data", "backlog.md"), "utf8");
-    const done = fs.readFileSync(path.join(f.roots.foremanHome, "data", "done.md"), "utf8");
     assert.equal(backlog.includes(taskOne.id), false);
     assert.equal(backlog.includes(taskTwo.id), false);
-    assert.equal(done.includes(taskOne.id), true);
-    assert.equal(done.includes(taskTwo.id), true);
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), cleanBefore);
   } finally {
     f.cleanup();

@@ -57,10 +57,6 @@ const usage = [
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
-  "  task mark-landed --task ID --commit SHA [--workspace PATH]",
-  "  task release-endpoint --task ID",
-  "  task release-lease --task ID",
-  "  task cleanup --task ID [--workspace-released] [--discard --authorize]",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
   "  decision deliver --task ID --decision ID",
@@ -136,17 +132,7 @@ function main() {
     output(result);
     return;
   }
-  if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task") })); return; }
-  if (command === "task" && action === "mark-landed") {
-    output(core.markLanded({ roots: home, taskId: arg("--task"), evidence: { target: "local-only", commit: arg("--commit"), workspace: arg("--workspace") } }));
-    return;
-  }
-  if (command === "task" && action === "release-endpoint") { output(core.releaseEndpoint({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
-  if (command === "task" && action === "release-lease") { output(core.releaseTaskLease({ roots: home, taskId: arg("--task") })); return; }
-  if (command === "task" && action === "cleanup") {
-    output(core.cleanupTask({ roots: home, taskId: arg("--task"), discard: flag("--discard"), authorization: flag("--authorize"), workspaceReleased: flag("--workspace-released") }));
-    return;
-  }
+  if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
   if (command === "decision" && action === "create") {
     output(core.createDecision({ roots: home, taskId: arg("--task"), finding: arg("--finding"), why: arg("--why"), options: args("--option"), impact: arg("--impact"), evidence: arg("--evidence"), recommendation: arg("--recommendation") }));
     return;

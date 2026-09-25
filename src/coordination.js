@@ -121,6 +121,33 @@ function deliveryEnvelope({ roots, message }) {
   };
 }
 
+function deliveryPrompt(message) {
+  const payload = message.payload || {};
+  const plainText = (value, indent = "") => {
+    if (value == null) return "";
+    if (typeof value !== "object") return String(value);
+    if (Array.isArray(value)) return value.map((item) => `${indent}- ${plainText(item, `${indent}  `)}`).join("\n");
+    return Object.entries(value).map(([key, item]) => `${indent}${key}: ${typeof item === "object" && item !== null ? `\n${plainText(item, `${indent}  `)}` : plainText(item)}`).join("\n");
+  };
+  if (message.kind === "task-brief") {
+    const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+    return [
+      `Task ${message.taskId} | project ${message.projectId}`,
+      `Workspace: ${payload.cwd}`,
+      `Allowed resources: ${resources}`,
+      "",
+      String(payload.brief || ""),
+      ...(payload.handoff ? ["", "Previous work and handoff:", plainText(payload.handoff)] : []),
+      "",
+      ...(payload.instructions || []),
+    ].join("\n");
+  }
+  return [
+    `${message.kind} for task ${message.taskId}`,
+    typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
+  ].join("\n\n");
+}
+
 function safeToken(value, label) {
   const text = String(value || "");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(text)) throw new EventValidationError(`${label} is invalid`);
@@ -294,8 +321,8 @@ function failMessageUnlocked({ roots, messageId: id, reason }) {
   return item;
 }
 
-function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, ackTimeoutMs = 5 * 60 * 1000, maxBackoffMs = 60 * 60 * 1000 }) {
-  const messages = listMessages({ roots, statuses: ["pending", "delivered"] });
+function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, maxBackoffMs = 60 * 60 * 1000 }) {
+  const messages = listMessages({ roots, statuses: ["pending"] });
   const results = [];
   for (const message of messages) {
     const metaFilePath = path.join(roots.foremanHome, "state", "tasks", message.taskId, "meta.json");
@@ -314,27 +341,21 @@ function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 
       results.push(failMessageUnlocked({ roots, messageId: message.messageId, reason: "message age limit exceeded" }));
       continue;
     }
-    // A delivered message is already in the worker's input; redeliver only after the worker had time to acknowledge it.
-    const delivered = message.status === "delivered";
-    if (!force && delivered && message.attempts >= message.maxAttempts) {
-      results.push(failMessageUnlocked({ roots, messageId: message.messageId, reason: "acknowledgement attempts exhausted" }));
-      continue;
-    }
-    const backoffMs = Math.min(maxBackoffMs, Math.max(0, delivered ? ackTimeoutMs : baseBackoffMs) * (2 ** Math.max(0, message.attempts - 1)));
+    const backoffMs = Math.min(maxBackoffMs, Math.max(0, baseBackoffMs) * (2 ** Math.max(0, message.attempts - 1)));
     if (!force && message.lastAttemptAt && Date.now() - Date.parse(message.lastAttemptAt) < backoffMs) continue;
     if (!force && message.nextAttemptAt && Date.now() < Date.parse(message.nextAttemptAt)) continue;
     if (!adapter || typeof adapter.send !== "function") continue;
     let result;
-    try { result = adapter.send(message.endpoint || message.worker, deliveryEnvelope({ roots, message })); }
+    try { result = adapter.send(message.endpoint || message.worker, deliveryPrompt(message)); }
     catch (error) { result = { delivered: false, error: error.message }; }
     results.push(markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: result !== false && result?.delivered !== false, evidence: result }));
   }
   return results;
 }
 
-function retryMessages({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, ackTimeoutMs = 5 * 60 * 1000, maxBackoffMs = 60 * 60 * 1000 }) {
+function retryMessages({ roots, adapter, force = false, maxAgeMs = 24 * 60 * 60 * 1000, baseBackoffMs = 1000, maxBackoffMs = 60 * 60 * 1000 }) {
   const { withHomeLock } = require("./foreman");
-  return withHomeLock(roots.foremanHome, () => retryMessagesUnlocked({ roots, adapter, force, maxAgeMs, baseBackoffMs, ackTimeoutMs, maxBackoffMs }));
+  return withHomeLock(roots.foremanHome, () => retryMessagesUnlocked({ roots, adapter, force, maxAgeMs, baseBackoffMs, maxBackoffMs }));
 }
 
 function eventId(input) {
@@ -463,7 +484,8 @@ function drainWakeQueue({ roots, handler, limit = 100, eventFilter } = {}) {
       result = typeof handler === "function" ? handler(event) : { handled: false, reason: "no handler" };
     } catch (error) { result = { handled: false, error: error.message }; }
     const next = withHomeLock(roots.foremanHome, () => {
-      const current = fs.existsSync(file) ? validateEventRecord(readJson(file), event.eventId) : event;
+      if (!fs.existsSync(file)) return null;
+      const current = validateEventRecord(readJson(file), event.eventId);
       if (!result || result.handled !== true) {
         const pending = validateEventRecord({ ...current, status: "pending", processingStartedAt: null, handlingResult: result, lastHandlingFailureAt: isoNow() }, event.eventId);
         atomicJson(file, pending);
@@ -475,7 +497,7 @@ function drainWakeQueue({ roots, handler, limit = 100, eventFilter } = {}) {
       try { fs.unlinkSync(claimPath(file)); } catch (_) {}
       return handled;
     });
-    processed.push(next);
+    if (next) processed.push(next);
   }
   signalWake(roots);
   return processed;
@@ -547,6 +569,44 @@ function writeRegistryUnlocked(home) {
   const registry = { schemaVersion: 1, version: 1, totalActive: Object.values(workers).filter((item) => item.status === "active").length, lastUpdated: isoNow(), workers };
   atomicJson(path.join(coordinationDirs(home).connections, "registry.json"), registry);
   return registry;
+}
+
+function purgeTaskRecordsUnlocked({ roots, taskId }) {
+  const dirs = initCoordination(roots.foremanHome);
+  readConnectionFiles(roots.foremanHome);
+  const taskBucket = path.join(dirs.workerEvents, eventBucket(taskId));
+  const observerFile = path.join(dirs.observer, "last-observation.json");
+  let observation = null;
+  try { if (fs.existsSync(observerFile)) observation = readJson(observerFile); } catch (_) {}
+
+  for (const name of fs.readdirSync(dirs.messages)) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(dirs.messages, name);
+    try {
+      if (readJson(file).taskId === taskId) fs.unlinkSync(file);
+    } catch (_) {
+      // Preserve malformed external records for later inspection.
+    }
+  }
+
+  fs.rmSync(taskBucket, { recursive: true, force: true });
+  for (const name of fs.readdirSync(dirs.connections)) {
+    if (!name.endsWith(".json") || name === "registry.json") continue;
+    const file = path.join(dirs.connections, name);
+    try {
+      if (readJson(file).taskId === taskId) fs.unlinkSync(file);
+    } catch (_) {
+      // Preserve malformed external records for later inspection.
+    }
+  }
+  writeRegistryUnlocked(roots.foremanHome);
+
+  if (observation && Array.isArray(observation.tasks)) {
+    const tasks = observation.tasks.filter((item) => item.taskId !== taskId);
+    atomicJson(observerFile, { ...observation, taskCount: tasks.length, tasks });
+  }
+
+  signalWake(roots);
 }
 
 function readWorkerRegistry(roots) {
@@ -746,7 +806,7 @@ function taskConsistencyEvidence({ roots, meta, messages }) {
   } else if (["working", "pending-ack", "blocked", "waiting-decision"].includes(meta.status)) {
     evidence.lease = false; issues.push({ type: "task.resource-lease-missing", reason: "active assignment has no resource lease" });
   }
-  for (const message of messages.filter((item) => item.taskId === meta.taskId && ["pending", "delivered", "acknowledged"].includes(item.status) && (item.generation === meta.generation || ["pending", "delivered"].includes(item.status)))) {
+  for (const message of messages.filter((item) => item.taskId === meta.taskId && ["pending", "delivered", "acknowledged"].includes(item.status) && (item.generation === meta.generation || item.status === "pending"))) {
     if (message.projectId !== meta.projectId || message.worker !== meta.owner || message.generation !== meta.generation || message.endpoint !== meta.endpoint) {
       evidence.messages = false; issues.push({ type: "task.message-stale", messageId: message.messageId, reason: "message identity does not match current assignment" });
     }
@@ -968,9 +1028,9 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, EventValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord, validateEventRecord, quarantineExternal,
-  digest, initCoordination, coordinationDirs, messageFile, deliveryEnvelope, createMessageUnlocked, createMessage,
+  digest, initCoordination, coordinationDirs, messageFile, deliveryEnvelope, deliveryPrompt, createMessageUnlocked, createMessage,
   updateMessageUnlocked, acknowledgeMessage, listMessages, markMessageDeliveryUnlocked, retryMessages, retryMessagesUnlocked, failMessageUnlocked,
   eventId, createObserverEvent, listEvents, drainWakeQueue, recoverProcessingEvents, recoverProcessingEventsUnlocked, retainHandledEvents,
-  signalWake, readWakeSignal, registerWorkerUnlocked, retireWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, syncRegistryUnlocked, readWorkerRegistry, emitWorkerEventUnlocked,
+  signalWake, readWakeSignal, registerWorkerUnlocked, retireWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, syncRegistryUnlocked, readWorkerRegistry, emitWorkerEventUnlocked, purgeTaskRecordsUnlocked,
   observeOnce, DeterministicObserver, WakeManager, reconcileFleet, reconcileFleetUnlocked, classifyRuntime, buildHandoffPackage,
 };

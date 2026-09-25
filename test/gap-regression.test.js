@@ -6,13 +6,12 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask,
-  listMessages, acknowledgeTaskMessage, createDecision, answerDecision,
-  deliverDecision, acknowledgeDecision, applyDecision, restartReconcile,
+  listMessages, createDecision, answerDecision, restartReconcile,
   retryMessages, StaleGenerationError, ValidationError, HerdrAdapter,
   recoverDeadWorker, buildHandoff, migrateJsonRecord, reconcileFleet,
-  findProject, listResourceLeases, readWorkerRegistry, withHomeLock, HomeLock, HomeLockError,
+  findProject, listResourceLeases, withHomeLock, HomeLock, HomeLockError,
 } = require("../src/foreman");
-const { listEvents, observeOnce, DeterministicObserver } = require("../src/coordination");
+const { listEvents, DeterministicObserver } = require("../src/coordination");
 
 function fixture() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-gaps-"));
@@ -46,61 +45,18 @@ function packageFor(task, assignment, type, body) {
   return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, "", body].join("\n");
 }
 
-function acknowledgeBrief(roots, taskId, assignment) {
-  const message = listMessages({ roots }).find((item) => item.messageId === assignment.briefMessageId);
-  acknowledgeTaskMessage({ roots, taskId, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
-}
-
-test("brief ACK is required before working and backlog activation, with current identity checks", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "ack me" });
-    assert.throws(() => assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, requireMessageAck: false }), ValidationError);
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    assert.equal(assignment.schemaVersion, 1);
-    assert.equal(assignment.status, "pending-ack");
-    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
-    assert.throws(() => acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: message.messageId, ack: { payloadDigest: "wrong" } }), ValidationError);
-    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "working");
-  } finally { f.cleanup(); }
-});
-
-test("a decision cannot be applied until the current generation ACKs delivery", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "decision" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    acknowledgeBrief(f.roots, task.id, assignment);
-    const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "choice", why: "authority", options: ["A", "B"] });
-    answerDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, response: "A" });
-    assert.throws(() => applyDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId }), ValidationError);
-    const delivered = deliverDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, adapter: f.adapter });
-    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === delivered.messageId);
-    acknowledgeDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, messageId: message.messageId, ack: { payloadDigest: message.payloadDigest } });
-    assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastAck, message.messageId);
-    assert.equal(applyDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId }).status, "applied");
-    assert.equal(assignment.generation, 1);
-  } finally { f.cleanup(); }
-});
-
-test("restart applies a valid direct inbox completion before its single runtime listing and quarantines invalid ACK bytes", () => {
+test("restart applies a valid direct inbox completion before its single runtime listing", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "restart inbox" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    acknowledgeBrief(f.roots, task.id, assignment);
     const inbox = path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox");
     const completion = packageFor(task, assignment, "completion", "durable completion");
     fs.writeFileSync(path.join(inbox, "generation-1-completion.md"), completion);
-    const invalidAck = Buffer.from("{\"messageId\":\"wrong\",\"payloadDigest\":\"bad\"}\n");
-    fs.writeFileSync(path.join(inbox, "generation-1-ack.json"), invalidAck);
     const result = restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
     assert.equal(f.lists, 1);
     assert.equal(result.inbox.applied.length, 1);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
-    const quarantine = fs.readdirSync(path.join(inbox, "quarantine"));
-    assert.ok(quarantine.some((name) => fs.readFileSync(path.join(inbox, "quarantine", name)).equals(invalidAck)));
   } finally { f.cleanup(); }
 });
 
@@ -109,10 +65,9 @@ test("message retry fails once at its bound and emits one durable actionable eve
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "retry" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    acknowledgeBrief(f.roots, task.id, assignment);
     const messageFile = path.join(f.roots.foremanHome, "state", "messages", `${assignment.briefMessageId}.json`);
     const message = JSON.parse(fs.readFileSync(messageFile, "utf8"));
-    message.status = "delivered";
+    message.status = "pending";
     message.attempts = message.maxAttempts - 1;
     message.lastAttemptAt = new Date(0).toISOString();
     fs.writeFileSync(messageFile, `${JSON.stringify(message, null, 2)}\n`);
@@ -157,7 +112,6 @@ test("dead recovery carries prior-generation decisions into the successor handof
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "recover decision" });
     const first = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
-    acknowledgeBrief(f.roots, task.id, first);
     const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "choice", why: "authority", options: ["A", "B"] });
     answerDecision({ roots: f.roots, taskId: task.id, decisionId: decision.decisionId, response: "A" });
     f.workers.get(first.endpoint).status = "dead";
@@ -210,45 +164,6 @@ test("startup migrates legacy home records and accepts an external linked worktr
   } finally { f.cleanup(); }
 });
 
-function briefMessageFile(roots, assignment) { return path.join(roots.foremanHome, "state", "messages", `${assignment.briefMessageId}.json`); }
-
-function ageBriefAttempt(roots, assignment, ageMs) {
-  const file = briefMessageFile(roots, assignment);
-  const message = JSON.parse(fs.readFileSync(file, "utf8"));
-  message.lastAttemptAt = new Date(Date.now() - ageMs).toISOString();
-  fs.writeFileSync(file, `${JSON.stringify(message, null, 2)}\n`);
-  return message;
-}
-
-function writeBriefAck(roots, task, assignment) {
-  const message = JSON.parse(fs.readFileSync(briefMessageFile(roots, assignment), "utf8"));
-  const file = path.join(roots.foremanHome, "state", "tasks", task.id, "inbox", `generation-${assignment.generation}-ack-${message.messageId}.json`);
-  fs.writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, messageId: message.messageId, taskId: task.id, projectId: task.projectId, worker: assignment.owner, generation: assignment.generation, payloadDigest: message.payloadDigest, timestamp: new Date().toISOString() })}\n`);
-  return file;
-}
-
-test("a delivered brief waits for the acknowledgement timeout before redelivery and fails at its attempt bound", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "wait for ack" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    let sends = 0;
-    const adapter = { send: () => { sends += 1; return { delivered: true }; } };
-    ageBriefAttempt(f.roots, assignment, 60 * 1000);
-    retryMessages({ roots: f.roots, adapter });
-    assert.equal(sends, 0);
-    ageBriefAttempt(f.roots, assignment, 5 * 60 * 1000);
-    assert.equal(retryMessages({ roots: f.roots, adapter })[0].attempts, 2);
-    assert.equal(sends, 1);
-    const message = ageBriefAttempt(f.roots, assignment, 60 * 60 * 1000);
-    message.attempts = message.maxAttempts;
-    fs.writeFileSync(briefMessageFile(f.roots, assignment), `${JSON.stringify(message, null, 2)}\n`);
-    assert.equal(retryMessages({ roots: f.roots, adapter })[0].status, "failed");
-    assert.equal(sends, 1);
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "message.delivery-failed").length, 1);
-  } finally { f.cleanup(); }
-});
-
 test("a runtime worker bound to a task by name is not reported as an orphan when it also has a pane ID", () => {
   const f = fixture();
   try {
@@ -259,26 +174,6 @@ test("a runtime worker bound to a task by name is not reported as an orphan when
     assert.equal(result.tasks[0].worker.name, assignment.endpoint);
     const orphans = listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "worker.orphan");
     assert.deepEqual(orphans.map((event) => event.endpoint), ["w1:p2"]);
-  } finally { f.cleanup(); }
-});
-
-test("an observer pass applies a settled direct brief ACK and leaves an in-progress one for later", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "observer ack" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const metaPath = path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json");
-    const ackFile = writeBriefAck(f.roots, task, assignment);
-    observeOnce({ roots: f.roots, adapter: f.adapter });
-    assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).status, "pending-ack");
-    const settled = new Date(Date.now() - 5000);
-    fs.utimesSync(ackFile, settled, settled);
-    observeOnce({ roots: f.roots, adapter: f.adapter });
-    assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).status, "working");
-    const acknowledged = JSON.parse(fs.readFileSync(briefMessageFile(f.roots, assignment), "utf8"));
-    assert.equal(acknowledged.status, "acknowledged");
-    observeOnce({ roots: f.roots, adapter: f.adapter });
-    assert.equal(JSON.parse(fs.readFileSync(briefMessageFile(f.roots, assignment), "utf8")).acknowledgedAt, acknowledged.acknowledgedAt);
   } finally { f.cleanup(); }
 });
 
@@ -298,7 +193,7 @@ test("the observer loop skips a pass while another process holds the home lock",
   } finally { observer.stop(); f.cleanup(); }
 });
 
-test("a worker that follows only the brief protocol acknowledges, reports completion, and wakes Foreman", () => {
+test("a worker follows the brief reporting contract and wakes Foreman", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "protocol" });
@@ -309,8 +204,8 @@ test("a worker that follows only the brief protocol acknowledges, reports comple
     const doneCommand = instructions.match(/then run: (.+ event emit .+ done .+)$/m)[1];
     assert.equal(completionPath, message.payload.reportPath);
     assert.match(instructions, /GENERATION: 1/);
-    const envelope = JSON.parse(JSON.stringify(require("../src/coordination").deliveryEnvelope({ roots: f.roots, message })));
-    fs.writeFileSync(envelope.ackPath, JSON.stringify({ schemaVersion: 1, messageId: envelope.messageId, taskId: envelope.taskId, projectId: envelope.projectId, worker: envelope.worker, generation: envelope.generation, payloadDigest: envelope.payloadDigest, timestamp: new Date().toISOString() }));
+    assert.equal(assignment.status, "working");
+    assert.equal(message.status, "delivered");
     const headerBlock = instructions.match(/^TASK: .+\nPROJECT: .+\nAGENT: .+\nGENERATION: \d+\nTYPE: completion$/m)[0];
     fs.writeFileSync(completionPath, `${headerBlock}\n\noutcome: done\n`);
     execFileSync("/bin/sh", ["-c", doneCommand], { stdio: "pipe" });

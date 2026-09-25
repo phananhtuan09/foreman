@@ -12,16 +12,14 @@ bin/foreman task dispatch --task T-000001 --owner worker
 bin/foreman task adopt --worker worker --task T-000001
 bin/foreman task recover --task T-000001
 bin/foreman task accept --task T-000001
-bin/foreman task mark-landed --task T-000001 --commit SHA
-bin/foreman task release-endpoint --task T-000001
-bin/foreman task cleanup --task T-000001 --workspace-released
 bin/foreman observer once
 bin/foreman reconcile
 bin/foreman status
 ```
 
-`task mark-landed` requires a commit reachable from the branch recorded at dispatch.
-Projects without Git skip it because `task accept` marks their ship work landed.
+`task accept` is the final task action.
+It stops the worker endpoint, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/` and `state/tasks/`.
+The project workspace stays on disk, and accepted tasks are not archived.
 
 Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
 Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.

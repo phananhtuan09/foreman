@@ -7,9 +7,9 @@ const test = require("node:test");
 const {
   HomeLock, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, ResourceBusyError,
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
-  recordPackage, reconstructTask, acceptTask, markLanded, releaseEndpoint, cleanupTask,
+  recordPackage, reconstructTask, acceptTask,
   claimResources, releaseResources, renewResources, listResourceLeases,
-  validateWorkspace, listMessages, acknowledgeTaskMessage,
+  validateWorkspace,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
 
@@ -93,8 +93,6 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "implement slice" });
     const meta = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: new HerdrAdapter({ transport: f.adapter }) });
-    const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === meta.briefMessageId);
-    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     const active = JSON.parse(fs.readFileSync(path.join(f.home, "state", "tasks", task.id, "meta.json"), "utf8"));
     assert.equal(meta.generation, 1);
     assert.equal(meta.projectId, "fixture");
@@ -117,27 +115,23 @@ test("stale generation package is rejected and quarantined", () => {
   } finally { f.cleanup(); }
 });
 
-test("completion, acceptance, restart reconstruction, and cleanup refusal preserve package", () => {
+test("completion, acceptance, and restart reconstruction end by deleting task records", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "finish and verify" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
-    const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
-    acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
     const progress = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: progress\n\nRAW progress package`;
     recordPackage({ roots: f.roots, taskId: task.id, raw: progress, type: "progress" });
     assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).progress, progress);
     const completion = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: completion\n\nRAW completion package`;
     recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
     assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).report, completion);
-    assert.throws(() => cleanupTask({ roots: f.roots, taskId: task.id }), CleanupRefusedError);
-    acceptTask({ roots: f.roots, taskId: task.id });
-    assert.throws(() => releaseEndpoint({ roots: f.roots, taskId: task.id, adapter: { stop: () => ({ stopped: true }), inspect: () => { throw new Error("unavailable"); } } }), CleanupRefusedError);
-    const commit = execFileSync("git", ["-C", f.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    markLanded({ roots: f.roots, taskId: task.id, evidence: { target: "local-only", commit } });
+    assert.throws(() => acceptTask({ roots: f.roots, taskId: task.id, adapter: { stop: () => ({ stopped: true }), inspect: () => { throw new Error("unavailable"); } } }), CleanupRefusedError);
+    assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id)), true);
+    const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(accepted.deleted, true);
     assert.equal(fs.readFileSync(path.join(f.home, "data", "backlog.md"), "utf8").includes(task.id), false);
-    assert.equal(fs.readFileSync(path.join(f.home, "data", "done.md"), "utf8").includes(task.id), true);
-    releaseEndpoint({ roots: f.roots, taskId: task.id, adapter: f.adapter });
-    assert.equal(cleanupTask({ roots: f.roots, taskId: task.id, workspaceReleased: true }), true);
+    assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(f.home, "state", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });

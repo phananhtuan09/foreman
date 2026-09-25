@@ -202,8 +202,12 @@ class HerdrCliTransport {
       if (!hasVerb(agentHelp, verb, "herdr agent")) throw new HerdrCompatibilityError(`Herdr agent verb is unavailable: ${verb}`);
     }
     const paneHelp = this._run(["pane", "--help"]);
-    for (const verb of ["split", "close", "process-info"]) {
+    for (const verb of ["list", "close", "process-info"]) {
       if (!hasVerb(paneHelp, verb, "herdr pane")) throw new HerdrCompatibilityError(`Herdr pane verb is unavailable: ${verb}`);
+    }
+    const workspaceHelp = this._run(["workspace", "--help"]);
+    for (const verb of ["create", "get", "close"]) {
+      if (!hasVerb(workspaceHelp, verb, "herdr workspace")) throw new HerdrCompatibilityError(`Herdr workspace verb is unavailable: ${verb}`);
     }
     if (!this.runner) {
       for (const verb of ["send-keys", "read"]) {
@@ -264,16 +268,18 @@ class HerdrCliTransport {
     if (dispatchProfile?.model && dispatchProfile.model !== "default" && !agentArgs.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) {
       agentArgs.push("--model", dispatchProfile.model);
     }
-    const split = this._runJson(["pane", "split", "--current", "--direction", this.paneDirection, "--cwd", cwd, "--no-focus"]);
-    const paneId = split?.result?.pane?.pane_id || split?.result?.pane_id;
-    if (!paneId) throw new HerdrCompatibilityError("Herdr pane split did not return a pane identity");
+    const created = this._runJson(["workspace", "create", "--cwd", cwd, "--label", `foreman-${owner}`, "--no-focus"]);
+    const workspaceId = created?.result?.workspace?.workspace_id || created?.result?.workspace_id;
+    if (!workspaceId) throw new HerdrCompatibilityError("Herdr workspace create did not return an identity");
     try {
+      const paneId = created?.result?.root_pane?.pane_id;
+      if (!paneId) throw new HerdrCompatibilityError("Herdr workspace has no pane identity");
       this._waitForAvailableShell(paneId);
       this._startAgentWhenAvailable({ owner, agentKind, paneId, agentArgs });
       this._ensureInteractiveReady(paneId, owner);
-      return { endpoint: owner, endpointId: owner, paneId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
+      return { endpoint: owner, endpointId: owner, paneId, workspaceId, owner, cwd, status: "idle", dispatchProfile: dispatchProfile || null };
     } catch (error) {
-      try { this._run(["pane", "close", paneId]); } catch (_) {}
+      try { this._run(["workspace", "close", workspaceId]); } catch (_) {}
       throw error;
     }
   }
@@ -293,27 +299,19 @@ class HerdrCliTransport {
       owner: found.name || found.agent,
       cwd: found.cwd || found.foreground_cwd,
       paneId: found.pane_id,
+      workspaceId: found.workspace_id,
       status: found.agent_status || "unknown",
     };
   }
 
   send(endpoint, message) {
     const text = typeof message === "string" ? message : JSON.stringify(message);
-    if (this.runner) {
-      this._run(["agent", "prompt", endpoint, text]);
-    } else {
-      // Herdr's prompt endpoint writes into an interactive agent's input
-      // surface.  Codex-compatible panes require an explicit Return key to
-      // submit that input, and the write is asynchronous relative to the
-      // command response.  Give the surface a short deterministic settling
-      // window before submitting the key.
-      this._run(["agent", "prompt", endpoint, text]);
-      this._sleep(500);
-      const current = this.inspect(endpoint);
-      if (!current?.paneId) throw new HerdrCompatibilityError("Herdr endpoint has no pane identity for prompt delivery");
-      this._run(["pane", "send-keys", current.paneId, "return"]);
-    }
-    return { delivered: true };
+    this._run(["agent", "prompt", endpoint, text]);
+    if (this.runner) return { delivered: true };
+    this._sleep(2000);
+    let after;
+    try { after = this.inspect(endpoint); } catch (_) { after = null; }
+    return { delivered: true, inspectedStatus: after?.status || "unknown", verified: Boolean(after && after.status !== "missing" && after.owner === endpoint) };
   }
 
   interrupt(endpoint) {
@@ -329,6 +327,16 @@ class HerdrCliTransport {
     const current = this.inspect(endpoint);
     if (current.status === "missing") return { stopped: true };
     if (!current.paneId) throw new HerdrCompatibilityError("Herdr endpoint has no pane identity");
+    if (current.workspaceId) {
+      const workspace = this._runJson(["workspace", "get", current.workspaceId])?.result?.workspace;
+      if (workspace?.label === `foreman-${endpoint}`) {
+        const panes = this._runJson(["pane", "list", "--workspace", current.workspaceId])?.result?.panes;
+        if (panes?.length === 1 && panes[0].pane_id === current.paneId) {
+          this._run(["workspace", "close", current.workspaceId]);
+          return { stopped: true };
+        }
+      }
+    }
     this._run(["pane", "close", current.paneId]);
     return { stopped: true };
   }

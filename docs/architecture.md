@@ -1,7 +1,7 @@
 # Foreman architecture
 
 Foreman keeps global fleet state in a private file home and treats each registered project as an exact identity: the Git common directory for Git projects and the canonical root path for projects without Git.
-`src/foreman.js` owns task, assignment, decision, resource, cleanup, and scheduler transitions.
+`src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, generation-bound inbox reconciliation, worker event spool, wake signal, worker registry, restart reconciliation, and handoff snapshots.
 `src/herdr.js` is the narrow Herdr adapter.
 `adapters/herdr/` is the distribution wrapper.
@@ -25,10 +25,13 @@ Reconciliation compares project, owner, generation, endpoint, workspace, branch,
 `state/wake/foreman.json` signals that pending events exist.
 `state/connections/registry.json` is the derived worker registry.
 Runtime classification still decides `dead`, `missing`, and `unknown`.
-Runtime delivery and worker acknowledgement are separate states.
-Delivered messages include a self-contained identity envelope and generation-bound acknowledgement path; workers do not read the private outbox to construct an acknowledgement.
-Retries use the same message ID with bounded backoff, age, and attempts; a terminal failure produces one deduplicated actionable event.
+Herdr creates a separate workspace for each new worker and receives a concise text prompt.
+The private outbox retains message identity and payload; delivered prompts are not resent for a missing worker acknowledgement.
+After submission, Foreman inspects the endpoint without interrupting the worker and records the result as runtime evidence.
+Failed delivery produces an actionable event, while an uncertain task-brief submission keeps the endpoint for inspection.
 
 Task ownership changes create a new generation.
 A confirmed dead or missing worker is replaced only through a durable handoff containing the original brief, decisions, progress, report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
-Landing, acceptance, and cleanup remain explicit user-authorized steps.
+Acceptance is the terminal user action.
+It stops and verifies the worker endpoint, releases the resource lease, and deletes task-specific Foreman records and coordination state.
+The project workspace remains on disk; Foreman does not commit, merge, or remove its files.

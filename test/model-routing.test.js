@@ -137,7 +137,7 @@ test("each configured profile reaches worker spawn unchanged", () => {
       const expected = { name, ...profile };
       assert.deepEqual(requests.at(-1).dispatchProfile, expected);
       assert.deepEqual(assigned.dispatchProfile, expected);
-      assert.equal(assigned.status, "pending-ack");
+      assert.equal(assigned.status, "working");
     }
     assert.equal(requests.length, Object.keys(config.profiles).length);
   } finally { f.cleanup(); }

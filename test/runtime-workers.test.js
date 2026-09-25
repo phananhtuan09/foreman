@@ -13,12 +13,7 @@ const {
   assignTask,
   recordPackage,
   acceptTask,
-  markLanded,
-  releaseEndpoint,
-  cleanupTask,
   listResourceLeases,
-  listMessages,
-  acknowledgeTaskMessage,
   ResourceBusyError,
   HerdrAdapter,
 } = require("../src/foreman");
@@ -112,16 +107,12 @@ test("runtime workers share the current branch with disjoint resource leases", a
     const two = createTask({ roots: f.roots, projectId: "fixture", brief: "write worker two file" });
     const assignmentOne = assignTask({ roots: f.roots, taskId: one.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/agent-one.txt", mode: "write" }] });
     const assignmentTwo = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/agent-two.txt", mode: "write" }] });
-    for (const [task, assignment] of [[one, assignmentOne], [two, assignmentTwo]]) {
-      const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
-      acknowledgeTaskMessage({ roots: f.roots, taskId: task.id, messageId: brief.messageId, ack: { payloadDigest: brief.payloadDigest } });
-    }
     assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentOne.branch, "main");
     assert.equal(assignmentTwo.branch, "main");
-    assert.equal(f.transport.messages[0].message.payload.workspaceMode, "shared-current-branch");
-    assert.equal(f.transport.messages[0].message.payload.gitAuthority, "client");
+    assert.match(f.transport.messages[0].message, /Allowed resources: file\/agent-one\.txt \(write\)/);
+    assert.match(f.transport.messages[0].message, /write worker one file/);
     assert.throws(() => assignTask({ roots: f.roots, taskId: createTask({ roots: f.roots, projectId: "fixture", brief: "conflict" }).id, owner: "worker-3", adapter: f.adapter, resources: [{ key: "file/agent-one.txt", mode: "write" }] }), ResourceBusyError);
 
     await Promise.all([f.transport.wait(assignmentOne.endpoint), f.transport.wait(assignmentTwo.endpoint)]);
@@ -130,19 +121,14 @@ test("runtime workers share the current branch with disjoint resource leases", a
 
     recordPackage({ roots: f.roots, taskId: one.id, raw: packageFor(one, assignmentOne, "worker one done"), type: "completion" });
     recordPackage({ roots: f.roots, taskId: two.id, raw: packageFor(two, assignmentTwo, "worker two done"), type: "completion" });
-    acceptTask({ roots: f.roots, taskId: one.id });
-    acceptTask({ roots: f.roots, taskId: two.id });
-    execFileSync("git", ["-C", f.projectRoot, "add", "agent-one.txt", "agent-two.txt"]);
-    execFileSync("git", ["-C", f.projectRoot, "commit", "-m", "runtime workers"], { stdio: "pipe" });
-    const commit = execFileSync("git", ["-C", f.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    markLanded({ roots: f.roots, taskId: one.id, evidence: { target: "local-only", commit, workspace: f.projectRoot } });
-    markLanded({ roots: f.roots, taskId: two.id, evidence: { target: "local-only", commit, workspace: f.projectRoot } });
-    releaseEndpoint({ roots: f.roots, taskId: one.id, adapter: f.adapter });
-    releaseEndpoint({ roots: f.roots, taskId: two.id, adapter: f.adapter });
-    cleanupTask({ roots: f.roots, taskId: one.id, workspaceReleased: true });
-    cleanupTask({ roots: f.roots, taskId: two.id, workspaceReleased: true });
+    const acceptedOne = acceptTask({ roots: f.roots, taskId: one.id, adapter: f.adapter });
+    const acceptedTwo = acceptTask({ roots: f.roots, taskId: two.id, adapter: f.adapter });
+    assert.equal(acceptedOne.deleted, true);
+    assert.equal(acceptedTwo.deleted, true);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", one.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", two.id)), false);
     assert.deepEqual(listResourceLeases({ roots: f.roots }), []);
-    assert.equal(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), "");
+    assert.notEqual(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), "");
   } finally {
     fs.rmSync(f.base, { recursive: true, force: true });
   }

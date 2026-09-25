@@ -7,7 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, HerdrAdapter,
   emitWorkerEvent, recordWorkerHeartbeat, readWakeSignal, readWorkerRegistry, reconcileFleet, WakeManager,
-  listMessages, reconcileInbox, sendWorkerMessage, recordPackage,
+  listMessages, sendWorkerMessage,
 } = require("../src/foreman");
 const { listEvents } = require("../src/coordination");
 
@@ -64,30 +64,15 @@ test("worker emit, wake signal, and registry keep assignment identity", async ()
     assert.equal(registered.workers[assignment.endpoint].adapter, "herdr");
     assert.equal(registered.workers[assignment.endpoint].lastHeartbeat, null);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "connections", `${task.id}-worker-7.json`)), true);
-    assert.equal(f.deliveries[0].message.messageId, assignment.briefMessageId);
-    assert.equal(f.deliveries[0].message.payloadDigest, listMessages({ roots: f.roots })[0].payloadDigest);
-    assert.equal(f.deliveries[0].message.payload.endpoint, assignment.endpoint);
-    assert.equal(f.deliveries[0].message.ackPath, path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox", `generation-${assignment.generation}-ack-${assignment.briefMessageId}.json`));
-
+    assert.equal(typeof f.deliveries[0].message, "string");
+    assert.match(f.deliveries[0].message, new RegExp(`Task ${task.id} \\| project fixture`));
+    assert.match(f.deliveries[0].message, /emit a blocker/);
     const brief = listMessages({ roots: f.roots }).find((message) => message.messageId === assignment.briefMessageId);
-    const ack = { schemaVersion: 1, messageId: brief.messageId, taskId: task.id, projectId: "fixture", worker: assignment.owner, generation: assignment.generation, payloadDigest: brief.payloadDigest, acknowledgedAt: new Date().toISOString() };
-    fs.writeFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox", "brief-ack.json"), `${JSON.stringify(ack, null, 2)}\n`);
-    reconcileInbox({ roots: f.roots, taskId: task.id });
-    assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastAck, brief.messageId);
+    assert.equal(brief.status, "delivered");
+    assert.equal(brief.payload.endpoint, assignment.endpoint);
 
     const followUp = sendWorkerMessage({ roots: f.roots, taskId: task.id, kind: "status-request", payload: { request: "progress" }, adapter: f.adapter }).message;
-    recordPackage({ roots: f.roots, taskId: task.id, type: "progress", raw: [
-      `TASK: ${task.id}`,
-      "PROJECT: fixture",
-      `AGENT: ${assignment.owner}`,
-      `GENERATION: ${assignment.generation}`,
-      "TYPE: progress",
-      `ACK_MESSAGE_ID: ${followUp.messageId}`,
-      `PAYLOAD_DIGEST: ${followUp.payloadDigest}`,
-      "",
-      "Progress acknowledged.",
-    ].join("\n") });
-    assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastAck, followUp.messageId);
+    assert.equal(followUp.status, "delivered");
 
     assert.throws(() => emitWorkerEvent({ roots: f.roots, taskId: task.id, eventType: "blocked", payload: { reason: "unbound" } }), /identity/);
     const emitted = emitWorkerEvent({ roots: f.roots, taskId: task.id, projectId: "fixture", eventType: "blocked", worker: assignment.owner, generation: assignment.generation, endpoint: assignment.endpoint, payload: { reason: "schema" } });
@@ -121,7 +106,6 @@ test("worker emit, wake signal, and registry keep assignment identity", async ()
     const heartbeatAt = heartbeat.record.lastHeartbeat;
     reconcileFleet({ roots: f.roots, adapter: f.adapter, requireCompletionPackage: false });
     assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastHeartbeat, heartbeatAt);
-    assert.equal(readWorkerRegistry(f.roots).workers[assignment.endpoint].lastAck, followUp.messageId);
 
     const connection = path.join(f.roots.foremanHome, "state", "connections", `${task.id}-worker-7.json`);
     const stale = JSON.parse(fs.readFileSync(connection, "utf8"));
