@@ -213,12 +213,15 @@ function gitBranch(root) {
 function projectVcs(project) { return project.vcs || "git"; }
 
 function workspaceBelongsToProject(project, workspace) {
+  if (canonical(workspace) === project.root) return true;
   if (projectVcs(project) === "none") return canonical(workspace) === project.root;
   return gitCommonDir(workspace) === gitCommonDir(project.root);
 }
 
 function validateWorkspace(project, workspacePath) {
   const workspace = canonical(workspacePath || project.root);
+  if (!fs.statSync(workspace).isDirectory()) throw new ValidationError(`Workspace is not a directory: ${workspace}`);
+  if (workspace === project.root) return { path: workspace, branch: null };
   if (projectVcs(project) === "none") {
     if (workspace !== project.root) throw new ValidationError("Workspace must be the project root for a project without Git");
     return { path: workspace, branch: null };
@@ -227,76 +230,6 @@ function validateWorkspace(project, workspacePath) {
   if (gitCommonDir(workspace) !== gitCommonDir(project.root)) throw new ValidationError("Workspace belongs to a different Git project");
   const branch = gitBranch(workspace);
   return { path: workspace, branch };
-}
-
-const FILE_FINGERPRINT_EXCLUDES = new Set(["node_modules", ".git", "dist", "build"]);
-
-function listWorkspaceFiles(workspace, relative = "") {
-  const files = [];
-  for (const entry of fs.readdirSync(path.join(workspace, relative), { withFileTypes: true })) {
-    if (FILE_FINGERPRINT_EXCLUDES.has(entry.name)) continue;
-    const child = relative ? path.join(relative, entry.name) : entry.name;
-    if (entry.isDirectory()) files.push(...listWorkspaceFiles(workspace, child));
-    else files.push(child);
-  }
-  return files;
-}
-
-function hashWorkspacePaths(workspace, paths, content) {
-  for (const relative of paths) {
-    const absolute = path.join(workspace, relative);
-    let entry;
-    try {
-      const stat = fs.lstatSync(absolute);
-      if (stat.isSymbolicLink()) entry = `link:${relative}:${fs.readlinkSync(absolute)}`;
-      else if (stat.isFile()) entry = `file:${relative}:${crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")}`;
-      else entry = `other:${relative}:${stat.mode}`;
-    } catch (error) {
-      entry = `unreadable:${relative}:${error.code || error.message}`;
-    }
-    content.update(`${entry}\0`);
-  }
-}
-
-function captureWorkspaceFingerprint(workspace, mode = "git") {
-  if (mode === "files") {
-    const content = crypto.createHash("sha256");
-    hashWorkspacePaths(workspace, listWorkspaceFiles(workspace).sort(), content);
-    return { mode, head: "", status: "", content: content.digest("hex"), capturedAt: now() };
-  }
-  const status = execFileSync("git", ["-C", workspace, "status", "--porcelain=v1", "--untracked-files=all"], { encoding: "utf8" });
-  const head = execFileSync("git", ["-C", workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const tracked = execFileSync("git", ["-C", workspace, "ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
-  const untracked = execFileSync("git", ["-C", workspace, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
-  const paths = [...new Set([...tracked, ...untracked])].sort();
-  const content = crypto.createHash("sha256");
-  hashWorkspacePaths(workspace, paths, content);
-  content.update(`index:${crypto.createHash("sha256").update(execFileSync("git", ["-C", workspace, "diff", "--cached", "--binary"], { encoding: "buffer" })).digest("hex")}\0`);
-  return { mode, head, status, content: content.digest("hex"), capturedAt: now() };
-}
-
-function detectScoutMutation(meta) {
-  if (!meta || meta.type !== "scout" || !meta.workspace) return null;
-  if (!meta.scoutBaseline || typeof meta.scoutBaseline.head !== "string" || typeof meta.scoutBaseline.status !== "string" || typeof meta.scoutBaseline.content !== "string") return { reason: "missing-baseline" };
-  let current;
-  try { current = captureWorkspaceFingerprint(meta.workspace, meta.scoutBaseline.mode || "git"); }
-  catch (error) { return { reason: "unreadable", error: error.message }; }
-  if (current.head !== meta.scoutBaseline.head || current.status !== meta.scoutBaseline.status || current.content !== meta.scoutBaseline.content) return { reason: "workspace-changed", expected: meta.scoutBaseline, actual: current };
-  return null;
-}
-
-function recordScoutViolation({ roots, taskId, violation }) {
-  const meta = readMeta(roots.foremanHome, taskId);
-  atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, scoutViolation: { detectedAt: now(), violation } });
-  return violation;
-}
-
-function assertScoutUnmodified(roots, meta) {
-  const violation = detectScoutMutation(meta);
-  if (!violation) return;
-  recordScoutViolation({ roots, taskId: meta.taskId, violation });
-  const detail = violation.reason === "workspace-changed" ? "workspace fingerprint changed" : violation.reason;
-  throw new ValidationError(`Scout modified production files; completion refused (${detail})`);
 }
 
 function projectFile(home) { return path.join(home, "data", "projects.json"); }
@@ -320,8 +253,9 @@ function findProject(home, id) {
   const project = loadProjects(home).find((item) => item.id === id);
   if (!project || !project.enabled) throw new ValidationError(`Unknown or disabled project: ${id}`);
   const invalid = new ValidationError(`Project root is no longer valid: ${id}`);
-  if (!fs.existsSync(project.root) || canonical(project.root) !== project.root) throw invalid;
-  if (projectVcs(project) === "none" ? !fs.statSync(project.root).isDirectory() : gitTop(project.root) !== project.root) throw invalid;
+  try {
+    if (!fs.existsSync(project.root) || canonical(project.root) !== project.root || !fs.statSync(project.root).isDirectory()) throw invalid;
+  } catch (_) { throw invalid; }
   return project;
 }
 
@@ -814,7 +748,6 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
-      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(workspace.path, projectVcs(project) === "none" ? "files" : "git") : null,
     };
     atomicJson(metaFile(roots.foremanHome, taskId), pending);
     const reassignedHolders = [];
@@ -872,7 +805,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       deliveryEndpoint = endpoint;
       paneId = spawned?.paneId || inspected.paneId || null;
       const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."];
-      if (taskType === "scout") instructions.push("Do not modify production files. Foreman compares the workspace fingerprint before and after this scout.");
+      if (taskType === "scout") instructions.push("Do not modify production files. This scout has read-only resource claims.");
       const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
@@ -970,15 +903,9 @@ function recordReport({ roots, paneId, status, summary }) {
     // Every report is kept verbatim under its own name.
     atomicWrite(file, [`TASK: ${meta.taskId}`, `PROJECT: ${meta.projectId}`, `AGENT: ${meta.owner}`, `GENERATION: ${meta.generation}`, `STATUS: ${status}`, `REPORTED_AT: ${at}`, "", summary].join("\n"));
     let next = { ...meta, lastReport: { file, status, at, readAt: null } };
-    const violation = status === "done" && meta.type === "scout" ? detectScoutMutation(meta) : null;
-    if (violation) next = { ...next, scoutViolation: { detectedAt: at, violation } };
-    else if (status === "done") next = { ...next, status: "review-ready", completionReport: file, completionAt: at };
+    if (status === "done") next = { ...next, status: "review-ready", completionReport: file, completionAt: at };
     else if (status === "blocked") next = { ...next, status: "blocked", blockerReport: file, blockerAt: at };
     atomicJson(metaFile(roots.foremanHome, meta.taskId), next);
-    if (violation) {
-      const detail = violation.reason === "workspace-changed" ? "workspace fingerprint changed" : violation.reason;
-      throw new ValidationError(`Scout modified production files; completion refused (${detail})`);
-    }
     return { taskId: meta.taskId, projectId: meta.projectId, generation: meta.generation, status, file, taskStatus: next.status };
   });
 }
@@ -1055,7 +982,6 @@ function acceptTask({ roots, taskId, adapter }) {
     const dependencyUpdates = planCompletedDependencyDetach(roots.foremanHome, taskId);
     if (!alreadyAccepted) {
       if (!meta.completionReport || !fs.existsSync(meta.completionReport)) throw new ValidationError("A completion report is required before acceptance");
-      if (meta.type === "scout") assertScoutUnmodified(roots, meta);
     }
 
     const workerStopped = stopEndpointForAcceptance({ roots, meta, adapter });
@@ -1148,7 +1074,6 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
       adopted: true,
       adoptedAt,
       lastPromptAt: adoptedAt,
-      scoutBaseline: taskType === "scout" ? captureWorkspaceFingerprint(bound.workspace.path, projectVcs(bound.project) === "none" ? "files" : "git") : null,
     };
     try {
       atomicJson(metaFile(roots.foremanHome, id), assigned);
@@ -1250,7 +1175,6 @@ function promoteScout({ roots, taskId, brief, dependencies = [] }) {
   return withHomeLock(roots.foremanHome, () => {
     const scout = readMeta(roots.foremanHome, taskId);
     if (scout.type !== "scout" || scout.status !== "review-ready") throw new ValidationError("Only a review-ready scout can be promoted; promote it before accepting it");
-    assertScoutUnmodified(roots, scout);
     const sourceReport = fs.readFileSync(scout.completionReport, "utf8");
     const text = brief || `Implement reviewed findings from scout ${taskId}.\n\nScout report:\n${sourceReport}`;
     const normalized = normalizeDependencies(dependencies);

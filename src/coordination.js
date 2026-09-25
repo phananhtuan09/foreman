@@ -241,7 +241,7 @@ function taskConsistencyIssues({ roots, meta }) {
     if (meta.workspace && (!fs.existsSync(meta.workspace) || fs.realpathSync(meta.workspace) !== meta.workspace)) {
       issues.push({ type: "task.workspace-missing", reason: "workspace is missing or not canonical" });
     }
-    if (hasGit && meta.workspace && fs.existsSync(meta.workspace)) {
+    if (hasGit && meta.workspace && meta.branch && fs.existsSync(meta.workspace)) {
       try { if (gitBranch(meta.workspace) !== meta.branch) issues.push({ type: "task.branch-mismatch", expected: meta.branch, actual: gitBranch(meta.workspace) }); }
       catch (error) { issues.push({ type: "task.branch-unreadable", reason: error.message }); }
     }

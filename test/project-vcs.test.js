@@ -91,7 +91,7 @@ test("acceptance deletes task records and releases a ship lease in a project wit
   } finally { f.cleanup(); }
 });
 
-test("scout in a project without Git detects file changes outside excluded directories", () => {
+test("scout in a project without Git completes without scanning project files", () => {
   const f = fixture();
   try {
     const root = plainProject(f.base, "plain");
@@ -105,7 +105,7 @@ test("scout in a project without Git detects file changes outside excluded direc
     const dirty = createTask({ roots: f.roots, projectId: "plain", type: "scout", brief: "read only" });
     const dirtyAssignment = assignTask({ roots: f.roots, taskId: dirty.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
     fs.writeFileSync(path.join(root, "notes.txt"), "scout wrote this\n");
-    assert.throws(() => report(f, dirtyAssignment, "done", "claimed no edits"), /Scout modified production files/);
+    assert.equal(report(f, dirtyAssignment, "done", "claimed no edits").taskStatus, "review-ready");
   } finally { f.cleanup(); }
 });
 
@@ -116,7 +116,7 @@ test("Git ship work can be accepted without a separate landing step", () => {
     registerProject({ roots: f.roots, id: "repo", root });
     const task = createTask({ roots: f.roots, projectId: "repo", brief: "change on current branch" });
     const assignment = dispatch(f, task);
-    assert.equal(assignment.branch, "develop");
+    assert.equal(assignment.branch, null);
     report(f, assignment, "done", "done");
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);

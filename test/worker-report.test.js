@@ -150,15 +150,15 @@ test("reports map status, keep every report verbatim, and bind to the worker pan
   } finally { f.cleanup(); }
 });
 
-test("a scout that changed files cannot report done", () => {
+test("a scout report does not scan project files", () => {
   const f = fixture();
   try {
     const { task } = dispatch(f, "read only", { type: "scout" });
     fs.writeFileSync(path.join(f.project, "sneak.txt"), "x\n");
-    assert.throws(() => recordReport({ roots: f.roots, paneId: "w1:p1", status: "done", summary: "no edits" }), /Scout modified production files/);
+    assert.equal(recordReport({ roots: f.roots, paneId: "w1:p1", status: "done", summary: "no edits" }).taskStatus, "review-ready");
     const meta = f.meta(task.id);
-    assert.equal(meta.status, "working");
-    assert.equal(meta.scoutViolation.violation.reason, "workspace-changed");
+    assert.equal(meta.status, "review-ready");
+    assert.equal(meta.scoutViolation, undefined);
     assert.equal(meta.lastReport.status, "done");
   } finally { f.cleanup(); }
 });

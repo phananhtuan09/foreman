@@ -125,34 +125,29 @@ test("an unmodified scout still reaches review-ready", () => {
   } finally { f.cleanup(); }
 });
 
-test("scout fingerprint detects content changes after a dirty baseline", () => {
+test("scout completion does not fingerprint project content", () => {
   const f = fixture();
   try {
     fs.writeFileSync(path.join(f.alphaRoot, "README.md"), "dirty baseline\n");
     const task = createTask({ roots: f.roots, projectId: "alpha", type: "scout", brief: "do not write" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
     fs.writeFileSync(path.join(f.alphaRoot, "README.md"), "changed after baseline\n");
-    assert.throws(() => report(f, assignment, "done", "claimed no edits"), /Scout modified production files/);
+    assert.equal(report(f, assignment, "done", "claimed no edits").taskStatus, "review-ready");
   } finally { f.cleanup(); }
 });
 
-test("scout guard fail-closes when the scout writes a production file", () => {
+test("scout completion does not inspect files written during the assignment", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "alpha", type: "scout", brief: "do not write" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
     fs.writeFileSync(path.join(f.alphaRoot, "sneak.txt"), "scout wrote this\n");
-    assert.throws(() => report(f, assignment, "done", "claimed no edits"), /Scout modified production files/);
+    assert.equal(report(f, assignment, "done", "claimed no edits").taskStatus, "review-ready");
     const meta = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8"));
-    assert.equal(meta.status, "working");
-    const violation = meta.scoutViolation;
-    assert.equal(violation.violation.reason, "workspace-changed");
-    assert.match(violation.violation.actual.status, /sneak\.txt/);
     assert.match(fs.readFileSync(meta.lastReport.file, "utf8"), /claimed no edits$/);
-    meta.status = "review-ready";
-    meta.completionReport = meta.lastReport.file;
-    fs.writeFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
-    assert.throws(() => acceptTask({ roots: f.roots, taskId: task.id }), /Scout modified production files/);
+    assert.equal(meta.status, "review-ready");
+    assert.equal(meta.scoutViolation, undefined);
+    assert.equal(acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter }).deleted, true);
   } finally { f.cleanup(); }
 });
 

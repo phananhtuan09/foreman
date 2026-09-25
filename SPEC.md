@@ -80,7 +80,10 @@ Workers never edit task metadata or records owned by another writer.
 
 ### 5.3 Exact project binding
 
-Every task records a stable project ID. Before dispatch, steering, workspace operations, or acceptance, Foreman resolves that ID through the project registry and verifies the canonical project root. Runtime `cwd` is evidence, not durable project identity.
+Every task records a stable project ID.
+Before dispatch, steering, workspace operations, or acceptance, Foreman resolves that ID through the project registry and confirms its canonical root still exists as a directory.
+For an explicitly selected Git worktree outside that root, Foreman verifies that the worktree belongs to the registered project.
+Runtime `cwd` is evidence, not durable project identity.
 
 ### 5.4 Foreman supervises; workers implement
 
@@ -249,7 +252,8 @@ A report is accepted only while the task is `working` or `blocked`.
 `blocked` moves the task to `blocked` and records the report as `blockerReport`.
 `progress` leaves the task `working`.
 Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
-A scout's `done` report is refused when its workspace fingerprint changed; the report is still stored and the violation is recorded.
+A scout's `done` report follows the same report lifecycle as other tasks.
+Foreman does not scan or fingerprint project files; scout read-only scope is communicated through its brief and read-only resource lease.
 
 ### 7.6 State schemas and migration
 
@@ -365,7 +369,9 @@ Foreman validates a selected dispatch profile against those capabilities before 
 
 For mutation work, the client prepares a workspace on the current branch. Foreman validates the workspace and binds it to the task and project in task metadata; Foreman never creates, switches, merges, or removes worktrees.
 
-For a project without Git, the workspace is the project root, the task has no branch, and workspace identity is the canonical root path.
+For a task using the registered project root, Foreman confirms that the canonical path exists as a directory and records no branch.
+An explicitly selected Git worktree is checked against the registered project and its current branch.
+A project without Git uses its canonical root path and has no branch.
 
 Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
 
@@ -691,9 +697,8 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
 - Adoption is an explicit request.
 - It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and its pane without sending the task again.
-- A scout stores a workspace fingerprint at assignment.
-- A `done` report, promotion, and acceptance compare that fingerprint.
-- Herdr does not sandbox the worker, so a detected production-file change is recorded and completion is refused.
+- A scout receives read-only resource claims and an instruction not to modify production files.
+- Foreman does not scan or fingerprint project files to verify scout behavior; Herdr does not sandbox the worker.
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
 - Mandatory task-intake routing is implemented through the tracked `FOREMAN_ROOT/config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
@@ -725,5 +730,5 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; the adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
-- Scout isolation is a before/after workspace fingerprint, not a runtime sandbox.
+- Scout read-only behavior relies on the worker instruction and resource lease; the runtime does not sandbox project files.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.

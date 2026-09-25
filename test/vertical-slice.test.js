@@ -112,7 +112,7 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
     assert.equal(active.status, "working");
     assert.equal(meta.endpoint, "endpoint-1");
     assert.equal(meta.workspace, fs.realpathSync(f.projectRoot));
-    assert.equal(meta.branch, "main");
+    assert.equal(meta.branch, null);
   } finally { f.cleanup(); }
 });
 

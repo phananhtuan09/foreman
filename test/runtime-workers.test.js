@@ -88,7 +88,7 @@ function fixture() {
   return { base, projectRoot, roots, transport, adapter: new HerdrAdapter({ transport }) };
 }
 
-test("runtime workers share the current branch with disjoint resource leases", async () => {
+test("runtime workers share the registered project root with disjoint resource leases", async () => {
   const f = fixture();
   try {
     const one = createTask({ roots: f.roots, projectId: "fixture", brief: "write worker one file" });
@@ -97,8 +97,8 @@ test("runtime workers share the current branch with disjoint resource leases", a
     const assignmentTwo = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/agent-two.txt", mode: "write" }] });
     assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
-    assert.equal(assignmentOne.branch, "main");
-    assert.equal(assignmentTwo.branch, "main");
+    assert.equal(assignmentOne.branch, null);
+    assert.equal(assignmentTwo.branch, null);
     assert.match(f.transport.messages[0].message, /Allowed resources: file\/agent-one\.txt \(write\)/);
     assert.match(f.transport.messages[0].message, /write worker one file/);
     assert.throws(() => assignTask({ roots: f.roots, taskId: createTask({ roots: f.roots, projectId: "fixture", brief: "conflict" }).id, owner: "worker-3", adapter: f.adapter, resources: [{ key: "file/agent-one.txt", mode: "write" }] }), ResourceBusyError);

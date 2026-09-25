@@ -1,6 +1,7 @@
 # Foreman architecture
 
-Foreman keeps global fleet state in a private file home and treats each registered project as an exact identity: the Git common directory for Git projects and the canonical root path for projects without Git.
+Foreman keeps global fleet state in a private file home and identifies each registered project by its canonical root path.
+An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
