@@ -272,7 +272,7 @@ class HerdrCliTransport {
     if (dispatchProfile?.model && dispatchProfile.model !== "default" && !agentArgs.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) {
       agentArgs.push("--model", dispatchProfile.model);
     }
-    const created = this._runJson(["workspace", "create", "--cwd", cwd, "--label", `foreman-${owner}`, "--no-focus"]);
+    const created = this._runJson(["workspace", "create", "--cwd", cwd, "--label", owner, "--no-focus"]);
     const workspaceId = created?.result?.workspace?.workspace_id || created?.result?.workspace_id;
     if (!workspaceId) throw new HerdrCompatibilityError("Herdr workspace create did not return an identity");
     try {
@@ -333,7 +333,8 @@ class HerdrCliTransport {
     if (!current.paneId) throw new HerdrCompatibilityError("Herdr endpoint has no pane identity");
     if (current.workspaceId) {
       const workspace = this._runJson(["workspace", "get", current.workspaceId])?.result?.workspace;
-      if (workspace?.label === `foreman-${endpoint}`) {
+      // Workers spawned before labels used the bare owner name carry a `foreman-` prefix.
+      if (workspace?.label === endpoint || workspace?.label === `foreman-${endpoint}`) {
         const panes = this._runJson(["pane", "list", "--workspace", current.workspaceId])?.result?.panes;
         if (panes?.length === 1 && panes[0].pane_id === current.paneId) {
           this._run(["workspace", "close", current.workspaceId]);

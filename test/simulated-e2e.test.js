@@ -97,8 +97,8 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     const assignmentTwo = assignTask({ roots: f.roots, taskId: taskTwo.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/two", mode: "write" }] });
     assert.deepEqual(f.adapter.list().map((worker) => worker.owner), ["worker-1", "worker-2"]);
     assert.deepEqual(f.transport.messages.map(({ endpoint }) => endpoint), [assignmentOne.endpoint, assignmentTwo.endpoint]);
-    assert.match(f.transport.messages[0].message, new RegExp(`Task ${taskOne.id} \\| project fixture`));
-    assert.match(f.transport.messages[1].message, new RegExp(`Task ${taskTwo.id} \\| project fixture`));
+    assert.match(f.transport.messages[0].message, new RegExp(`Foreman task ${taskOne.id} \\| project fixture`));
+    assert.match(f.transport.messages[1].message, new RegExp(`Foreman task ${taskTwo.id} \\| project fixture`));
     assert.doesNotMatch(f.transport.messages[0].message, /event emit|completion package/);
 
     report(f, assignmentOne, "progress", "worker one is halfway done");

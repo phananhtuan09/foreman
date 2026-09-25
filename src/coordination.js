@@ -80,6 +80,22 @@ function initCoordination(home) {
 
 function messageFile(home, messageId) { return path.join(coordinationDirs(home).messages, `${messageId}.json`); }
 
+// The one report contract shared by every worker prompt and the worker stop hook.
+const REPORT_COMMAND = [
+  "\"$FOREMAN_ROOT/bin/foreman\" report --status <done|blocked|progress> <<'REPORT'",
+  "<summary>",
+  "REPORT",
+  "",
+  "Choose the status:",
+  "- done: the task is complete. Summary: outcome, changed files, verification evidence, unresolved checks, risks.",
+  "- blocked: only the user can unblock you. Summary: finding, why user authority is needed, options, your recommendation.",
+  "- progress: you stopped before finishing for another reason. Summary: what is done, what remains, why you stopped.",
+  "After the command succeeds, end your turn. If it fails, include the error in your final message.",
+];
+
+const MESSAGE_TITLES = { "foreman-message": "Foreman message", "human-decision": "Human decision" };
+
+// Every worker prompt uses one fixed layout so each dispatch reads the same way.
 function deliveryPrompt(message) {
   const payload = message.payload || {};
   const plainText = (value, indent = "") => {
@@ -88,23 +104,27 @@ function deliveryPrompt(message) {
     if (Array.isArray(value)) return value.map((item) => `${indent}- ${plainText(item, `${indent}  `)}`).join("\n");
     return Object.entries(value).map(([key, item]) => `${indent}${key}: ${typeof item === "object" && item !== null ? `\n${plainText(item, `${indent}  `)}` : plainText(item)}`).join("\n");
   };
+  const section = (title, body) => ["", `## ${title}`, body];
   if (message.kind === "task-brief") {
     const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
     return [
-      `Task ${message.taskId} | project ${message.projectId}`,
+      `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
       `Workspace: ${payload.cwd}`,
+      `Branch: ${payload.branch || "current checkout"}`,
       `Allowed resources: ${resources}`,
-      "",
-      String(payload.brief || ""),
-      ...(payload.handoff ? ["", "Previous work and handoff:", plainText(payload.handoff)] : []),
-      "",
-      ...(payload.instructions || []),
+      ...section("User request", String(payload.brief || "")),
+      ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
+      ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
+      ...section("Rules", (payload.instructions || []).map((rule) => `- ${rule}`).join("\n")),
+      ...section("Report", ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
     ].join("\n");
   }
   return [
-    `${message.kind} for task ${message.taskId}`,
+    `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
+    "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
-  ].join("\n\n");
+    ...section("Report", ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+  ].join("\n");
 }
 
 function messageId({ taskId, generation, kind, payload, explicitId }) {
@@ -326,7 +346,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord,
-  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, deliveryPrompt, createMessageUnlocked,
+  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
 };

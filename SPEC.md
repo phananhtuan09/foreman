@@ -214,6 +214,7 @@ Task records live under `data/tasks/<id>/` until user acceptance:
 ```text
 data/tasks/T-000123/
 ├── brief.md          original user requirements and accepted additions
+├── notes.md          optional Foreman context for the worker, kept apart from the user's words
 ├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
 ├── decisions/        versioned Decision Packages and verbatim human responses
 ├── reports/          verbatim worker reports, one file per report
@@ -269,6 +270,10 @@ Message, decision, and report records carry correlation fields sufficient to tra
 Every Foreman-to-worker message is persisted before runtime delivery.
 The same outbox is used for task briefs, steering, follow-up requests, human decisions, and recovery instructions.
 The worker receives a concise text prompt containing the task brief and only the operational details needed to work within its lease.
+Every worker prompt is rendered by one fixed template.
+A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, `Rules`, and `Report`.
+A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
+The `Report` section carries the same report command and status guidance as the worker stop hook.
 The outbox retains the full message identity, payload, and delivery evidence privately.
 
 Each message records at least:
@@ -296,6 +301,7 @@ Workers do not acknowledge prompts; a new report or the runtime status is the ev
 It runs `foreman worker hook`, which reads the hook payload from standard input and never fails the agent.
 It stays silent unless `FOREMAN_ROOT` and `HERDR_PANE_ID` are set, the pane is bound to a `working` task, the worker has not reported since Foreman last prompted it, and the payload does not mark the stop as already continued by a stop hook.
 Otherwise it returns a block decision whose reason names the task and tells the agent to run `"$FOREMAN_ROOT/bin/foreman" report` with one of the three statuses before ending its turn.
+The hook is a safety net: every worker prompt already carries the same report command.
 It asks at most once per turn, so an agent that ignores it still stops.
 
 ### 7.9 Decision records
@@ -385,17 +391,18 @@ The dispatched brief includes:
 
 - task ID, project ID, and workspace;
 - user requirements verbatim;
+- Foreman notes, kept separate from the user's words, when Foreman adds context such as related report paths;
 - accepted follow-up decisions verbatim;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
-- required deliverable and evidence contract;
+- required deliverable and evidence contract, given as the report command and status guidance;
 - prohibition on expanding scope, changing lifecycle, or addressing the user directly;
 - permission to write only the leased project resources;
 - prohibition on `git switch`, `git reset`, `git clean`, `git merge`, and `git commit`; Git lifecycle remains client-owned.
 
 ### 9.3 Worker communication
 
-Workers report only through `foreman report`, prompted by the stop hook in section 7.8.
+Workers report only through `"$FOREMAN_ROOT/bin/foreman" report`, which every worker prompt states and the stop hook in section 7.8 repeats when a worker stops without reporting.
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form request, and a request to a `blocked` or `review-ready` task returns it to `working`.
 Workers never edit the project registry or task metadata.
 

@@ -639,8 +639,9 @@ function validateDependenciesUnlocked({ home, projectId, dependencies }) {
   for (const dependency of dependencies) visit(dependency);
 }
 
-function createTaskUnlocked({ roots, projectId, brief, type = "ship", taskType, dependencies = [] }) {
+function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [] }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
+  if (notes != null && (typeof notes !== "string" || !notes)) throw new ValidationError("Foreman notes must be non-empty text when given");
   const normalizedType = normalizeTaskType(taskType || type);
   const normalizedDependencies = normalizeDependencies(dependencies);
   initHome(roots);
@@ -648,12 +649,13 @@ function createTaskUnlocked({ roots, projectId, brief, type = "ship", taskType, 
   validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
   const id = allocateTaskId(roots.foremanHome);
   atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), brief);
+  if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
   atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, branch: null, resources: [], resourceLease: null, backend: "herdr", endpoint: null, status: "routing" });
-  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief };
+  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, notes: notes || null };
 }
 
-function createTask({ roots, projectId, brief, type = "ship", taskType, dependencies = [], routingRunner }) {
-  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, type, taskType, dependencies }));
+function createTask({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], routingRunner }) {
+  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, notes, type, taskType, dependencies }));
   const routing = routeTask({ roots, taskId: task.id, routingRunner });
   return { ...task, routing };
 }
@@ -693,14 +695,14 @@ function assertIdleEndpointReusable({ roots, adapter, endpoint, workspace, owner
 }
 
 function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint }) {
-  if (!owner) throw new ValidationError("An assignment owner is required");
-  owner = String(owner).replace(/^@/, "");
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
     const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId) });
     const actualProjectId = projectId || prior?.projectId;
     if (!actualProjectId) throw new ValidationError("Task has no project binding");
+    // The default owner names the worker after its project and task, so the Herdr sidebar identifies each task.
+    owner = owner ? String(owner).replace(/^@/, "") : `${actualProjectId}-${taskId}`.toLowerCase();
     if (prior?.projectId && projectId && prior.projectId !== projectId) throw new ValidationError("Task project binding cannot be changed");
     const project = findProject(roots.foremanHome, actualProjectId);
     const generation = prior?.status === "pending" && !prior?.resourceLease
@@ -804,9 +806,11 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
       deliveryEndpoint = endpoint;
       paneId = spawned?.paneId || inspected.paneId || null;
-      const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope."];
+      const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope.", "Change Foreman state only through the report command; put questions for the user in a blocked report."];
       if (taskType === "scout") instructions.push("Do not modify production files. This scout has read-only resource claims.");
-      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
+      const notesFile = path.join(taskDir(roots.foremanHome, taskId), "notes.md");
+      const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : null;
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, notes, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
       promptAttempted = true;
@@ -922,15 +926,7 @@ function workerStopHook({ roots, paneId, payload = {} }) {
     `You are Foreman worker @${meta.owner} on task ${meta.taskId} (project ${meta.projectId}, generation ${meta.generation}).`,
     "Before ending this turn, report to Foreman with exactly one command:",
     "",
-    "\"$FOREMAN_ROOT/bin/foreman\" report --status <done|blocked|progress> <<'REPORT'",
-    "<summary>",
-    "REPORT",
-    "",
-    "Choose the status:",
-    "- done: the task is complete. Summary: outcome, changed files, verification evidence, unresolved checks, risks.",
-    "- blocked: only the user can unblock you. Summary: finding, why user authority is needed, options, your recommendation.",
-    "- progress: you stopped before finishing for another reason. Summary: what is done, what remains, why you stopped.",
-    "After the command succeeds, end your turn. If it fails, include the error in your final message.",
+    ...coordination.REPORT_COMMAND,
   ].join("\n");
   return { decision: "block", reason };
 }
@@ -1256,7 +1252,6 @@ function dispatchReadyTasks({ roots, adapter, ownerForTask, maxConcurrency = Inf
     const limit = Object.prototype.hasOwnProperty.call(projectLimits, task.projectId) ? Number(projectLimits[task.projectId]) : Infinity;
     if ((counts.get(task.projectId) || 0) >= limit) continue;
     const owner = ownerForTask?.(task) || task.owner;
-    if (!owner) continue;
     try {
       const assignment = assignTask({ roots, taskId: task.taskId, owner, adapter, ...assignmentOptions });
       results.push(assignment);

@@ -70,6 +70,15 @@ test("resource leases allow disjoint work and block overlapping work", () => {
   } finally { f.cleanup(); }
 });
 
+test("dispatch without an owner names the worker after its project and task", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "auth" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(assignment.owner, `fixture-${task.id.toLowerCase()}`);
+  } finally { f.cleanup(); }
+});
+
 test("a resource lease is held until acceptance however long the worker takes", () => {
   const f = fixture();
   try {

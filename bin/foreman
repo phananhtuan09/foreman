@@ -36,6 +36,10 @@ function briefText() {
   const briefFile = arg("--brief-file");
   return briefFile ? fs.readFileSync(path.resolve(briefFile), "utf8") : arg("--brief");
 }
+function notesText() {
+  const notesFile = arg("--notes-file");
+  return notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : arg("--notes");
+}
 function resourceClaims() {
   const raw = arg("--resources");
   if (raw === undefined) return undefined;
@@ -51,9 +55,9 @@ const usage = [
   "  routing show",
   "  routing route --task ID",
   "  project register --id ID --root PATH [--name NAME]",
-  "  task create --project ID (--brief TEXT|--brief-file FILE) [--type ship|scout] [--dependency ID]",
+  "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
-  "  task dispatch --task ID --owner OWNER [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
+  "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
@@ -121,7 +125,7 @@ function main() {
   }
   if (command === "task" && action === "create") {
     core.initRoutingConfig({ roots: home });
-    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
     return;
   }
   if (command === "task" && action === "list") {

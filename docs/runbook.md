@@ -41,14 +41,18 @@ The hook runs `hooks/foreman-session-context.sh`, which adds unread worker repor
 bin/foreman init
 bin/foreman routing show
 bin/foreman project register --id app --root /path/to/app
-bin/foreman task create --project app --brief-file brief.md
-bin/foreman task dispatch --task T-000001 --owner worker
+bin/foreman task create --project app --brief-file brief.md [--notes-file notes.md]
+bin/foreman task dispatch --task T-000001
 bin/foreman task message --task T-000001 --text "Please add tests."
 bin/foreman task adopt --worker worker --task T-000001
 bin/foreman task recover --task T-000001
 bin/foreman task accept --task T-000001
 bin/foreman status
 ```
+
+`task dispatch` names the worker `<project>-<task>` in lowercase, such as `app-t-000001`, and uses that name as the Herdr workspace label; pass `--owner` only to override it.
+`--brief` holds the user's request verbatim; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
+Foreman adds the rules, resources, and report command to every worker prompt, so a brief does not repeat them.
 
 A worker reports from its own pane:
 
