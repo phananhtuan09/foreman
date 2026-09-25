@@ -125,8 +125,8 @@ test("runtime workers share the current branch with disjoint resource leases", a
     const acceptedTwo = acceptTask({ roots: f.roots, taskId: two.id, adapter: f.adapter });
     assert.equal(acceptedOne.deleted, true);
     assert.equal(acceptedTwo.deleted, true);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", one.id)), false);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", two.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", one.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", two.id)), false);
     assert.deepEqual(listResourceLeases({ roots: f.roots }), []);
     assert.notEqual(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), "");
   } finally {

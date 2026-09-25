@@ -71,14 +71,15 @@ Conversation memory is never authoritative operational state. After a fresh sess
 
 ### 5.2 One supervisor writer
 
-Exactly one Foreman session may mutate canonical backlog, task, assignment, decision, message lifecycle, or runtime state at a time.
+Exactly one Foreman session may mutate canonical task, assignment, decision, message lifecycle, or runtime state at a time.
 A verified home lock is required before those mutations, and a session that cannot acquire the lock remains read-only.
-The deterministic observer creates immutable pending event records in `state/events/worker/`.
+The deterministic observer creates immutable pending event records in `data/events/`.
 A worker does not write that spool directly.
 `foreman event emit` validates the current task, project, owner, generation, and endpoint, then creates the pending event itself.
 A mismatched emit is quarantined and cannot change task lifecycle.
 A worker may directly create only generation-bound inbox or acknowledgement records in its assigned paths.
-Observer and worker writers must use atomic exclusive creation and must never edit canonical task state or records owned by another writer.
+Worker writers must use atomic exclusive creation and must never edit canonical task state or records owned by another writer.
+The observer writes only while it holds the home lock.
 
 ### 5.3 Exact project binding
 
@@ -91,7 +92,7 @@ Foreman does not write product code, investigate implementation in place of a li
 ### 5.5 Human acceptance authority
 
 Worker completion moves a task to review-ready only. Only the user may accept a task.
-Acceptance verifies and stops its worker, releases its resource lease, removes the task from the backlog, and deletes its task records and task-scoped coordination records.
+Acceptance verifies and stops its worker, releases its resource lease, and deletes its task records and task-scoped coordination records.
 Acceptance retains the project workspace and does not commit, merge, reset, or remove project files.
 Foreman does not retain accepted task history.
 
@@ -140,15 +141,14 @@ foreman/
 ├── legacy/
 │   ├── foreman-agent/         preserved repo-scoped experiment
 │   └── tests/                 preserved experiment tests
-├── data/                      durable private fleet records; gitignored
-├── state/                     runtime records, locks, and events; gitignored
+├── data/                      private fleet records, coordination, and lock; gitignored
 └── projects/                  optional client-owned workspace mount; not managed by Foreman
 ```
 
 Definitions:
 
 - `FOREMAN_ROOT`: tracked source checkout containing instructions, scripts, adapters, tests, and this specification.
-- `FOREMAN_HOME`: private operational root containing `data/` and `state/`; client-owned workspaces live outside Foreman home.
+- `FOREMAN_HOME`: private operational root containing `data/`; client-owned workspaces live outside Foreman home.
 - Model routing reads the tracked `FOREMAN_ROOT/config/model-routing.json`; it does not read a same-named file in `FOREMAN_HOME`.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
@@ -184,31 +184,20 @@ Rules:
 - Initial delivery mode is `local-only`; adding `pull-request` requires its own accepted design and proof.
 - Registry writes are atomic.
 
-### 7.2 Fleet backlog
+### 7.2 Fleet task list
 
-Canonical backlog: `data/backlog.md`.
+There is no separate backlog file.
+The fleet task list is the set of task metadata records under `data/tasks/`.
+`foreman status` and `foreman task list` render it from those records.
 
 Task IDs are globally unique across projects:
 
 - `T-` identifies requested change or investigation work.
 - `B-` identifies an observed defect.
 
-Lifecycle remains intentionally small:
-
-- `[ ]`: queued and unassigned;
-- `[~]`: owned by a worker;
-- `[?]`: waiting for a user decision;
-- `[v]`: worker reports completion and waits for user acceptance.
-
-Acceptance removes the task from the backlog and task directories instead of archiving it.
-
-Each backlog item records the project ID:
-
-```markdown
-- [~] T-000123 [ai-agent-workflow] Add fleet project registry @worker-3 · 2026-09-21 15:20 · gen:2
-```
-
-Backlog order is priority. No separate priority field is introduced initially.
+Task lifecycle is the `status` field of task metadata.
+Acceptance deletes the task directory instead of archiving it.
+No separate priority field is introduced initially.
 
 ### 7.3 Task records
 
@@ -217,41 +206,30 @@ Task records live under `data/tasks/<id>/` until user acceptance:
 ```text
 data/tasks/T-000123/
 ├── brief.md          original user requirements and accepted additions
+├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, routing, connection, and observation
 ├── decisions/        versioned Decision Packages and verbatim human responses
-├── report.md         latest original blocker or completion package
-└── history.jsonl     bounded lifecycle transitions and ownership generations
+├── inbox/            generation-bound worker packages, acknowledgements, and quarantine
+└── handoff.json      latest recovery handoff, written only by dead-worker recovery
 ```
 
-Runtime records live under `state/tasks/<id>/` until user acceptance:
+Fleet-wide records live directly under `data/`:
 
 ```text
-state/tasks/T-000123/
-├── meta.json         project, owner, generation, workspace, branch, resources, backend, endpoint
-├── progress          latest normalized operational snapshot
-└── inbox/            generation-bound worker packages and acknowledgements
-```
-
-Fleet-wide coordination records live under `state/`:
-
-```text
-state/
+data/
+├── .lock/            home lock
+├── projects.json     project registry
+├── sequence.json     next task ID
+├── observer.json     running observer process, present only while it runs
+├── tasks/            task records
 ├── messages/         durable Foreman-to-worker outbox and message lifecycle
-├── events/
-│   └── worker/       durable events grouped by task id
-│       └── T-000123/
-│           └── E-<eventId>.json
-├── connections/      derived worker registry and one record per assignment
-│   ├── registry.json
-│   └── T-000123-<owner>.json
-├── wake/
-│   └── foreman.json  wake signal for the Foreman session
-└── observer/         deterministic observation cursor
+└── events/           durable events grouped by task id
+    ├── T-000123/
+    │   └── E-<eventId>.json
+    └── _fleet/       events that have no task
 ```
 
-Events that have no task live under `state/events/worker/_fleet/`.
-
-The active task brief and decisions live in `data/`. Runtime coordination lives in `state/`.
-Acceptance removes the task-specific records from both directories and its task messages, events, worker connection, and observer entry.
+The latest completion report is the completion package that `meta.json` references in the task inbox.
+Acceptance removes the task directory and its task messages and events.
 The project workspace stays on disk.
 
 ### 7.4 Assignment generation
@@ -260,7 +238,9 @@ Each ownership change increments `generation` in task metadata. Every prompt, re
 
 ### 7.5 Progress snapshot
 
-`state/tasks/<id>/progress` stores only the latest normalized snapshot:
+The latest progress snapshot is the newest progress or blocker package in the task inbox.
+Foreman keeps no separate copy.
+A progress package uses these fields after its identity header:
 
 ```text
 TASK: T-000123
@@ -275,9 +255,6 @@ BLOCKER: none
 PROOF: reproduction observed; post-fix scenario not run
 AFFECTED FILES: bin/foreman-dispatch
 COMPLETION STATE: working
-
-RAW PACKAGE
-<latest original worker package>
 ```
 
 Unknown values are `-`; Foreman never fills gaps by inference.
@@ -322,7 +299,7 @@ Legacy acknowledgement records remain identity-checked when encountered.
 
 ### 7.8 Durable wake queue
 
-The event spool is `state/events/worker/<taskId>/<eventId>.json`.
+The event spool is `data/events/<taskId>/<eventId>.json`.
 The file name is the stable event ID, so two observations of different evidence do not overwrite each other.
 Each event record keeps its own lifecycle: `pending`, `processing`, or `handled`.
 
@@ -336,18 +313,16 @@ Each event records at least:
 - normalized evidence and its source;
 - lifecycle timestamps and handling result.
 
-The observer persists an event before attempting to wake Foreman.
+The observer persists an event before it wakes the event handlers.
 Foreman claims a pending event by exclusively creating the sibling claim file `<eventId>.json.claim`, then marking the record `processing`, while holding the home lock.
 It applies the event idempotently, marks it `handled`, and removes the claim.
 An expired processing claim returns the record to `pending` during restart reconciliation.
 A stale claim left on a still-pending record is removed during the same recovery.
 Handled events are retained for a bounded audit period and are then removed.
 
-Wake delivery writes `state/wake/foreman.json` after the event is durable.
-That file is a signal, not the queue.
-It records whether any event is pending, the pending count, and the latest event identity.
-A failed or overwritten wake signal does not change or delete the pending event.
-Foreman restart drains the event records even when the wake file was lost.
+The pending event records are the only wake signal; no separate wake file is kept.
+A failed wake does not change or delete the pending event.
+Foreman restart drains the pending event records.
 
 Deduplication uses stable task, generation, event type, and evidence identity rather than event text alone.
 A duplicate wake may occur, but applying the same event more than once must not repeat a lifecycle transition or runtime action.
@@ -359,9 +334,6 @@ Workers cannot emit `message.*` or `task.*` supervisor events.
 The same payload for the same assignment is stored once.
 `blocked` and `done` still require a valid structured package before task lifecycle advances.
 An emitted event alone does not apply that transition.
-
-Legacy files under `state/events/pending`, `state/events/processing`, and `state/events/handled` are moved into the task spool on startup.
-They are not a second queue.
 
 ### 7.9 Decision records
 
@@ -390,9 +362,9 @@ When a dependency reaches its required terminal state, the scheduler reevaluates
 
 ### 7.11 Worker registry
 
-`state/connections/registry.json` is derived state.
-Foreman is its only writer, and it writes the file under the home lock.
-Each current assignment also has `state/connections/<taskId>-<owner>.json`.
+Each current assignment keeps a `connection` record in its task metadata.
+Foreman is its only writer, and it writes the record under the home lock.
+The worker registry is derived from those records when it is read and is not stored separately.
 The registry key is the runtime endpoint.
 Each entry records the task ID, status, last heartbeat, pid, generation, last acknowledgement, and adapter.
 `totalActive` counts entries whose status is `active`.
@@ -401,8 +373,8 @@ Assignment registers the worker as `active`.
 A valid acknowledgement updates `lastAck`.
 Reconciliation refreshes status from runtime classification.
 Runtime state `working` is stored as `active`.
-Endpoint release or replacement retires the previous record and removes it from `registry.json`.
-Acceptance deletes the completed worker connection record.
+A new assignment generation replaces the previous connection record.
+Acceptance deletes the connection record with the task directory.
 
 `dead` requires explicit terminal runtime evidence.
 `missing` requires a successful runtime listing that omits the expected endpoint after the configured confirmation window.
@@ -470,7 +442,7 @@ Routine progress responses are returned through the runtime output and normalize
 Terminal blocker and completion packages are also written to the assigned generation-bound inbox path so they survive a missing Foreman session.
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7.
 
-Workers never edit the fleet backlog, project registry, task metadata, or another assignment's inbox.
+Workers never edit the project registry, task metadata, or another assignment's inbox.
 
 ### 9.4 Scheduling and concurrency
 
@@ -490,7 +462,7 @@ Every Foreman session starts with one bounded pass:
 
 1. resolve `FOREMAN_ROOT` and `FOREMAN_HOME`;
 2. acquire and verify the exclusive home lock;
-3. read the project registry and active backlog;
+3. read the project registry and active task metadata;
 4. apply valid generation-bound inbox packages;
 5. drain durable observer events;
 6. list Herdr runtime state once;
@@ -500,12 +472,13 @@ Every Foreman session starts with one bounded pass:
 10. ensure the observer is active while supervised work remains;
 11. report only approvals, decisions, material anomalies, and requested detail.
 
-Foreman does not continuously poll with an LLM after a turn. A deterministic observer writes durable events and wakes Foreman only for actionable changes.
+Foreman does not continuously poll with an LLM after a turn. A deterministic observer writes durable events and runs the event handlers only when actionable events are pending.
 
 ### 10.1 Deterministic observer
 
-The observer contains no LLM call and performs no task, decision, or backlog mutation.
-It observes runtime endpoints and generation-bound worker files, compares them with its last durable observation, and emits an event only for a state change, mismatch, elapsed threshold, or other actionable condition.
+The observer contains no LLM call and performs no decision mutation.
+Under the home lock, it applies worker acknowledgements and records its observation evidence and connection status in task metadata.
+It observes runtime endpoints and generation-bound worker files, compares them with the last observation in task metadata, and emits an event only for a state change, mismatch, elapsed threshold, or other actionable condition.
 No model tokens are consumed while no actionable event exists.
 
 The observer distinguishes `working`, `idle`, `blocked`, `done`, `dead`, `missing`, and `unknown` only from defined evidence:
@@ -523,8 +496,8 @@ Endpoint, owner, project, workspace, or generation mismatch produces an anomaly 
 
 ### 10.2 Wake behavior
 
-After persisting an actionable event, the observer writes `state/wake/foreman.json` and attempts a bounded wake through the configured local wake mechanism.
-`WakeManager` watches the wake directory and invokes the Foreman session when the signal reports a pending event.
+After each observation pass that leaves pending events, the observer loop runs restart reconciliation, which drains the events through the production handlers.
+Wakes are spaced by at least one observation interval.
 The Foreman session does not poll for work.
 Wake failure does not change or delete the pending event.
 Repeated observations of the same evidence reuse the event deduplication identity and do not create an unbounded queue.
@@ -532,7 +505,7 @@ Repeated observations of the same evidence reuse the event deduplication identit
 ### 10.3 Restart and fleet reconciliation
 
 Startup reconciliation is deterministic and independent of conversation history.
-It acquires the home lock, validates schemas, loads the project registry and active backlog, reconstructs active tasks, applies valid worker inbox and acknowledgement records, recovers expired processing events, drains the wake queue, and lists runtime workers once.
+It acquires the home lock, validates schemas, loads the project registry and active task metadata, reconstructs active tasks, applies valid worker inbox and acknowledgement records, recovers expired processing events, drains the wake queue, and lists runtime workers once.
 
 For each active task it reconciles project, owner, generation, endpoint, workspace, branch, resource lease, pending messages, disk state, and runtime state.
 It reports or emits actionable state for a missing worker, endpoint mismatch, stale generation, missing workspace, invalid lease, or orphan runtime worker.
@@ -554,7 +527,7 @@ The reconciliation logic is shared by startup, event handling, and explicit full
 
 1. Persist the user's wording under a new global task ID.
 2. Bind the task to one registered project.
-3. Add it to the backlog in requested order.
+3. Record its task metadata.
 4. Record dependencies without assigning work prematurely.
 5. Dispatch only when the task is unblocked and a suitable runtime lane exists.
 
@@ -566,7 +539,7 @@ The reconciliation logic is shared by startup, event handling, and explicit full
 4. Persist the brief, pending assignment, and task-brief outbox message before runtime delivery.
 5. Spawn the worker through the Herdr adapter.
 6. Verify stable endpoint identity and deliver the persisted task-brief message.
-7. After Herdr accepts the text prompt, Foreman marks the task `[~]` and arms supervision.
+7. After Herdr accepts the text prompt, Foreman marks the task `working` and arms supervision.
 8. A delayed, passive endpoint inspection records the worker state. If submission is uncertain, Foreman preserves the endpoint and records the uncertainty without resending or interrupting it.
 
 ### 11.4 Adopt existing worker
@@ -587,8 +560,8 @@ The human response is stored verbatim and delivered through the durable outbox t
 ### 11.6 Completion and acceptance
 
 Worker completion produces a Completion Package containing outcome, changed surface, direct evidence, unresolved checks, risk, and delivery state.
-Foreman moves the task to `[v]` and waits for the user.
-Acceptance verifies the worker endpoint is stopped, releases the resource lease, removes the backlog item, and deletes the task records and task-scoped coordination records.
+Foreman moves the task to `review-ready` and waits for the user.
+Acceptance verifies the worker endpoint is stopped, releases the resource lease, and deletes the task records and task-scoped coordination records.
 The project workspace remains on disk, and no accepted task history is kept.
 
 ### 11.7 Dead worker and handoff

@@ -104,7 +104,7 @@ test("real child workers complete a direct assignment and survive observer/resta
     const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
     assert.equal(message.status, "delivered");
     assert.equal(assignment.status, "working");
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "working");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "working");
     await f.transport.wait(assignment.endpoint);
     assert.equal(fs.readFileSync(path.join(f.one, "worker-real.out"), "utf8"), "worker-real completed\n");
 
@@ -122,12 +122,12 @@ test("real child workers complete a direct assignment and survive observer/resta
 
     const completion = packageFor(task, assignment, "completion", "runtime worker verified completion");
     recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workerStopped, true);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });
 
@@ -141,7 +141,7 @@ test("dead child recovery preserves handoff state and rejects stale completion",
     assert.equal(before.tasks.find((item) => item.taskId === task.id).state, "dead");
     const replacement = recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "replacement", adapter: f.adapter });
     assert.equal(replacement.generation, 2);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).owner, "replacement");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).owner, "replacement");
     const stale = packageFor(task, first, "completion", "stale completion");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw: stale, type: "completion" }), StaleGenerationError);
     await f.transport.wait(replacement.endpoint);

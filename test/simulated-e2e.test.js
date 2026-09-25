@@ -132,12 +132,9 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     assert.equal(assignmentOne.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(assignmentTwo.workspace, fs.realpathSync(f.projectRoot));
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", taskOne.id)), false);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", taskTwo.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", taskTwo.id)), false);
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split(/\n/).filter((line) => line.startsWith("worktree ")).length, 1);
 
-    const backlog = fs.readFileSync(path.join(f.roots.foremanHome, "data", "backlog.md"), "utf8");
-    assert.equal(backlog.includes(taskOne.id), false);
-    assert.equal(backlog.includes(taskTwo.id), false);
     assert.equal(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain"], { encoding: "utf8" }), cleanBefore);
   } finally {
     f.cleanup();

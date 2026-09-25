@@ -74,8 +74,11 @@ function validateEventRecord(event, id) {
   return event;
 }
 
+function taskDir(home, taskId) { return path.join(home, "data", "tasks", taskId); }
+function metaFile(home, taskId) { return path.join(taskDir(home, taskId), "meta.json"); }
+
 function quarantineExternal({ roots, taskId, name, raw, reason }) {
-  const dir = path.join(roots.foremanHome, "state", "tasks", taskId, "inbox", "quarantine");
+  const dir = path.join(taskDir(roots.foremanHome, taskId), "inbox", "quarantine");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const safe = String(name || "record").replace(/[^a-zA-Z0-9._-]/g, "_");
   let file = path.join(dir, `${Date.now()}-${safe}`);
@@ -87,19 +90,14 @@ function quarantineExternal({ roots, taskId, name, raw, reason }) {
 
 function coordinationDirs(home) {
   return {
-    messages: path.join(home, "state", "messages"),
-    events: path.join(home, "state", "events"),
-    workerEvents: path.join(home, "state", "events", "worker"),
-    connections: path.join(home, "state", "connections"),
-    wake: path.join(home, "state", "wake"),
-    observer: path.join(home, "state", "observer"),
+    messages: path.join(home, "data", "messages"),
+    events: path.join(home, "data", "events"),
   };
 }
 
 function initCoordination(home) {
   const dirs = coordinationDirs(home);
-  for (const key of ["messages", "workerEvents", "connections", "wake", "observer"]) fs.mkdirSync(dirs[key], { recursive: true, mode: 0o700 });
-  migrateLegacyEvents(home);
+  for (const key of ["messages", "events"]) fs.mkdirSync(dirs[key], { recursive: true, mode: 0o700 });
   return dirs;
 }
 
@@ -116,7 +114,7 @@ function deliveryEnvelope({ roots, message }) {
     endpoint: message.endpoint,
     kind: message.kind,
     payloadDigest: message.payloadDigest,
-    ackPath: path.join(roots.foremanHome, "state", "tasks", message.taskId, "inbox", `generation-${message.generation}-ack-${message.messageId}.json`),
+    ackPath: path.join(taskDir(roots.foremanHome, message.taskId), "inbox", `generation-${message.generation}-ack-${message.messageId}.json`),
     payload: message.payload,
   };
 }
@@ -157,29 +155,7 @@ function safeToken(value, label) {
 function eventBucket(taskId) { return taskId ? safeToken(taskId, "Event task") : "_fleet"; }
 
 function workerEventFile(home, taskId, id) {
-  return path.join(coordinationDirs(home).workerEvents, eventBucket(taskId), `${safeToken(id, "Event")}.json`);
-}
-
-function connectionFile(home, taskId, worker) {
-  return path.join(coordinationDirs(home).connections, `${safeToken(taskId, "Task")}-${safeToken(worker, "Worker")}.json`);
-}
-
-function migrateLegacyEvents(home) {
-  for (const state of ["pending", "processing", "handled"]) {
-    const dir = path.join(home, "state", "events", state);
-    if (!fs.existsSync(dir)) continue;
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith(".json")) continue;
-      const from = path.join(dir, name);
-      let event;
-      try { event = readJson(from); } catch (_) { continue; }
-      if (!event?.eventId) continue;
-      const target = workerEventFile(home, event.taskId, event.eventId);
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-      if (fs.existsSync(target)) { try { fs.unlinkSync(from); } catch (_) {} continue; }
-      try { fs.renameSync(from, target); } catch (_) {}
-    }
-  }
+  return path.join(coordinationDirs(home).events, eventBucket(taskId), `${safeToken(id, "Event")}.json`);
 }
 
 function messageId({ taskId, generation, kind, payload, explicitId }) {
@@ -258,7 +234,7 @@ function acknowledgeMessage({ roots, messageId: id, ack }) {
       if (!ack || ack.messageId !== id || ack.taskId !== message.taskId || ack.projectId !== message.projectId || ack.worker !== message.worker || Number(ack.generation) !== message.generation || ack.payloadDigest !== message.payloadDigest) {
         throw new MessageValidationError("Acknowledgement identity or payload digest does not match the message");
       }
-      const taskFile = path.join(roots.foremanHome, "state", "tasks", message.taskId, "meta.json");
+      const taskFile = metaFile(roots.foremanHome, message.taskId);
       if (!fs.existsSync(taskFile)) throw new MessageValidationError("Acknowledgement task metadata is missing");
       const meta = validateTaskMetaRecord(readJson(taskFile), message.taskId);
       if (meta.projectId !== message.projectId || meta.owner !== message.worker || meta.generation !== message.generation || meta.endpoint !== message.endpoint) {
@@ -325,7 +301,7 @@ function retryMessagesUnlocked({ roots, adapter, force = false, maxAgeMs = 24 * 
   const messages = listMessages({ roots, statuses: ["pending"] });
   const results = [];
   for (const message of messages) {
-    const metaFilePath = path.join(roots.foremanHome, "state", "tasks", message.taskId, "meta.json");
+    const metaFilePath = metaFile(roots.foremanHome, message.taskId);
     if (!fs.existsSync(metaFilePath)) {
       results.push(failMessageUnlocked({ roots, messageId: message.messageId, reason: "task metadata is missing" }));
       continue;
@@ -363,7 +339,7 @@ function eventId(input) {
 }
 
 function findEventFile(home, id) {
-  const root = coordinationDirs(home).workerEvents;
+  const root = coordinationDirs(home).events;
   if (!fs.existsSync(root)) return null;
   for (const bucket of fs.readdirSync(root)) {
     const dir = path.join(root, bucket);
@@ -376,7 +352,7 @@ function findEventFile(home, id) {
 
 function walkWorkerEvents(home) {
   initCoordination(home);
-  const root = coordinationDirs(home).workerEvents;
+  const root = coordinationDirs(home).events;
   const events = [];
   if (!fs.existsSync(root)) return events;
   for (const bucket of fs.readdirSync(root)) {
@@ -395,7 +371,7 @@ function createObserverEvent({ roots, eventType, dedupKey, taskId, projectId, wo
   if (!eventType || !dedupKey) throw new EventValidationError("Event type and deduplication key are required");
   initCoordination(roots.foremanHome);
   if (taskId) {
-    const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
+    const taskMetaFile = metaFile(roots.foremanHome, taskId);
     if (fs.existsSync(taskMetaFile)) {
       const taskMeta = validateTaskMetaRecord(readJson(taskMetaFile), taskId);
       if (projectId && taskMeta.projectId !== projectId) throw new EventValidationError("Event project does not match the task project");
@@ -403,25 +379,16 @@ function createObserverEvent({ roots, eventType, dedupKey, taskId, projectId, wo
   }
   const id = eventId({ eventType, dedupKey, taskId, generation, evidence });
   const existing = findEventFile(roots.foremanHome, id);
-  if (existing) {
-    const duplicate = { event: validateEventRecord(readJson(existing), id), duplicate: true };
-    signalWake(roots);
-    return duplicate;
-  }
+  if (existing) return { event: validateEventRecord(readJson(existing), id), duplicate: true };
   const file = workerEventFile(roots.foremanHome, taskId, id);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const event = { schemaVersion: 1, eventId: id, dedupKey, taskId: taskId || null, projectId: projectId || null, worker: worker || null, generation: generation === undefined ? null : Number(generation), endpoint: endpoint || null, eventType, observedAt, source, evidence: evidence || null, status: "pending", createdAt: isoNow(), processingStartedAt: null, handledAt: null, handlingResult: null };
   try {
     const fd = fs.openSync(file, "wx", 0o600);
     try { fs.writeFileSync(fd, `${JSON.stringify(event, null, 2)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    const created = { event: validateEventRecord(event, id), duplicate: false };
-    signalWake(roots);
-    return created;
+    return { event: validateEventRecord(event, id), duplicate: false };
   } catch (error) {
-    if (error.code === "EEXIST") {
-      signalWake(roots);
-      return { event: validateEventRecord(readJson(file), id), duplicate: true };
-    }
+    if (error.code === "EEXIST") return { event: validateEventRecord(readJson(file), id), duplicate: true };
     throw error;
   }
 }
@@ -438,26 +405,6 @@ function readClaim(file) {
   if (!fs.existsSync(claim)) return null;
   try { return { ...readJson(claim), file: claim, mtimeMs: fs.statSync(claim).mtimeMs }; }
   catch (_) { return { file: claim, mtimeMs: fs.statSync(claim).mtimeMs }; }
-}
-
-function signalWake(roots) {
-  initCoordination(roots.foremanHome);
-  const pending = walkWorkerEvents(roots.foremanHome)
-    .filter((event) => event.status === "pending")
-    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.eventId.localeCompare(right.eventId));
-  const latest = pending[pending.length - 1] || null;
-  const signal = { schemaVersion: 1, version: 1, pending: pending.length > 0, pendingCount: pending.length, lastEventId: latest ? latest.eventId : null, lastEventType: latest ? latest.eventType : null, taskId: latest ? latest.taskId : null, updatedAt: isoNow() };
-  atomicJson(path.join(coordinationDirs(roots.foremanHome).wake, "foreman.json"), signal);
-  return signal;
-}
-
-function readWakeSignal(roots) {
-  const file = path.join(roots.foremanHome, "state", "wake", "foreman.json");
-  if (!fs.existsSync(file)) return null;
-  const signal = readJson(file);
-  assertSchemaVersion(signal, "Wake signal");
-  if (!Number.isInteger(signal.pendingCount) || signal.pendingCount < 0 || signal.pending !== signal.pendingCount > 0) throw new SchemaValidationError("Wake signal is invalid");
-  return signal;
 }
 
 function drainWakeQueue({ roots, handler, limit = 100, eventFilter } = {}) {
@@ -499,7 +446,6 @@ function drainWakeQueue({ roots, handler, limit = 100, eventFilter } = {}) {
     });
     if (next) processed.push(next);
   }
-  signalWake(roots);
   return processed;
 }
 
@@ -545,40 +491,8 @@ function retainHandledEvents({ roots, maxAgeMs = 7 * 24 * 60 * 60 * 1000 }) {
   return removed;
 }
 
-function readConnectionFiles(home) {
-  const dir = coordinationDirs(home).connections;
-  if (!fs.existsSync(dir)) return [];
-  const records = [];
-  for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith(".json") || name === "registry.json") continue;
-    const record = readJson(path.join(dir, name));
-    assertSchemaVersion(record, "Worker connection", { field: "taskId", value: record.taskId });
-    if (!record.worker || !Number.isInteger(record.generation) || !record.projectId) throw new SchemaValidationError(`Worker connection identity is invalid: ${name}`);
-    records.push(record);
-  }
-  return records;
-}
-
-function writeRegistryUnlocked(home) {
-  const workers = {};
-  for (const record of readConnectionFiles(home)) {
-    if (record.retiredAt || record.status === "retired") continue;
-    const key = record.endpoint || record.worker;
-    workers[key] = { taskId: record.taskId, status: record.status, lastHeartbeat: record.lastHeartbeat || null, pid: record.pid ?? null, generation: record.generation, lastAck: record.lastAck ?? null, adapter: record.adapter || "herdr" };
-  }
-  const registry = { schemaVersion: 1, version: 1, totalActive: Object.values(workers).filter((item) => item.status === "active").length, lastUpdated: isoNow(), workers };
-  atomicJson(path.join(coordinationDirs(home).connections, "registry.json"), registry);
-  return registry;
-}
-
 function purgeTaskRecordsUnlocked({ roots, taskId }) {
   const dirs = initCoordination(roots.foremanHome);
-  readConnectionFiles(roots.foremanHome);
-  const taskBucket = path.join(dirs.workerEvents, eventBucket(taskId));
-  const observerFile = path.join(dirs.observer, "last-observation.json");
-  let observation = null;
-  try { if (fs.existsSync(observerFile)) observation = readJson(observerFile); } catch (_) {}
-
   for (const name of fs.readdirSync(dirs.messages)) {
     if (!name.endsWith(".json")) continue;
     const file = path.join(dirs.messages, name);
@@ -588,35 +502,18 @@ function purgeTaskRecordsUnlocked({ roots, taskId }) {
       // Preserve malformed external records for later inspection.
     }
   }
-
-  fs.rmSync(taskBucket, { recursive: true, force: true });
-  for (const name of fs.readdirSync(dirs.connections)) {
-    if (!name.endsWith(".json") || name === "registry.json") continue;
-    const file = path.join(dirs.connections, name);
-    try {
-      if (readJson(file).taskId === taskId) fs.unlinkSync(file);
-    } catch (_) {
-      // Preserve malformed external records for later inspection.
-    }
-  }
-  writeRegistryUnlocked(roots.foremanHome);
-
-  if (observation && Array.isArray(observation.tasks)) {
-    const tasks = observation.tasks.filter((item) => item.taskId !== taskId);
-    atomicJson(observerFile, { ...observation, taskCount: tasks.length, tasks });
-  }
-
-  signalWake(roots);
+  fs.rmSync(path.join(dirs.events, eventBucket(taskId)), { recursive: true, force: true });
 }
 
+// The worker registry is derived from each assignment's connection record in its task metadata.
 function readWorkerRegistry(roots) {
-  initCoordination(roots.foremanHome);
-  const file = path.join(coordinationDirs(roots.foremanHome).connections, "registry.json");
-  if (!fs.existsSync(file)) return { schemaVersion: 1, version: 1, totalActive: 0, lastUpdated: null, workers: {} };
-  const registry = readJson(file);
-  assertSchemaVersion(registry, "Worker registry");
-  if (registry.version !== 1 || !Number.isInteger(registry.totalActive) || !registry.workers || typeof registry.workers !== "object") throw new SchemaValidationError("Worker registry is invalid");
-  return registry;
+  const workers = {};
+  for (const { meta } of activeTaskMetas(roots)) {
+    if (!meta.connection || !meta.owner || !meta.endpoint) continue;
+    const connection = meta.connection;
+    workers[meta.endpoint] = { taskId: meta.taskId, status: connection.status, lastHeartbeat: connection.lastHeartbeat ?? null, pid: connection.pid ?? null, generation: meta.generation, lastAck: connection.lastAck ?? null, adapter: connection.adapter || meta.backend || "herdr" };
+  }
+  return { schemaVersion: 1, version: 1, totalActive: Object.values(workers).filter((item) => item.status === "active").length, workers };
 }
 
 function registryStatus(runtimeState) {
@@ -625,91 +522,56 @@ function registryStatus(runtimeState) {
   return "unknown";
 }
 
-function registerWorkerUnlocked({ roots, taskId, projectId, worker, endpoint, generation, status = "active", pid, lastAck, adapter = "herdr", lastHeartbeat } = {}) {
-  if (!taskId || !projectId || !worker || !Number.isInteger(Number(generation))) throw new EventValidationError("Worker registration identity is incomplete");
-  initCoordination(roots.foremanHome);
-  const home = roots.foremanHome;
-  const file = connectionFile(home, taskId, worker);
-  let previous = {};
-  if (fs.existsSync(file)) {
-    previous = readJson(file);
-    assertSchemaVersion(previous, "Worker connection", { field: "taskId", value: taskId });
-  }
-  for (const record of readConnectionFiles(home)) {
-    if (record.taskId !== taskId || record.worker === worker || record.retiredAt) continue;
-    atomicJson(connectionFile(home, record.taskId, record.worker), { ...record, status: "retired", retiredAt: isoNow() });
-  }
-  const next = {
-    schemaVersion: 1,
-    version: 1,
-    taskId,
-    projectId,
-    worker,
-    endpoint: endpoint === undefined ? (previous.endpoint || null) : endpoint,
+function readCurrentAssignment(roots, taskId, worker, generation) {
+  const file = metaFile(roots.foremanHome, taskId);
+  if (!fs.existsSync(file)) throw new EventValidationError("Worker task does not exist");
+  const meta = validateTaskMetaRecord(readJson(file), taskId);
+  if (!meta.owner || meta.owner !== worker || meta.generation !== Number(generation)) throw new EventValidationError("Worker identity does not match the current assignment");
+  return { file, meta };
+}
+
+function registerWorkerUnlocked({ roots, taskId, worker, generation, status = "active", pid, lastAck, adapter = "herdr", lastHeartbeat } = {}) {
+  if (!taskId || !worker || !Number.isInteger(Number(generation))) throw new EventValidationError("Worker registration identity is incomplete");
+  const { file, meta } = readCurrentAssignment(roots, taskId, worker, generation);
+  const previous = meta.connection || {};
+  const connection = {
     status,
-    lastHeartbeat: lastHeartbeat === undefined ? (previous.lastHeartbeat || null) : lastHeartbeat,
+    lastHeartbeat: lastHeartbeat === undefined ? (previous.lastHeartbeat ?? null) : lastHeartbeat,
     pid: Number.isInteger(pid) ? pid : (previous.pid ?? null),
-    generation: Number(generation),
     lastAck: lastAck === undefined ? (previous.lastAck ?? null) : lastAck,
     adapter: adapter || previous.adapter || "herdr",
-    updatedAt: isoNow(),
-    retiredAt: null,
   };
-  atomicJson(file, next);
-  return { record: next, registry: writeRegistryUnlocked(home) };
+  atomicJson(file, { ...meta, connection });
+  return { record: { taskId, projectId: meta.projectId, worker, endpoint: meta.endpoint, generation: meta.generation, ...connection }, registry: readWorkerRegistry(roots) };
 }
 
-function retireWorkerUnlocked({ roots, taskId, worker }) {
-  initCoordination(roots.foremanHome);
-  const file = connectionFile(roots.foremanHome, taskId, worker);
-  if (fs.existsSync(file)) {
-    const current = readJson(file);
-    assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
-    if (!current.retiredAt) atomicJson(file, { ...current, status: "retired", retiredAt: isoNow() });
-  }
-  return writeRegistryUnlocked(roots.foremanHome);
-}
-
+// Returns the task metadata as persisted after recording the acknowledgement.
 function noteWorkerAckUnlocked({ roots, taskId, worker, generation, messageId }) {
-  const file = connectionFile(roots.foremanHome, taskId, worker);
+  const file = metaFile(roots.foremanHome, taskId);
   if (!fs.existsSync(file)) return null;
-  const current = readJson(file);
-  assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
-  if (current.retiredAt || Number(current.generation) !== Number(generation)) return null;
-  atomicJson(file, { ...current, lastAck: messageId, updatedAt: isoNow() });
-  return writeRegistryUnlocked(roots.foremanHome);
+  const meta = validateTaskMetaRecord(readJson(file), taskId);
+  if (!meta.connection || meta.owner !== worker || meta.generation !== Number(generation)) return meta;
+  const next = { ...meta, connection: { ...meta.connection, lastAck: messageId } };
+  atomicJson(file, next);
+  return next;
 }
 
 function recordHeartbeatUnlocked({ roots, taskId, worker, generation, pid, endpoint }) {
   if (!taskId || !worker || !Number.isInteger(Number(generation))) throw new EventValidationError("Heartbeat identity is incomplete");
-  const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
+  const taskMetaFile = metaFile(roots.foremanHome, taskId);
   if (!fs.existsSync(taskMetaFile)) throw new EventValidationError("Heartbeat task does not exist");
   const meta = validateTaskMetaRecord(readJson(taskMetaFile), taskId);
   if (meta.owner !== worker || meta.generation !== Number(generation) || (endpoint && meta.endpoint !== endpoint)) {
     quarantineExternal({ roots, taskId, name: "heartbeat.json", raw: JSON.stringify({ taskId, worker, generation, pid: pid ?? null, endpoint: endpoint || null }), reason: "heartbeat identity does not match the current assignment" });
     throw new EventValidationError("Heartbeat identity does not match the current assignment");
   }
-  const file = connectionFile(roots.foremanHome, taskId, worker);
-  if (!fs.existsSync(file)) throw new EventValidationError("Worker is not registered");
-  const current = readJson(file);
-  assertSchemaVersion(current, "Worker connection", { field: "taskId", value: taskId });
-  if (current.retiredAt || current.status === "retired") throw new EventValidationError("Retired worker cannot record a heartbeat");
-  return registerWorkerUnlocked({ roots, taskId, projectId: meta.projectId, worker, endpoint: meta.endpoint, generation: meta.generation, status: current.status, pid: Number.isInteger(pid) ? pid : current.pid, lastAck: current.lastAck ?? null, adapter: current.adapter || meta.backend || "herdr", lastHeartbeat: isoNow() });
-}
-
-function syncRegistryUnlocked({ roots, tasks }) {
-  for (const item of tasks || []) {
-    const meta = item.meta;
-    if (!meta?.owner || !meta.taskId || !Number.isInteger(meta.generation) || meta.generation < 1 || !meta.endpoint) continue;
-    const runtimePid = Number.isInteger(item.worker?.pid) ? item.worker.pid : undefined;
-    registerWorkerUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, endpoint: meta.endpoint, generation: meta.generation, status: registryStatus(item.state), pid: runtimePid, adapter: meta.backend || "herdr" });
-  }
-  return writeRegistryUnlocked(roots.foremanHome);
+  if (!meta.connection) throw new EventValidationError("Worker is not registered");
+  return registerWorkerUnlocked({ roots, taskId, worker, generation: meta.generation, status: meta.connection.status, pid: Number.isInteger(pid) ? pid : meta.connection.pid, lastAck: meta.connection.lastAck ?? null, adapter: meta.connection.adapter || meta.backend || "herdr", lastHeartbeat: isoNow() });
 }
 
 function emitWorkerEventUnlocked({ roots, taskId, projectId, eventType, worker, generation, endpoint, payload }) {
   initCoordination(roots.foremanHome);
-  const taskMetaFile = path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json");
+  const taskMetaFile = metaFile(roots.foremanHome, taskId);
   if (!fs.existsSync(taskMetaFile)) throw new EventValidationError("Event task does not exist");
   const meta = validateTaskMetaRecord(readJson(taskMetaFile), taskId);
   const typeToken = String(eventType || "");
@@ -726,12 +588,10 @@ function emitWorkerEventUnlocked({ roots, taskId, projectId, eventType, worker, 
 }
 
 function activeTaskMetas(roots) {
-  const root = path.join(roots.foremanHome, "state", "tasks");
+  const root = path.join(roots.foremanHome, "data", "tasks");
   if (!fs.existsSync(root)) return [];
-  return fs.readdirSync(root).filter((id) => fs.existsSync(metaPath(roots, id))).map((taskId) => ({ taskId, meta: validateTaskMetaRecord(readJson(metaPath(roots, taskId)), taskId) }));
+  return fs.readdirSync(root).filter((id) => fs.existsSync(metaFile(roots.foremanHome, id))).map((taskId) => ({ taskId, meta: validateTaskMetaRecord(readJson(metaFile(roots.foremanHome, taskId)), taskId) }));
 }
-
-function metaPath(roots, taskId) { return path.join(roots.foremanHome, "state", "tasks", taskId, "meta.json"); }
 
 function runtimeWorkerFor(meta, workers) {
   if (meta.endpoint) return workers.find((worker) => worker.endpoint === meta.endpoint || worker.endpointId === meta.endpoint || worker.name === meta.endpoint || worker.agent === meta.endpoint || worker.pane_id === meta.endpoint);
@@ -762,15 +622,6 @@ function classifyRuntime(meta, worker, { requirePackage = true } = {}) {
   return "unknown";
 }
 
-function readLastObservation(roots) {
-  const file = path.join(coordinationDirs(roots.foremanHome).observer, "last-observation.json");
-  if (!fs.existsSync(file)) return { observedAt: null, tasks: [] };
-  const record = readJson(file);
-  assertSchemaVersion(record, "Observer observation");
-  if (!Array.isArray(record.tasks)) throw new SchemaValidationError("Observer observation tasks are invalid");
-  return record;
-}
-
 function taskConsistencyEvidence({ roots, meta, messages }) {
   const issues = [];
   const evidence = { project: true, workspace: true, branch: true, lease: true, messages: true, inbox: true, generation: true, endpoint: true };
@@ -796,13 +647,10 @@ function taskConsistencyEvidence({ roots, meta, messages }) {
     evidence.project = false; issues.push({ type: "task.project-invalid", reason: error.message });
   }
   if (meta.resourceLease) {
-    try {
-      const state = readJson(path.join(roots.foremanHome, "state", "resources.json"));
-      const lease = (state.leases || []).find((item) => item.leaseId === meta.resourceLease.leaseId);
-      if (!lease || lease.taskId !== meta.taskId || lease.owner !== meta.owner || Number(lease.generation) !== Number(meta.generation) || (lease.expiresAt && lease.expiresAt <= Date.now())) {
-        evidence.lease = false; issues.push({ type: "task.resource-lease-invalid", reason: "lease identity or expiry does not match" });
-      }
-    } catch (error) { evidence.lease = false; issues.push({ type: "task.resource-lease-invalid", reason: error.message }); }
+    const lease = meta.resourceLease;
+    if (lease.taskId !== meta.taskId || lease.owner !== meta.owner || Number(lease.generation) !== Number(meta.generation) || (lease.expiresAt && lease.expiresAt <= Date.now())) {
+      evidence.lease = false; issues.push({ type: "task.resource-lease-invalid", reason: "lease identity or expiry does not match" });
+    }
   } else if (["working", "pending-ack", "blocked", "waiting-decision"].includes(meta.status)) {
     evidence.lease = false; issues.push({ type: "task.resource-lease-missing", reason: "active assignment has no resource lease" });
   }
@@ -811,7 +659,7 @@ function taskConsistencyEvidence({ roots, meta, messages }) {
       evidence.messages = false; issues.push({ type: "task.message-stale", messageId: message.messageId, reason: "message identity does not match current assignment" });
     }
   }
-  const inbox = path.join(roots.foremanHome, "state", "tasks", meta.taskId, "inbox");
+  const inbox = path.join(taskDir(roots.foremanHome, meta.taskId), "inbox");
   if (fs.existsSync(inbox)) {
     for (const name of fs.readdirSync(inbox)) {
       if (name === "quarantine" || name.endsWith(".tmp")) continue;
@@ -840,8 +688,6 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
   initCoordination(roots.foremanHome);
   let workers = [];
   if (adapter && typeof adapter.list === "function") workers = adapter.list() || [];
-  const previous = readLastObservation(roots);
-  const previousTasks = new Map((previous.tasks || []).map((item) => [item.taskId, item]));
   const messages = listMessages({ roots });
   const states = [];
   for (const { taskId, meta } of activeTaskMetas(roots)) {
@@ -853,7 +699,7 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
     if (worker?.branch && meta.branch && worker.branch !== meta.branch) consistency.issues.push({ type: "task.runtime-branch-mismatch", expected: meta.branch, actual: worker.branch });
     if (consistency.issues.some((issue) => issue.type.startsWith("task.runtime-"))) consistency.evidence.endpoint = false;
     let state = classifyRuntime(meta, worker, { requirePackage: requireCompletionPackage });
-    const prior = previousTasks.get(taskId);
+    const prior = meta.observation;
     let missingSince = prior?.missingSince || null;
     let missingCount = Number(prior?.missingCount || 0);
     if (!worker && meta.endpoint) {
@@ -868,8 +714,9 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
     if (consistency.issues.length && state !== "dead" && state !== "missing") state = "unknown";
     const item = { taskId, meta, worker, state, consistency: consistency.evidence, issues: consistency.issues, missingSince, missingCount };
     states.push(item);
+    const currentEvidence = { generation: meta.generation, consistency: consistency.evidence, worker: worker || null };
+    persistObservationUnlocked({ roots, taskId, observation: { state, evidence: currentEvidence, missingSince, missingCount }, runtimePid: worker?.pid });
     if (emitEvents) {
-      const currentEvidence = { generation: meta.generation, consistency: consistency.evidence, worker: worker || null };
       const transition = !prior || prior.state !== state || digest(prior.evidence || {}) !== digest(currentEvidence);
       if (transition && ["missing", "dead", "mismatch", "unknown", "blocked", "done", "idle"].includes(state)) {
         createObserverEvent({ roots, eventType: `worker.${state}`, dedupKey: `${taskId}:${meta.generation}:${meta.endpoint || "none"}:${state}:${digest(worker || { state, consistency: consistency.evidence })}`, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, evidence: { worker: worker || null, consistency: consistency.evidence, issues: consistency.issues, missingSince, missingCount }, source: "reconciliation" });
@@ -883,29 +730,34 @@ function reconcileFleetUnlocked({ roots, adapter, emitEvents = true, missingConf
     const endpoint = worker.endpoint || worker.endpointId || worker.pane_id || worker.name;
     if (endpoint && !boundWorkers.has(worker) && !knownEndpoints.has(endpoint) && emitEvents) createObserverEvent({ roots, eventType: "worker.orphan", dedupKey: `orphan:${endpoint}`, worker: worker.owner || worker.name, endpoint, evidence: worker, source: "reconciliation" });
   }
-  syncRegistryUnlocked({ roots, tasks: states });
   return { workers, tasks: states };
+}
+
+// Observation evidence and the derived connection status live in task metadata; unchanged records are not rewritten.
+function persistObservationUnlocked({ roots, taskId, observation, runtimePid }) {
+  const file = metaFile(roots.foremanHome, taskId);
+  const current = validateTaskMetaRecord(readJson(file), taskId);
+  const next = { ...current, observation };
+  if (current.owner && current.endpoint && Number.isInteger(current.generation) && current.generation >= 1) {
+    const previous = current.connection || { lastHeartbeat: null, pid: null, lastAck: null, adapter: current.backend || "herdr" };
+    next.connection = { ...previous, status: registryStatus(observation.state), pid: Number.isInteger(runtimePid) ? runtimePid : (previous.pid ?? null) };
+  }
+  if (digest(next) !== digest(current)) atomicJson(file, next);
 }
 
 function reconcileFleet({ roots, adapter, emitEvents = true, missingConfirmationMs = 1000, requireCompletionPackage = true }) {
   const { withHomeLock } = require("./foreman");
-  return withHomeLock(roots.foremanHome, () => {
-    const result = reconcileFleetUnlocked({ roots, adapter, emitEvents, missingConfirmationMs, requireCompletionPackage });
-    atomicJson(path.join(coordinationDirs(roots.foremanHome).observer, "last-observation.json"), { schemaVersion: 1, observedAt: isoNow(), taskCount: result.tasks.length, workerCount: result.workers.length, tasks: result.tasks.map(({ taskId, meta, state, consistency, missingSince, missingCount, worker }) => ({ taskId, state, evidence: { generation: meta.generation, consistency, worker: worker || null }, missingSince, missingCount })) });
-    return result;
-  });
+  return withHomeLock(roots.foremanHome, () => reconcileFleetUnlocked({ roots, adapter, emitEvents, missingConfirmationMs, requireCompletionPackage }));
 }
 
 function observeOnce({ roots, adapter, missingConfirmationMs = 1000, inboxSettleMs = 2000 }) {
   const { withHomeLock, reconcileInboxUnlocked } = require("./foreman");
-  const result = withHomeLock(roots.foremanHome, () => {
+  return withHomeLock(roots.foremanHome, () => {
     // Workers write acknowledgements without emitting an event, so each pass applies new ones.
     // Files are written in place; leave ones that may still be in progress for a later pass.
     for (const { taskId } of activeTaskMetas(roots)) reconcileInboxUnlocked({ roots, taskId, settleMs: inboxSettleMs, acknowledgementsOnly: true });
     return reconcileFleetUnlocked({ roots, adapter, emitEvents: true, missingConfirmationMs });
   });
-  atomicJson(path.join(coordinationDirs(roots.foremanHome).observer, "last-observation.json"), { schemaVersion: 1, observedAt: isoNow(), taskCount: result.tasks.length, workerCount: result.workers.length, tasks: result.tasks.map(({ taskId, meta, state, consistency, missingSince, missingCount, worker }) => ({ taskId, state, evidence: { generation: meta.generation, consistency, worker: worker || null }, missingSince, missingCount })) });
-  return result;
 }
 
 class DeterministicObserver {
@@ -949,47 +801,23 @@ class DeterministicObserver {
   }
 }
 
-class WakeManager {
-  constructor({ roots, onWake } = {}) {
-    this.roots = roots;
-    this.onWake = onWake;
-    this.watcher = null;
-    this.timer = null;
-    this.running = false;
+// Latest progress or blocker package in the task inbox, or null when the worker has reported neither.
+function latestProgressPackage(home, taskId) {
+  const inbox = path.join(taskDir(home, taskId), "inbox");
+  if (!fs.existsSync(inbox)) return null;
+  let latest = null;
+  for (const name of fs.readdirSync(inbox)) {
+    if (!/^generation-\d+-(progress|blocker)\.md$/.test(name)) continue;
+    const file = path.join(inbox, name);
+    const mtimeMs = fs.statSync(file).mtimeMs;
+    if (!latest || mtimeMs > latest.mtimeMs) latest = { file, mtimeMs };
   }
-
-  start() {
-    if (this.running) return this;
-    initCoordination(this.roots.foremanHome);
-    this.running = true;
-    const dir = coordinationDirs(this.roots.foremanHome).wake;
-    const scheduleWake = () => {
-      if (!this.running) return;
-      clearTimeout(this.timer);
-      this.timer = setTimeout(() => {
-        try {
-          const signal = readWakeSignal(this.roots);
-          if (signal?.pendingCount > 0 && typeof this.onWake === "function") this.onWake(signal);
-        } catch (_) {}
-      }, 30);
-    };
-    this.watcher = fs.watch(dir, scheduleWake);
-    scheduleWake();
-    return this;
-  }
-
-  stop() {
-    this.running = false;
-    clearTimeout(this.timer);
-    if (this.watcher) this.watcher.close();
-    this.watcher = null;
-  }
+  return latest ? fs.readFileSync(latest.file, "utf8") : null;
 }
 
 function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
-  const dir = path.join(roots.foremanHome, "data", "tasks", taskId);
-  const state = path.join(roots.foremanHome, "state", "tasks", taskId);
-  const meta = validateTaskMetaRecord(readJson(path.join(state, "meta.json")), taskId);
+  const dir = taskDir(roots.foremanHome, taskId);
+  const meta = validateTaskMetaRecord(readJson(metaFile(roots.foremanHome, taskId)), taskId);
   const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
   const decisionsDir = path.join(dir, "decisions");
   const decisions = fs.existsSync(decisionsDir) ? fs.readdirSync(decisionsDir).filter((name) => name.endsWith(".json")).sort().map((name) => {
@@ -998,8 +826,8 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     if (decision.taskId !== taskId || decision.projectId !== meta.projectId || typeof decision.generation !== "number" || decision.generation > meta.generation) throw new SchemaValidationError(`Decision identity is stale: ${name}`);
     return decision;
   }) : [];
-  const evidenceFile = path.join(state, "evidence.json");
-  const unresolvedFile = path.join(state, "unresolved-checks.json");
+  const evidenceFile = path.join(dir, "evidence.json");
+  const unresolvedFile = path.join(dir, "unresolved-checks.json");
   return {
     schemaVersion: 1,
     handoffId: `H-${taskId}-${meta.generation}-${digest(`${taskId}:${meta.generation}:${reason}`).slice(0, 16)}`,
@@ -1011,9 +839,8 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     reason,
     brief: read(path.join(dir, "brief.md")),
     decisions,
-    decisionsVerbatim: read(path.join(dir, "decisions.md")),
-    progress: read(path.join(state, "progress")),
-    report: read(path.join(dir, "report.md")),
+    progress: latestProgressPackage(roots.foremanHome, taskId),
+    report: meta.completionPackage ? read(meta.completionPackage) : null,
     workspace: meta.workspace,
     branch: meta.branch,
     resources: meta.resources || [],
@@ -1028,9 +855,9 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, EventValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord, validateEventRecord, quarantineExternal,
-  digest, initCoordination, coordinationDirs, messageFile, deliveryEnvelope, deliveryPrompt, createMessageUnlocked, createMessage,
+  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, deliveryEnvelope, deliveryPrompt, createMessageUnlocked, createMessage,
   updateMessageUnlocked, acknowledgeMessage, listMessages, markMessageDeliveryUnlocked, retryMessages, retryMessagesUnlocked, failMessageUnlocked,
   eventId, createObserverEvent, listEvents, drainWakeQueue, recoverProcessingEvents, recoverProcessingEventsUnlocked, retainHandledEvents,
-  signalWake, readWakeSignal, registerWorkerUnlocked, retireWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, syncRegistryUnlocked, readWorkerRegistry, emitWorkerEventUnlocked, purgeTaskRecordsUnlocked,
-  observeOnce, DeterministicObserver, WakeManager, reconcileFleet, reconcileFleetUnlocked, classifyRuntime, buildHandoffPackage,
+  registerWorkerUnlocked, noteWorkerAckUnlocked, recordHeartbeatUnlocked, readWorkerRegistry, emitWorkerEventUnlocked, purgeTaskRecordsUnlocked,
+  observeOnce, DeterministicObserver, reconcileFleet, reconcileFleetUnlocked, classifyRuntime, buildHandoffPackage, latestProgressPackage,
 };

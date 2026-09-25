@@ -18,7 +18,7 @@ bin/foreman status
 ```
 
 `task accept` is the final task action.
-It stops the worker endpoint, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/` and `state/tasks/`.
+It stops the worker endpoint, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk, and accepted tasks are not archived.
 
 Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
@@ -32,7 +32,7 @@ An older `FOREMAN_HOME/config/model-routing.json` is ignored, so copy any custom
 
 `command` accepts either an argument array or a shell-like string, but Foreman always executes it without a shell.
 The command executable must match `tool`, and model flags belong in `model` rather than `command`.
-Every task is routed during creation, and the decision is stored at `state/tasks/<taskId>/routing.json` before scheduling.
+Every task is routed during creation, and the decision is stored in `data/tasks/<taskId>/meta.json` before scheduling.
 If the router fails or returns an unknown profile, Foreman uses only the configured `default` and records the failure.
 Use `routing route --task <id>` to resume a task left in `routing` after an interrupted process.
 
@@ -50,9 +50,9 @@ The task brief tells the worker how to acknowledge, where to write its completio
 A delivered but unacknowledged message is redelivered only after a 5-minute acknowledgement timeout that doubles per attempt, and it fails at its attempt limit.
 `observer run` is the foreground loop used by `observer start`.
 
-If a worker is missing, wait for the configured confirmation window and inspect the pending `worker.missing` event and `handoff.json`.
+If a worker is missing, wait for the configured confirmation window and inspect the pending `worker.missing` event and `data/tasks/<id>/handoff.json`.
 Recovery is bounded and preserves the workspace; it does not guess that an `unknown` endpoint is dead.
-Quarantined files are kept verbatim under `state/tasks/<id>/inbox/quarantine/` for inspection.
+Quarantined files are kept verbatim under `data/tasks/<id>/inbox/quarantine/` for inspection.
 
-Do not delete `data/` or `state/` while work is active.
+Do not delete `data/` while work is active.
 Pull-request delivery, remote homes, relay channels, additional runtime backends, and merge authority are deferred.

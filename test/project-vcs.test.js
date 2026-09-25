@@ -87,7 +87,7 @@ test("acceptance deletes task records and releases a ship lease in a project wit
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workspaceRetained, root);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });
 

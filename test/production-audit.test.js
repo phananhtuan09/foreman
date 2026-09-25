@@ -81,7 +81,7 @@ test("an event without a handler stays pending and production reconcile follows 
     f.workers.get(assignment.endpoint).status = "dead";
     const before = f.counts();
     const result = restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
-    const meta = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8"));
+    const meta = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8"));
     assert.equal(meta.generation, 2);
     assert.equal(meta.owner, "worker-recovery");
     assert.ok(result.handled.some((event) => event.eventType === "worker.dead" && event.status === "handled"));
@@ -101,7 +101,7 @@ test("unknown runtime evidence is reported and does not spawn a replacement", ()
     const before = f.counts().spawns;
     restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
     assert.equal(f.counts().spawns, before);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).generation, assignment.generation);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).generation, assignment.generation);
     assert.equal(listEvents({ roots: f.roots, state: "handled" }).some((event) => event.eventType === "worker.unknown"), true);
   } finally { f.cleanup(); }
 });
@@ -152,7 +152,7 @@ test("adoption binds an active unassigned worker without resending the task", ()
     assert.equal(adopted.briefMessageId, undefined);
     assert.equal(f.counts().sends, sendsBefore);
     assert.equal(f.counts().spawns, spawnsBefore);
-    assert.match(fs.readFileSync(path.join(f.roots.foremanHome, "data", "backlog.md"), "utf8"), /\[~\] T-/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", adopted.taskId, "meta.json"), "utf8")).status, "working");
     assert.throws(() => adoptExistingWorker({ roots: f.roots, adapter: f.adapter, worker: "codex-1", brief: "second", projectId: "alpha", explicit: true }), /already assigned/);
     f.workers.set("idle-1", { endpoint: "idle-1", owner: "idle-1", cwd, status: "idle" });
     assert.throws(() => adoptExistingWorker({ roots: f.roots, adapter: f.adapter, worker: "idle-1", brief: "not active", projectId: "alpha", explicit: true }), /active runtime/);
@@ -170,7 +170,7 @@ test("an unmodified scout still reaches review-ready", () => {
     const clean = packageFor(task, assignment, "completion", "no files changed");
     const unchanged = recordPackage({ roots: f.roots, taskId: task.id, raw: clean, type: "completion" });
     assert.equal(unchanged.type, "completion");
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
   } finally { f.cleanup(); }
 });
 
@@ -194,17 +194,17 @@ test("scout guard fail-closes when the scout writes a production file", () => {
     fs.writeFileSync(path.join(f.alphaRoot, "sneak.txt"), "scout wrote this\n");
     const raw = packageFor(task, assignment, "completion", "claimed no edits");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw, type: "completion" }), /Scout modified production files/);
-    const meta = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8"));
+    const meta = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8"));
     assert.equal(meta.status, "working");
-    const violation = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "scout-violation.json"), "utf8"));
+    const violation = meta.scoutViolation;
     assert.equal(violation.violation.reason, "workspace-changed");
     assert.match(violation.violation.actual.status, /sneak\.txt/);
-    const quarantine = path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox", "quarantine");
+    const quarantine = path.join(f.roots.foremanHome, "data", "tasks", task.id, "inbox", "quarantine");
     assert.ok(fs.readdirSync(quarantine).some((name) => fs.readFileSync(path.join(quarantine, name), "utf8").includes("claimed no edits")));
     meta.status = "review-ready";
-    meta.completionPackage = path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox", "generation-1-completion.md");
+    meta.completionPackage = path.join(f.roots.foremanHome, "data", "tasks", task.id, "inbox", "generation-1-completion.md");
     fs.writeFileSync(meta.completionPackage, raw);
-    fs.writeFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+    fs.writeFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
     assert.throws(() => acceptTask({ roots: f.roots, taskId: task.id }), /Scout modified production files/);
   } finally { f.cleanup(); }
 });
@@ -220,8 +220,8 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
     assert.notEqual(alphaAssignment.endpoint, betaAssignment.endpoint);
     const cross = packageFor({ id: beta.id, projectId: "alpha" }, betaAssignment, "completion", "cross project");
     assert.throws(() => recordPackage({ roots: f.roots, taskId: beta.id, raw: cross, type: "completion" }), /does not match the current assignment/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", beta.id, "meta.json"), "utf8")).status, "working");
-    const betaQuarantine = path.join(f.roots.foremanHome, "state", "tasks", beta.id, "inbox", "quarantine");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", beta.id, "meta.json"), "utf8")).status, "working");
+    const betaQuarantine = path.join(f.roots.foremanHome, "data", "tasks", beta.id, "inbox", "quarantine");
     assert.ok(fs.readdirSync(betaQuarantine).some((name) => fs.readFileSync(path.join(betaQuarantine, name), "utf8").includes("cross project")));
 
     const listsBefore = f.counts().lists;
@@ -257,9 +257,9 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
     registry.projects.find((project) => project.id === "beta").root = fs.realpathSync(f.betaRoot);
     fs.writeFileSync(registryFile, `${JSON.stringify(registry, null, 2)}\n`);
 
-    const betaMetaPath = path.join(f.roots.foremanHome, "state", "tasks", beta.id, "meta.json");
+    const betaMetaPath = path.join(f.roots.foremanHome, "data", "tasks", beta.id, "meta.json");
     const betaMeta = JSON.parse(fs.readFileSync(betaMetaPath, "utf8"));
-    const completionPackage = path.join(f.roots.foremanHome, "state", "tasks", beta.id, "inbox", "generation-1-completion.md");
+    const completionPackage = path.join(f.roots.foremanHome, "data", "tasks", beta.id, "inbox", "generation-1-completion.md");
     fs.mkdirSync(path.dirname(completionPackage), { recursive: true });
     fs.writeFileSync(completionPackage, packageFor(beta, { ...betaAssignment, owner: betaMeta.owner }, "completion", "beta done"));
     const moved = { ...betaMeta, status: "review-ready", completionPackage, workspace: fs.realpathSync(f.alphaRoot) };
@@ -267,7 +267,7 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
     const stopsBefore = f.counts().stops;
     assert.throws(() => acceptTask({ roots: f.roots, taskId: beta.id, adapter: f.adapter }), CleanupRefusedError);
     assert.equal(f.counts().stops, stopsBefore);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id, "meta.json"), "utf8")).endpoint, alphaAssignment.endpoint);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", alpha.id, "meta.json"), "utf8")).endpoint, alphaAssignment.endpoint);
     fs.writeFileSync(betaMetaPath, `${JSON.stringify(betaMeta, null, 2)}\n`);
 
     f.workers.get(alphaAssignment.endpoint).status = "idle";
@@ -276,9 +276,9 @@ test("two projects stay isolated across concurrent assignment, restart, status, 
     recordPackage({ roots: f.roots, taskId: alpha.id, raw: packageFor(alpha, alphaAssignment, "completion", "alpha done"), type: "completion" });
     const accepted = acceptTask({ roots: f.roots, taskId: alpha.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "tasks", alpha.id)), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", alpha.id)), false);
     assert.throws(() => assignTask({ roots: f.roots, taskId: next.id, owner: "alpha-worker", adapter: f.adapter, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/next", mode: "write" }] }), /endpoint|idle|missing/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", next.id, "meta.json"), "utf8")).status, "queued");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", next.id, "meta.json"), "utf8")).status, "queued");
     const otherProject = createTask({ roots: f.roots, projectId: "beta", brief: "cannot reuse alpha endpoint" });
     assert.throws(() => assignTask({ roots: f.roots, taskId: otherProject.id, owner: "alpha-worker", adapter: f.adapter, workspacePath: f.betaRoot, reuseEndpoint: alphaAssignment.endpoint, resources: [{ key: "file/beta-next", mode: "write" }] }), /workspace|project|idle|endpoint/);
     const spawnsBefore = f.counts().spawns;
@@ -304,7 +304,7 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
     const listed = execFileSync(process.execPath, [bin, "task", "list"], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome }, encoding: "utf8" });
     assert.match(listed, /Cần bạn duyệt/);
     assert.doesNotMatch(listed, /^\s*\{/);
-    const taskMetaFile = path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json");
+    const taskMetaFile = path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json");
     const taskMeta = JSON.parse(fs.readFileSync(taskMetaFile, "utf8"));
     fs.writeFileSync(taskMetaFile, `${JSON.stringify({ ...taskMeta, endpoint: null }, null, 2)}\n`);
     const accepted = execFileSync(process.execPath, [bin, "task", "accept", "--task", task.id], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome }, encoding: "utf8" });
@@ -321,7 +321,7 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
     const runningAssignment = assignTask({ roots: f.roots, taskId: running.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/other", mode: "write" }] });
     loop.push(runObserverLoop({ roots: f.roots, adapter: f.adapter, intervalMs: 500 }));
     loop[0].stop();
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "state", "observer", "supervisor.json")), false);
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "observer.json")), false);
   } finally {
     for (const item of loop) { try { item.stop(); } catch (_) {} }
     f.cleanup();

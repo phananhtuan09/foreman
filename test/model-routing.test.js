@@ -178,7 +178,9 @@ test("task creation always routes and persists the selected worker profile", () 
     assert.equal(meta.dispatchProfile.tool, "claude");
     assert.deepEqual(meta.dispatchProfile.command, ["claude", "--dangerously-skip-permissions", "--effort", "high"]);
     assert.equal(meta.dispatchProfile.model, "claude-opus");
-    const record = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "routing.json"), "utf8"));
+    assert.equal(meta.routingSource, "router");
+    assert.equal(meta.routingReason, "Broad architectural work.");
+    const record = task.routing;
     assert.equal(record.profile, "claude-deep");
     assert.equal(record.reason, "Broad architectural work.");
     assert.match(record.configDigest, /^[a-f0-9]{64}$/);

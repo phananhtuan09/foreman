@@ -7,7 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage,
   acceptTask,
-  reconcileInbox, readWorkerRegistry, listEvents, readWakeSignal,
+  reconcileInbox, readWorkerRegistry, listEvents,
 } = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 
@@ -56,7 +56,7 @@ test("live Herdr runtime dispatches a real worker and acceptance removes its tas
     }
     assert.equal(status === "dead" || status === "missing", false, `live worker exited before producing artifact: ${status}`);
     assert.equal(connected, true, "live worker did not send a heartbeat and event through the Foreman connection");
-    assert.equal(readWakeSignal(roots).pending, true);
+    assert.ok(listEvents({ roots, state: "pending" }).length > 0);
     assert.equal(fs.readFileSync(path.join(project, "file", "live-artifact.txt"), "utf8"), "foreman-live-ok\n");
     const report = [`TASK: ${task.id}`, `PROJECT: live`, `AGENT: ${owner}`, `GENERATION: ${assignment.generation}`, "TYPE: completion", "", `Live Herdr status: ${adapter.inspect(assignment.endpoint).status}`, "Artifact exists in the bound workspace."].join("\n");
     recordPackage({ roots, taskId: task.id, raw: report, type: "completion" });
@@ -64,7 +64,7 @@ test("live Herdr runtime dispatches a real worker and acceptance removes its tas
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workspaceRetained, fs.realpathSync(project));
     assert.equal(fs.existsSync(path.join(home, "data", "tasks", task.id)), false);
-    assert.equal(fs.existsSync(path.join(home, "state", "tasks", task.id)), false);
+    assert.equal(fs.existsSync(path.join(home, "data", "tasks", task.id)), false);
     assert.notEqual(execFileSync("git", ["-C", project, "status", "--porcelain"], { encoding: "utf8" }), "");
   } finally {
     if (assignment && adapter) {

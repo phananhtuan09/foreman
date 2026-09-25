@@ -29,7 +29,7 @@ Project code changes belong to assigned workers in their leased workspaces.
 ## Supervisor invariants
 
 - The canonical operational home is selected by `FOREMAN_HOME`.
-  Its `data/` and `state/` directories are private runtime state and must not be edited by workers.
+  Its `data/` directory is private runtime state and must not be edited by workers.
 - Every active JSON record is versioned and identity-bound.
   Acquire the home lock before canonical mutations.
 - A worker may write only its generation-bound inbox/package paths and its leased project resources.

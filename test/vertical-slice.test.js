@@ -8,7 +8,7 @@ const {
   HomeLock, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, ResourceBusyError,
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
   recordPackage, reconstructTask, acceptTask,
-  claimResources, releaseResources, renewResources, listResourceLeases,
+  renewResources, listResourceLeases,
   validateWorkspace,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
@@ -61,14 +61,15 @@ test("atomic persistence leaves a complete file and no temporary file", () => {
 test("resource leases allow disjoint work and block overlapping work", () => {
   const f = fixture();
   try {
-    const first = claimResources({ roots: f.roots, taskId: "T-1", generation: 1, owner: "worker-1", resources: [{ key: "file/src/auth/**", mode: "write" }] });
-    assert.throws(() => claimResources({ roots: f.roots, taskId: "T-2", generation: 1, owner: "worker-2", resources: [{ key: "file/src/auth/login", mode: "read" }] }), ResourceBusyError);
-    const second = claimResources({ roots: f.roots, taskId: "T-2", generation: 1, owner: "worker-2", resources: [{ key: "db/users/record/2", mode: "write" }] });
-    assert.equal(listResourceLeases({ roots: f.roots }).length, 2);
-    assert.equal(renewResources({ roots: f.roots, leaseId: first.leaseId }).leaseId, first.leaseId);
-    assert.equal(releaseResources({ roots: f.roots, leaseId: first.leaseId }), 1);
-    assert.equal(releaseResources({ roots: f.roots, leaseId: second.leaseId }), 1);
-    assert.deepEqual(listResourceLeases({ roots: f.roots }), []);
+    const one = createTask({ roots: f.roots, projectId: "fixture", brief: "auth" });
+    const two = createTask({ roots: f.roots, projectId: "fixture", brief: "users" });
+    const first = assignTask({ roots: f.roots, taskId: one.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/src/auth/**", mode: "write" }] }).resourceLease;
+    assert.throws(() => assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/auth/login", mode: "read" }] }), ResourceBusyError);
+    const second = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "db/users/record/2", mode: "write" }] }).resourceLease;
+    assert.deepEqual(listResourceLeases({ roots: f.roots }).map((lease) => lease.leaseId).sort(), [first.leaseId, second.leaseId].sort());
+    const renewed = renewResources({ roots: f.roots, leaseId: first.leaseId });
+    assert.equal(renewed.leaseId, first.leaseId);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "data", "tasks", one.id, "meta.json"), "utf8")).resourceLease.expiresAt, renewed.expiresAt);
   } finally { f.cleanup(); }
 });
 
@@ -93,7 +94,7 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "implement slice" });
     const meta = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: new HerdrAdapter({ transport: f.adapter }) });
-    const active = JSON.parse(fs.readFileSync(path.join(f.home, "state", "tasks", task.id, "meta.json"), "utf8"));
+    const active = JSON.parse(fs.readFileSync(path.join(f.home, "data", "tasks", task.id, "meta.json"), "utf8"));
     assert.equal(meta.generation, 1);
     assert.equal(meta.projectId, "fixture");
     assert.equal(active.status, "working");
@@ -111,7 +112,7 @@ test("stale generation package is rejected and quarantined", () => {
     assignTask({ roots: f.roots, taskId: task.id, owner: "worker-2", adapter: f.adapter });
     const stale = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: completion\n\nold`;
     assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw: stale, type: "completion" }), StaleGenerationError);
-    assert.ok(fs.readdirSync(path.join(f.home, "state", "tasks", task.id, "inbox", "quarantine")).length > 0);
+    assert.ok(fs.readdirSync(path.join(f.home, "data", "tasks", task.id, "inbox", "quarantine")).length > 0);
   } finally { f.cleanup(); }
 });
 
@@ -130,8 +131,7 @@ test("completion, acceptance, and restart reconstruction end by deleting task re
     assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id)), true);
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
-    assert.equal(fs.readFileSync(path.join(f.home, "data", "backlog.md"), "utf8").includes(task.id), false);
     assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id)), false);
-    assert.equal(fs.existsSync(path.join(f.home, "state", "tasks", task.id)), false);
+    assert.deepEqual(listResourceLeases({ roots: f.roots }), []);
   } finally { f.cleanup(); }
 });

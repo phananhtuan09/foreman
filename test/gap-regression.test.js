@@ -50,13 +50,13 @@ test("restart applies a valid direct inbox completion before its single runtime 
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "restart inbox" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const inbox = path.join(f.roots.foremanHome, "state", "tasks", task.id, "inbox");
+    const inbox = path.join(f.roots.foremanHome, "data", "tasks", task.id, "inbox");
     const completion = packageFor(task, assignment, "completion", "durable completion");
     fs.writeFileSync(path.join(inbox, "generation-1-completion.md"), completion);
     const result = restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
     assert.equal(f.lists, 1);
     assert.equal(result.inbox.applied.length, 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
   } finally { f.cleanup(); }
 });
 
@@ -65,7 +65,7 @@ test("message retry fails once at its bound and emits one durable actionable eve
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "retry" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const messageFile = path.join(f.roots.foremanHome, "state", "messages", `${assignment.briefMessageId}.json`);
+    const messageFile = path.join(f.roots.foremanHome, "data", "messages", `${assignment.briefMessageId}.json`);
     const message = JSON.parse(fs.readFileSync(messageFile, "utf8"));
     message.status = "pending";
     message.attempts = message.maxAttempts - 1;
@@ -86,7 +86,7 @@ test("unsupported profile fails before spawn and explicit fallback is forwarded 
     assert.throws(() => assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, dispatchProfile: { name: "full", model: "unsupported" } }), ValidationError);
     const fallback = { name: "agent-only", agentKind: "codex" };
     const assigned = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, dispatchProfile: { name: "full", model: "unsupported" }, fallbackDispatchProfile: fallback });
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).dispatchProfile, fallback);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).dispatchProfile, fallback);
     assert.equal(assigned.dispatchProfile.name, "agent-only");
   } finally { f.cleanup(); }
 });
@@ -103,7 +103,7 @@ test("dead recovery sends a durable inspect-first handoff and bounds repeated at
     const handoffMessage = listMessages({ roots: f.roots }).find((item) => item.kind === "recovery-handoff");
     assert.equal(handoffMessage.generation, 2);
     assert.equal(handoffMessage.payload.inspectFirst, replacement.handoff.inspectFirst);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "handoff.json"), "utf8")).schemaVersion, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "handoff.json"), "utf8")).schemaVersion, 1);
   } finally { f.cleanup(); }
 });
 
@@ -147,7 +147,6 @@ test("startup migrates legacy home records and accepts an external linked worktr
   try {
     fs.writeFileSync(path.join(f.roots.foremanHome, "data", "projects.json"), JSON.stringify({ version: 1, projects: [{ id: "fixture", name: "Fixture", root: f.project, defaultBranch: "main", deliveryMode: "local-only", enabled: true }] }));
     fs.writeFileSync(path.join(f.roots.foremanHome, "data", "sequence.json"), JSON.stringify({ task: 1 }));
-    fs.writeFileSync(path.join(f.roots.foremanHome, "state", "resources.json"), JSON.stringify({ version: 1, leases: [] }));
     initHome(f.roots);
     assert.equal(findProject(f.roots.foremanHome, "fixture").id, "fixture");
     assert.equal(listResourceLeases({ roots: f.roots }).length, 0);
@@ -181,7 +180,7 @@ test("the observer loop skips a pass while another process holds the home lock",
   const f = fixture();
   const observer = new DeterministicObserver({ roots: f.roots, adapter: f.adapter, intervalMs: 100 });
   try {
-    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    const lock = path.join(f.roots.foremanHome, "data", ".lock");
     fs.mkdirSync(lock);
     observer.start();
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -211,14 +210,14 @@ test("a worker follows the brief reporting contract and wakes Foreman", () => {
     execFileSync("/bin/sh", ["-c", doneCommand], { stdio: "pipe" });
     assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.taskId === task.id && event.eventType === "worker.done").length, 1);
     restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "state", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
   } finally { f.cleanup(); }
 });
 
 test("a command waits briefly for another process to release the home lock", () => {
   const f = fixture();
   try {
-    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    const lock = path.join(f.roots.foremanHome, "data", ".lock");
     fs.mkdirSync(lock);
     const holder = require("node:child_process").spawn(process.execPath, ["-e", `setTimeout(() => require("node:fs").rmSync(${JSON.stringify(lock)}, { recursive: true }), 300)`], { stdio: "ignore" });
     try { assert.equal(withHomeLock(f.roots.foremanHome, () => "acquired"), "acquired"); } finally { holder.kill(); }
@@ -228,7 +227,7 @@ test("a command waits briefly for another process to release the home lock", () 
 test("an abandoned home lock is recovered only when its owner is provably gone", () => {
   const f = fixture();
   try {
-    const lock = path.join(f.roots.foremanHome, "state", ".lock");
+    const lock = path.join(f.roots.foremanHome, "data", ".lock");
     const holdLock = (owner, ageMs = 0) => {
       fs.rmSync(lock, { recursive: true, force: true });
       fs.mkdirSync(lock);
