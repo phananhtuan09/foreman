@@ -1,0 +1,16 @@
+{
+  "description": "Foreman project prompt context",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$(git rev-parse --show-toplevel)/hooks/foreman-session-context.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

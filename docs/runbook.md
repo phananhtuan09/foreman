@@ -31,9 +31,9 @@ It speaks the stop-hook contract that Claude Code and Codex 0.156+ share (`stop_
 The script's header comment has the exact Claude Code and Codex configuration; Codex also needs the new hook approved once in an interactive session.
 omp uses JavaScript extensions through `--hook`, so omp workers are not covered yet.
 
-The Foreman session's prompt hook is already configured for Claude Code in `.claude/settings.json`.
-It runs `hooks/foreman-session-context.sh`, which adds unread worker reports and status anomalies to each prompt that does not start with `DEV`.
-For a Codex Foreman session, add the same script as a global `UserPromptSubmit` hook; its header comment has the configuration, and it stays silent in sessions outside the Foreman checkout.
+The Foreman session's prompt hook is configured for Claude Code in `.claude/settings.json` and for Codex at project scope in `.codex/hooks.json`.
+Codex hook support is enabled for this project in `.codex/config.toml`; the project must be trusted, and the hook must be reviewed in `/hooks` before it runs.
+The hook runs `hooks/foreman-session-context.sh`, which adds unread worker reports and status anomalies to prompts that do not start with `DEV`.
 
 ## Commands
 

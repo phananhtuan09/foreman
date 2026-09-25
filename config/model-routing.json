@@ -17,11 +17,18 @@
   "groups": {
     "ordinary": {
       "whenToUse": "Mechanical edits, initial bug investigation and fixes, features within an existing design, UI, tests, and reviews. Use when the brief does not establish a need for deep redesign; file count alone does not make a task deep.",
-      "profiles": ["codex-luna", "omp-luna", "claude-sonnet", "codex-sol"]
+      "profiles": [
+        "codex-luna",
+        "omp-luna",
+        "claude-sonnet",
+        "codex-sol"
+      ]
     },
     "deep": {
       "whenToUse": "New architecture or data-model design, difficult concurrency or security reasoning, or a bug still unexplained after earlier investigation. File count or initial investigation alone is not enough.",
-      "profiles": ["claude-opus"]
+      "profiles": [
+        "claude-opus"
+      ]
     }
   },
   "profiles": {
@@ -52,8 +59,8 @@
         "omp",
         "--auto-approve"
       ],
-      "model": "openai-codex/gpt-6-luna",
-      "effort": "max",
+      "model": "xai-oauth/grok-4.6",
+      "effort": "medium",
       "whenToUse": "Use when OMP is explicitly requested or its native capabilities are needed."
     },
     "claude-sonnet": {
@@ -74,7 +81,8 @@
       ],
       "model": "claude-opus-5-5",
       "effort": "high",
-      "whenToUse": "Use for architecture, migration, concurrency, or security work in this group."
+      "whenToUse": "Use for architecture, migration, concurrency, or security work in this group.",
+      "isActive": false
     }
   }
 }

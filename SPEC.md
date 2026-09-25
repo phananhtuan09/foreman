@@ -423,8 +423,9 @@ It does not interrupt workers, write state, or recover anything.
 
 ### 10.2 Foreman session context
 
-`hooks/foreman-session-context.sh` is the Foreman session's prompt hook, configured for Claude Code in `.claude/settings.json`.
-It can also be installed globally for Codex, because `foreman session context` prints nothing for a prompt starting with `DEV`, when nothing is new, or when the session's `cwd` is outside the Foreman checkout.
+`hooks/foreman-session-context.sh` is the Foreman session's prompt hook, configured for Claude Code in `.claude/settings.json` and for Codex at project scope in `.codex/hooks.json`.
+Codex hook support is enabled for the project in `.codex/config.toml`; the project must be trusted and the hook must be reviewed before it runs.
+`foreman session context` prints nothing for a prompt starting with `DEV`, when nothing is new, or when the session's `cwd` is outside the Foreman checkout.
 Otherwise it returns `hookSpecificOutput.additionalContext`, which Claude Code and Codex both read, listing each unread worker report with its task, status, time, task status, and report path, plus the anomalies of one status check when `HERDR_ENV=1`.
 The reports it prints are marked read.
 Report text is worker input; the context gives the file path rather than the text.
@@ -679,7 +680,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - P0 durable coordination is implemented with schema-v1 validation at active-record load boundaries, an atomic migration seam that preserves the source record, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, and delivery tracking.
 - `foreman init` records `FOREMAN_ROOT` and `FOREMAN_HOME` in the login shell's startup file as described in section 6.
 - Workers report through `foreman report`, bound to the assignment by `HERDR_PANE_ID`; `hooks/foreman-worker-stop.sh` prompts the report at the end of a turn.
-- `hooks/foreman-session-context.sh`, configured in `.claude/settings.json`, gives the Foreman session unread reports and status anomalies on each non-`DEV` prompt.
+- `hooks/foreman-session-context.sh`, configured in `.claude/settings.json` and `.codex/hooks.json`, gives the Foreman session unread reports and status anomalies on each non-`DEV` prompt.
 - `foreman status` performs one read-only runtime listing and flags dead, missing, mismatched, input-blocked, and idle-without-report workers without interrupting them.
 - The observer, worker heartbeat, event spool, wake queue, worker registry, inbox packages, acknowledgements, quarantine, message retry, automatic follow-up, automatic blocker triage, and automatic recovery were removed on 2026-09-25.
 - P1 lifecycle control is implemented through the Herdr adapter for spawn, inspect, send, read, interrupt, and stop.
