@@ -11,7 +11,7 @@ const {
   registerProject,
   createTask,
   assignTask,
-  recordPackage,
+  recordReport,
   acceptTask,
   listResourceLeases,
   ResourceBusyError,
@@ -38,7 +38,7 @@ class RuntimeWorkerTransport {
     const child = spawn(process.execPath, ["-e", script], { cwd: request.cwd, stdio: ["ignore", "pipe", "pipe"] });
     this.workers.set(endpoint, { ...request, endpoint, child, status: "working" });
     child.on("exit", () => { const worker = this.workers.get(endpoint); if (worker) worker.status = "done"; });
-    return { endpoint };
+    return { endpoint, paneId: `pane-${endpoint}` };
   }
 
   inspect(endpoint) {
@@ -88,18 +88,6 @@ function fixture() {
   return { base, projectRoot, roots, transport, adapter: new HerdrAdapter({ transport }) };
 }
 
-function packageFor(task, assignment, body) {
-  return [
-    `TASK: ${task.id}`,
-    `PROJECT: ${task.projectId}`,
-    `AGENT: ${assignment.owner}`,
-    `GENERATION: ${assignment.generation}`,
-    "TYPE: completion",
-    "",
-    body,
-  ].join("\n");
-}
-
 test("runtime workers share the current branch with disjoint resource leases", async () => {
   const f = fixture();
   try {
@@ -119,8 +107,8 @@ test("runtime workers share the current branch with disjoint resource leases", a
     assert.equal(fs.readFileSync(path.join(f.projectRoot, "agent-one.txt"), "utf8"), "worker-1 completed\n");
     assert.equal(fs.readFileSync(path.join(f.projectRoot, "agent-two.txt"), "utf8"), "worker-2 completed\n");
 
-    recordPackage({ roots: f.roots, taskId: one.id, raw: packageFor(one, assignmentOne, "worker one done"), type: "completion" });
-    recordPackage({ roots: f.roots, taskId: two.id, raw: packageFor(two, assignmentTwo, "worker two done"), type: "completion" });
+    recordReport({ roots: f.roots, paneId: assignmentOne.paneId, status: "done", summary: "worker one done" });
+    recordReport({ roots: f.roots, paneId: assignmentTwo.paneId, status: "done", summary: "worker two done" });
     const acceptedOne = acceptTask({ roots: f.roots, taskId: one.id, adapter: f.adapter });
     const acceptedTwo = acceptTask({ roots: f.roots, taskId: two.id, adapter: f.adapter });
     assert.equal(acceptedOne.deleted, true);

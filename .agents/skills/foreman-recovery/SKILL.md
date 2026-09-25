@@ -5,8 +5,9 @@ description: Use within a foreman-control or foreman-supervisor workflow when Fo
 
 # Recovery procedure
 
-Confirm `dead` or the configured missing confirmation window from a runtime listing.
-Read `data/tasks/<task>/handoff.json` before dispatching the successor.
-The successor must inspect the bound workspace, branch, lease, progress, report, evidence, unresolved checks, and accepted decisions before changing files.
-A recovery increments generation; old packages and ACKs are stale and are quarantined.
-Stop after the persisted recovery attempt bound and leave an actionable anomaly event when the bound is exhausted.
+Confirm `dead` or `missing` with two status checks from Herdr runtime listings; never recover from `unknown`.
+Run `bin/foreman task recover --task <id>`, which checks the runtime state again before acting.
+Read `data/tasks/<task>/handoff.json` after recovery and tell the user what the successor received.
+The successor must inspect the bound workspace, branch, lease, latest report, evidence, unresolved checks, and accepted decisions before changing files.
+A recovery increments generation and binds a new worker pane; the old pane can no longer report.
+Stop after the persisted recovery attempt bound and report the exhausted recovery to the user.

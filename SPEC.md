@@ -40,10 +40,10 @@ Workers own deep project context. They inspect, implement, reproduce, verify, an
 2. All task, assignment, decision, progress, blocker, completion, and recovery state survives session reset.
 3. Every task is bound to exactly one registered project, one current owner at most, and one runtime endpoint at most.
 4. Project mutations happen through workers in a client-prepared workspace, with resource leases allowing safe concurrency.
-5. Foreman can recover safely after its session, observer, or worker exits.
+5. Foreman can recover safely after its session or a worker exits.
 6. Supervision is event-driven and consumes no model tokens while nothing actionable happens.
 7. The user sees conclusions, decisions, approvals, and material anomalies rather than worker transcripts or internal housekeeping.
-8. Human intent and worker packages are retained verbatim before Foreman summarizes them.
+8. Human intent and worker reports are retained verbatim before Foreman summarizes them.
 9. Foreman never silently broadens authority, merges, discards work, or guesses recovery state.
 10. The first production runtime backend is Herdr; the core state model must not depend on Herdr-specific identifiers.
 
@@ -67,19 +67,16 @@ These capabilities may be designed later only when the core lifecycle and recove
 
 ### 5.1 Durable restart
 
-Conversation memory is never authoritative operational state. After a fresh session, Foreman must reconstruct its fleet view from tracked instructions, durable home data, runtime state, and one runtime reconciliation pass.
+Conversation memory is never authoritative operational state. After a fresh session, Foreman must reconstruct its fleet view from tracked instructions, durable home data, runtime state, and one status check.
 
 ### 5.2 One supervisor writer
 
 Exactly one Foreman session may mutate canonical task, assignment, decision, message lifecycle, or runtime state at a time.
 A verified home lock is required before those mutations, and a session that cannot acquire the lock remains read-only.
-The deterministic observer creates immutable pending event records in `data/events/`.
-A worker does not write that spool directly.
-`foreman event emit` validates the current task, project, owner, generation, and endpoint, then creates the pending event itself.
-A mismatched emit is quarantined and cannot change task lifecycle.
-A worker may directly create only generation-bound inbox or acknowledgement records in its assigned paths.
-Worker writers must use atomic exclusive creation and must never edit canonical task state or records owned by another writer.
-The observer writes only while it holds the home lock.
+A worker changes Foreman state only through `foreman report`.
+That command identifies the worker by its Herdr pane, validates the current assignment under the home lock, and writes the report and the resulting lifecycle change itself.
+A report from a pane that is not bound to an active assignment is refused and changes nothing.
+Workers never edit task metadata or records owned by another writer.
 
 ### 5.3 Exact project binding
 
@@ -98,11 +95,15 @@ Foreman does not retain accepted task history.
 
 ### 5.6 Verbatim authority transport
 
-User requirements and decisions are persisted verbatim before being sent to a worker. Worker decision and completion packages are persisted verbatim before Foreman summarizes them. Summaries never replace the original package.
+User requirements and decisions are persisted verbatim before being sent to a worker.
+Worker reports are persisted verbatim before Foreman summarizes them.
+Summaries never replace the original report.
 
 ### 5.7 Single owner and safe handoff
 
-A task has at most one current worker owner. Reassignment changes the assignment generation. Reports and events from an older generation cannot update the new owner's state.
+A task has at most one current worker owner.
+Reassignment changes the assignment generation and binds a new worker pane.
+Reports from an older generation's pane cannot update the new owner's state.
 
 ### 5.8 Acceptance ends task supervision
 
@@ -120,8 +121,8 @@ New durable state is added only when it enables restart recovery, removes the ne
 ### 5.11 Durable coordination
 
 Runtime messages are persisted before sending and are not resent after Herdr accepts them.
-Wake-up remains an at-least-once operation, and event consumers handle duplicates idempotently.
 Foreman treats a delayed inspection as endpoint evidence, not proof that the worker consumed a prompt.
+Supervision is pull-based: no background process watches workers, and a worker never sends prompts into the Foreman session.
 
 ## 6. Repository and home layout
 
@@ -135,9 +136,10 @@ foreman/
 ├── .agents/skills/            conditionally loaded Foreman workflows for Codex
 ├── config/model-routing.json  tracked model routing configuration
 ├── bin/                       deterministic helpers and runtime adapters
+├── hooks/                     coding-agent hook scripts for worker reports and the Foreman session
 ├── adapters/
 │   └── herdr/                 Herdr-specific mechanics and compatibility checks
-├── tests/                     state, recovery, observer, and adapter proof
+├── test/                      state, recovery, report, and adapter proof
 ├── legacy/
 │   ├── foreman-agent/         preserved repo-scoped experiment
 │   └── tests/                 preserved experiment tests
@@ -152,6 +154,9 @@ Definitions:
 - Model routing reads the tracked `FOREMAN_ROOT/config/model-routing.json`; it does not read a same-named file in `FOREMAN_HOME`.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
+- `foreman init` run in the Foreman checkout records that checkout as `FOREMAN_ROOT` and `FOREMAN_HOME` (or `--home`) in the startup file of the machine's login shell: `$ZDOTDIR/.zshrc` or `~/.zshrc` for zsh, `~/.bashrc` for bash (`~/.bash_profile` on macOS), `~/.config/fish/conf.d/foreman.fish` for fish, and `~/.profile` for `sh`, `dash`, `ksh`, or `mksh`.
+- It rewrites only its own marked block, leaves the rest of the file unchanged, and refuses an unrecognized shell by printing the lines to add manually.
+- Worker panes opened after `init` inherit both variables, which the worker stop hook and `foreman report` rely on.
 
 ## 7. Durable data model
 
@@ -206,9 +211,9 @@ Task records live under `data/tasks/<id>/` until user acceptance:
 ```text
 data/tasks/T-000123/
 ├── brief.md          original user requirements and accepted additions
-├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, routing, connection, and observation
+├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
 ├── decisions/        versioned Decision Packages and verbatim human responses
-├── inbox/            generation-bound worker packages, acknowledgements, and quarantine
+├── reports/          verbatim worker reports, one file per report
 └── handoff.json      latest recovery handoff, written only by dead-worker recovery
 ```
 
@@ -219,54 +224,41 @@ data/
 ├── .lock/            home lock
 ├── projects.json     project registry
 ├── sequence.json     next task ID
-├── observer.json     running observer process, present only while it runs
 ├── tasks/            task records
-├── messages/         durable Foreman-to-worker outbox and message lifecycle
-└── events/           durable events grouped by task id
-    ├── T-000123/
-    │   └── E-<eventId>.json
-    └── _fleet/       events that have no task
+└── messages/         durable Foreman-to-worker outbox and message lifecycle
 ```
 
-The latest completion report is the completion package that `meta.json` references in the task inbox.
-Acceptance removes the task directory and its task messages and events.
+Acceptance removes the task directory and its task messages.
 The project workspace stays on disk.
 
 ### 7.4 Assignment generation
 
-Each ownership change increments `generation` in task metadata. Every prompt, report path, event, and steering message carries task ID, project ID, owner, and generation. A mismatched generation is quarantined and cannot update lifecycle or progress.
+Each ownership change increments `generation` in task metadata and records the new worker's Herdr pane as `paneId`.
+Every prompt and steering message carries task ID, project ID, owner, and generation.
+A worker report is bound to the assignment through its pane, so a pane from an older generation cannot update lifecycle or reports.
 
-### 7.5 Progress snapshot
+### 7.5 Worker reports
 
-The latest progress snapshot is the newest progress or blocker package in the task inbox.
-Foreman keeps no separate copy.
-A progress package uses these fields after its identity header:
+A worker reports with `foreman report --status done|blocked|progress`, giving the summary as `--summary`, `--summary-file`, or standard input.
+`done` means the task is complete, `blocked` means only the user can unblock it, and `progress` means the worker stopped before finishing for another reason.
+Each report is stored verbatim as `reports/generation-<n>-<seq>-<status>.md` after an identity header of task, project, agent, generation, status, and report time.
+Earlier reports are never overwritten.
 
-```text
-TASK: T-000123
-PROJECT: ai-agent-workflow
-AGENT: @worker-3
-GENERATION: 2
-UPDATED: 2026-09-21 15:20
-LAST: reproduced duplicate dispatch
-CURRENT: implementing generation guard
-NEXT: run focused recovery scenario
-BLOCKER: none
-PROOF: reproduction observed; post-fix scenario not run
-AFFECTED FILES: bin/foreman-dispatch
-COMPLETION STATE: working
-```
-
-Unknown values are `-`; Foreman never fills gaps by inference.
+A report is accepted only while the task is `working` or `blocked`.
+`done` moves the task to `review-ready` and records the report as `completionReport`.
+`blocked` moves the task to `blocked` and records the report as `blockerReport`.
+`progress` leaves the task `working`.
+Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
+A scout's `done` report is refused when its workspace fingerprint changed; the report is still stored and the violation is recorded.
 
 ### 7.6 State schemas and migration
 
 Every JSON record has a schema version, stable identity, owning writer, and explicit retirement or retention rule.
 Foreman validates records before applying them and fails closed when an active record has an unsupported version or invalid identity binding.
 Schema migrations are deterministic, atomic, restart-safe, and preserve the original record until the migrated replacement is durable.
-Invalid external records are quarantined with their original contents and cannot mutate canonical state.
+Invalid external input is refused and cannot mutate canonical state.
 
-Message, acknowledgement, event, decision, and worker-package records carry correlation fields sufficient to trace the full flow without relying on conversation history.
+Message, decision, and report records carry correlation fields sufficient to trace the full flow without relying on conversation history.
 
 ### 7.7 Durable message outbox
 
@@ -283,65 +275,32 @@ Each message records at least:
 - worker, assignment generation, and endpoint binding;
 - creation timestamp;
 - original payload and payload digest;
-- delivery attempts and latest transport evidence;
+- latest transport evidence;
 - lifecycle state.
 
-Message lifecycle is `pending`, `delivered`, or `failed`; older `acknowledged` records remain readable.
+Message lifecycle is `pending`, `delivered`, or `failed`.
 `delivered` means that Herdr accepted prompt submission.
 Foreman inspects the endpoint after a short delay and records the observed status without interrupting it.
 
-Delivered messages are never resent because an absent ACK does not prove that the prompt was missed.
-Pending messages with confirmed failed delivery may be retried with bounded backoff.
+Messages are never resent automatically.
 An uncertain task-brief submission is recorded for follow-up without stopping the worker or sending the same prompt again.
+Workers do not acknowledge prompts; a new report or the runtime status is the evidence that work continues.
 
-Workers do not need to acknowledge prompts before working.
-Legacy acknowledgement records remain identity-checked when encountered.
+### 7.8 Worker stop hook
 
-### 7.8 Durable wake queue
-
-The event spool is `data/events/<taskId>/<eventId>.json`.
-The file name is the stable event ID, so two observations of different evidence do not overwrite each other.
-Each event record keeps its own lifecycle: `pending`, `processing`, or `handled`.
-
-Each event records at least:
-
-- event ID;
-- deduplication key;
-- task ID and project ID when applicable;
-- worker, generation, and endpoint when applicable;
-- event type and observation timestamp;
-- normalized evidence and its source;
-- lifecycle timestamps and handling result.
-
-The observer persists an event before it wakes the event handlers.
-Foreman claims a pending event by exclusively creating the sibling claim file `<eventId>.json.claim`, then marking the record `processing`, while holding the home lock.
-It applies the event idempotently, marks it `handled`, and removes the claim.
-An expired processing claim returns the record to `pending` during restart reconciliation.
-A stale claim left on a still-pending record is removed during the same recovery.
-Handled events are retained for a bounded audit period and are then removed.
-
-The pending event records are the only wake signal; no separate wake file is kept.
-A failed wake does not change or delete the pending event.
-Foreman restart drains the pending event records.
-
-Deduplication uses stable task, generation, event type, and evidence identity rather than event text alone.
-A duplicate wake may occur, but applying the same event more than once must not repeat a lifecycle transition or runtime action.
-
-Workers request an event through `foreman event emit <taskId> <type> --project <projectId> --worker <owner> --generation <generation> --endpoint <endpoint>`.
-All assignment identity fields are mandatory; Foreman never fills omitted worker identity from current task state.
-A type without a dot is stored as `worker.<type>`.
-Workers cannot emit `message.*` or `task.*` supervisor events.
-The same payload for the same assignment is stored once.
-`blocked` and `done` still require a valid structured package before task lifecycle advances.
-An emitted event alone does not apply that transition.
+`hooks/foreman-worker-stop.sh` is a stop hook for coding agents and may be installed globally; the user installs it.
+It runs `foreman worker hook`, which reads the hook payload from standard input and never fails the agent.
+It stays silent unless `FOREMAN_ROOT` and `HERDR_PANE_ID` are set, the pane is bound to a `working` task, the worker has not reported since Foreman last prompted it, and the payload does not mark the stop as already continued by a stop hook.
+Otherwise it returns a block decision whose reason names the task and tells the agent to run `"$FOREMAN_ROOT/bin/foreman" report` with one of the three statuses before ending its turn.
+It asks at most once per turn, so an agent that ignores it still stops.
 
 ### 7.9 Decision records
 
 Decision records live under `data/tasks/<id>/decisions/` and preserve the original Decision Package and the human response verbatim.
 Each Decision Package contains the finding, why human authority is required, concrete options, impact, evidence, and either the worker recommendation or an explicit statement that no recommendation is available.
 
-Decision lifecycle is `pending`, `answered`, `delivered`, and `applied`; older `acknowledged` records remain readable.
-Foreman does not resume authority-blocked work until Herdr accepts delivery to the current assignment generation.
+Decision lifecycle is `pending`, `answered`, and `delivered`.
+Foreman does not resume authority-blocked work until Herdr accepts delivery to the current assignment generation; that delivery returns the task to `working`.
 
 ### 7.10 Task types and dependencies
 
@@ -360,28 +319,20 @@ Acceptance removes that dependency ID from remaining tasks before deleting the c
 Dependency cycles and cross-project dependency references to missing tasks are rejected.
 When a dependency reaches its required terminal state, the scheduler reevaluates each dependent task and unlocks it exactly once when every dependency is satisfied.
 
-### 7.11 Worker registry
+### 7.11 Runtime classification
 
-Each current assignment keeps a `connection` record in its task metadata.
-Foreman is its only writer, and it writes the record under the home lock.
-The worker registry is derived from those records when it is read and is not stored separately.
-The registry key is the runtime endpoint.
-Each entry records the task ID, status, last heartbeat, pid, generation, last acknowledgement, and adapter.
-`totalActive` counts entries whose status is `active`.
+A status check compares each assigned task with one runtime listing and classifies the worker only from defined evidence:
 
-Assignment registers the worker as `active`.
-A valid acknowledgement updates `lastAck`.
-Reconciliation refreshes status from runtime classification.
-Runtime state `working` is stored as `active`.
-A new assignment generation replaces the previous connection record.
-Acceptance deletes the connection record with the task directory.
+- `working` and `idle` require runtime evidence plus matching endpoint identity;
+- `waiting-input` means the runtime reports the agent blocked on input;
+- `dead` requires explicit terminal runtime evidence;
+- `missing` requires a successful runtime listing that omits the expected endpoint;
+- `mismatch` means the listed agent's owner does not match the assignment;
+- unreadable, contradictory, or insufficient evidence remains `unknown`.
 
-`dead` requires explicit terminal runtime evidence.
-`missing` requires a successful runtime listing that omits the expected endpoint after the configured confirmation window.
-`foreman worker heartbeat` updates `lastHeartbeat` and `pid` for the current assignment only.
-A heartbeat does not change runtime classification.
-A stale or fresh heartbeat does not convert `unknown` to `dead` and does not override terminal runtime evidence.
-Unreadable, contradictory, or insufficient evidence stays `unknown`.
+An `idle` worker on a `working` task that has not reported since its last prompt is flagged `worker.idle-without-report`.
+Project, workspace, branch, lease, and pane mismatches are reported as anomalies and make the state `unknown` unless it is `dead` or `missing`.
+A status check never writes state, interrupts a worker, or starts recovery.
 
 ## 8. Runtime abstraction
 
@@ -418,7 +369,7 @@ For a project without Git, the workspace is the project root, the task has no br
 
 Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
 
-Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner, generation, expiry, and heartbeat renewal.
+Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner and generation and are held until acceptance, reassignment, or a failed dispatch releases them; they do not expire, because no heartbeat renews them and a worker may run for a long time without reporting.
 
 A preflight worker may return the structured resource claims and dependency hints. Foreman treats that result as scheduling input, normalizes the claims, and defaults to an exclusive project-workspace lease when no plan is supplied.
 
@@ -426,23 +377,21 @@ A preflight worker may return the structured resource claims and dependency hint
 
 The dispatched brief includes:
 
-- task ID, project ID, assignment generation, and report path;
+- task ID, project ID, and workspace;
 - user requirements verbatim;
 - accepted follow-up decisions verbatim;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
 - required deliverable and evidence contract;
 - prohibition on expanding scope, changing lifecycle, or addressing the user directly;
-- permission to write only the leased project resources and the exact generation-bound Foreman report/inbox path outside the workspace;
+- permission to write only the leased project resources;
 - prohibition on `git switch`, `git reset`, `git clean`, `git merge`, and `git commit`; Git lifecycle remains client-owned.
 
 ### 9.3 Worker communication
 
-Routine progress responses are returned through the runtime output and normalized by Foreman.
-Terminal blocker and completion packages are also written to the assigned generation-bound inbox path so they survive a missing Foreman session.
-Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7.
-
-Workers never edit the project registry, task metadata, or another assignment's inbox.
+Workers report only through `foreman report`, prompted by the stop hook in section 7.8.
+Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form request, and a request to a `blocked` or `review-ready` task returns it to `working`.
+Workers never edit the project registry or task metadata.
 
 ### 9.4 Scheduling and concurrency
 
@@ -454,64 +403,36 @@ Tasks in the same project may run concurrently when their resource claims do not
 They are not serialized only because they share a repository.
 When isolated workspaces are required, the client must prepare and identify them before dispatch because Foreman does not create or switch worktrees.
 
-An idle endpoint may receive another task only after its prior assignment is terminal, its messages and packages are reconciled, its resource lease is released safely, and a new assignment generation is bound and verified.
+An idle endpoint may receive another task only after its prior assignment is terminal, no message to it is pending, its resource lease is released safely, and a new assignment generation is bound and verified.
 
 ## 10. Supervision cycle
 
-Every Foreman session starts with one bounded pass:
+Supervision runs only inside Foreman turns; there is no observer, heartbeat, or event queue.
 
-1. resolve `FOREMAN_ROOT` and `FOREMAN_HOME`;
-2. acquire and verify the exclusive home lock;
-3. read the project registry and active task metadata;
-4. apply valid generation-bound inbox packages;
-5. drain durable observer events;
-6. list Herdr runtime state once;
-7. reconcile every assigned task against project, owner, generation, endpoint, workspace, branch, and resource-lease identity;
-8. perform mandatory blocker, idle, dead-worker, or completion follow-up;
-9. persist lifecycle and progress changes before reporting them;
-10. ensure the observer is active while supervised work remains;
-11. report only approvals, decisions, material anomalies, and requested detail.
+1. On its first operational turn, a Foreman session runs `foreman init` so the shell environment points at this checkout.
+2. Before answering the user, the session reads the supervision context from its prompt hook, or runs `foreman status` when that context is absent.
+3. It reads each new worker report named in the context from its file.
+4. It acts on anomalies: it sends a follow-up with `foreman task message`, creates a Decision Package, or confirms a dead or missing worker with a second status check before `foreman task recover`.
+5. It persists lifecycle changes before reporting them.
+6. It reports only approvals, decisions, material anomalies, and requested detail.
 
-Foreman does not continuously poll with an LLM after a turn. A deterministic observer writes durable events and runs the event handlers only when actionable events are pending.
+### 10.1 Status check
 
-### 10.1 Deterministic observer
+`foreman status` lists Herdr runtime state once and classifies every assigned task as in section 7.11.
+It does not interrupt workers, write state, or recover anything.
 
-The observer contains no LLM call and performs no decision mutation.
-Under the home lock, it applies worker acknowledgements and records its observation evidence and connection status in task metadata.
-It observes runtime endpoints and generation-bound worker files, compares them with the last observation in task metadata, and emits an event only for a state change, mismatch, elapsed threshold, or other actionable condition.
-No model tokens are consumed while no actionable event exists.
+### 10.2 Foreman session context
 
-The observer distinguishes `working`, `idle`, `blocked`, `done`, `dead`, `missing`, and `unknown` only from defined evidence:
+`hooks/foreman-session-context.sh` is the Foreman session's prompt hook, configured for Claude Code in `.claude/settings.json`.
+It can also be installed globally for Codex, because `foreman session context` prints nothing for a prompt starting with `DEV`, when nothing is new, or when the session's `cwd` is outside the Foreman checkout.
+Otherwise it returns `hookSpecificOutput.additionalContext`, which Claude Code and Codex both read, listing each unread worker report with its task, status, time, task status, and report path, plus the anomalies of one status check when `HERDR_ENV=1`.
+The reports it prints are marked read.
+Report text is worker input; the context gives the file path rather than the text.
 
-- `working` and `idle` require runtime evidence plus matching endpoint identity;
-- `blocked` and `done` require a valid structured worker package for the current generation;
-- `dead` requires explicit terminal runtime evidence;
-- `missing` requires a successful runtime listing that omits the expected endpoint after the configured confirmation window;
-- unreadable, contradictory, or insufficient evidence remains `unknown`.
+### 10.3 Restart
 
-The observer never converts `unknown` to `dead` and never initiates recovery itself.
-A worker heartbeat is registry evidence.
-It does not by itself satisfy `dead` or `missing`.
-Endpoint, owner, project, workspace, or generation mismatch produces an anomaly event and prevents automatic task-state advancement.
-
-### 10.2 Wake behavior
-
-After each observation pass that leaves pending events, the observer loop runs restart reconciliation, which drains the events through the production handlers.
-Wakes are spaced by at least one observation interval.
-The Foreman session does not poll for work.
-Wake failure does not change or delete the pending event.
-Repeated observations of the same evidence reuse the event deduplication identity and do not create an unbounded queue.
-
-### 10.3 Restart and fleet reconciliation
-
-Startup reconciliation is deterministic and independent of conversation history.
-It acquires the home lock, validates schemas, loads the project registry and active task metadata, reconstructs active tasks, applies valid worker inbox and acknowledgement records, recovers expired processing events, drains the wake queue, and lists runtime workers once.
-
-For each active task it reconciles project, owner, generation, endpoint, workspace, branch, resource lease, pending messages, disk state, and runtime state.
-It reports or emits actionable state for a missing worker, endpoint mismatch, stale generation, missing workspace, invalid lease, or orphan runtime worker.
-An orphan worker is reported but is not adopted, stopped, or sent work without explicit authority and verified project identity.
-
-The reconciliation logic is shared by startup, event handling, and explicit full-status refresh so those paths cannot apply different identity rules.
+A fresh session reconstructs its view from `data/` and one status check.
+Nothing is lost while no Foreman session runs: reports stay unread until a session is shown them.
 
 ## 11. Main workflows
 
@@ -539,7 +460,7 @@ The reconciliation logic is shared by startup, event handling, and explicit full
 4. Persist the brief, pending assignment, and task-brief outbox message before runtime delivery.
 5. Spawn the worker through the Herdr adapter.
 6. Verify stable endpoint identity and deliver the persisted task-brief message.
-7. After Herdr accepts the text prompt, Foreman marks the task `working` and arms supervision.
+7. After Herdr accepts the text prompt, Foreman marks the task `working` and records the worker pane.
 8. A delayed, passive endpoint inspection records the worker state. If submission is uncertain, Foreman preserves the endpoint and records the uncertainty without resending or interrupting it.
 
 ### 11.4 Adopt existing worker
@@ -548,31 +469,27 @@ Adoption requires an explicit user request naming the worker and requirement or 
 
 ### 11.5 Blocker and decision
 
-Worker-reported blockers first enter triage instead of being sent directly to the user.
-Foreman requests a structured root cause, evidence, proposed next action, unresolved checks, and whether the worker can proceed within existing authority.
-Technical blockers inside task scope return to the worker for further investigation through a durable follow-up message.
-Triage retries are bounded so an unproductive worker cannot create an infinite message loop.
-
-Foreman asks the user only when multiple materially valid outcomes require product, architecture, compatibility, security, operational, or acceptance authority.
-A complete Decision Package is persisted before the question is summarized.
-The human response is stored verbatim and delivered through the durable outbox to the current generation before work resumes.
+A `blocked` report stops the task at `blocked`.
+Foreman reads the report and either returns a technical blocker to the worker with `foreman task message` or, when the choice needs product, architecture, compatibility, security, operational, or acceptance authority, persists a complete Decision Package before asking the user.
+The human response is stored verbatim and delivered through the durable outbox to the current generation, which resumes the task.
 
 ### 11.6 Completion and acceptance
 
-Worker completion produces a Completion Package containing outcome, changed surface, direct evidence, unresolved checks, risk, and delivery state.
-Foreman moves the task to `review-ready` and waits for the user.
+A `done` report covers outcome, changed surface, direct evidence, unresolved checks, and risk.
+It moves the task to `review-ready`, and Foreman waits for the user.
 Acceptance verifies the worker endpoint is stopped, releases the resource lease, and deletes the task records and task-scoped coordination records.
 The project workspace remains on disk, and no accepted task history is kept.
 
 ### 11.7 Dead worker and handoff
 
-Foreman distinguishes `working`, `blocked`, `idle`, `done`, `unknown`, `dead`, and `missing` using adapter evidence. Only recovery-grade `dead` or `missing` permits automatic handoff. The successor receives original requirements, accepted decisions, latest snapshot, prior report, workspace state, resource claims, and an instruction to inspect rather than trust previous implementation assumptions.
+Only confirmed `dead` or `missing` evidence permits handoff, and Foreman starts it explicitly after a second status check agrees.
+The successor receives original requirements, accepted decisions, the latest report, workspace state, resource claims, and an instruction to inspect rather than trust previous implementation assumptions.
 
-Automatic recovery preserves the current workspace and resource lease, stops or verifies absence of the old endpoint, increments the assignment generation, and spawns a replacement worker.
-The handoff package also includes affected files, available evidence, and unresolved checks.
+Recovery preserves the current workspace and resource lease, stops or verifies absence of the old endpoint, increments the assignment generation, and spawns a replacement worker.
+The handoff package also includes available evidence and unresolved checks.
 The successor must inspect current workspace state before changing it and must not assume that prior implementation or reported evidence is correct.
-Messages and packages from the old generation are quarantined and cannot mutate the replacement assignment.
-Recovery attempts are bounded; exhaustion produces an actionable anomaly instead of an infinite relaunch loop.
+The old generation's pane can no longer report.
+Recovery attempts are bounded; exhaustion is reported instead of relaunching forever.
 
 ### 11.8 Workspace handling
 
@@ -591,11 +508,10 @@ Acceptance closes the scout, releases its read-only runtime resources, and delet
 Default output is short and grouped only when non-empty:
 
 - `Cần bạn duyệt`
-- `Cần bạn quyết`
-- `Đang tự xử lý`
+- `Cần bạn quyết` (decisions and `blocked` reports)
 - `Bất thường`
 
-A final count reports running and queued work. Each task appears once per response. Passed checks are counted; gaps, risks, and user actions are stated. Detailed worker packages are shown only when requested or required for a decision.
+A final count reports running and queued work. Each task appears once per response. Passed checks are counted; gaps, risks, and user actions are stated. Detailed worker reports are shown only when requested or required for a decision.
 
 Fleet status may be filtered by project, task, worker, lifecycle, or anomaly. A request for full status actively refreshes every running assignment before reporting.
 
@@ -621,19 +537,18 @@ Each phase must preserve the core invariants and add focused recovery and failur
 
 ### Phase P0: reliability foundation
 
-1. Define versioned durable schemas, writer ownership, atomic migrations, quarantine behavior, and retention rules.
-2. Add the durable message outbox, generation-bound acknowledgements, bounded retry, and restart recovery.
-3. Extract one deterministic reconciliation engine for startup, event handling, and explicit refresh.
-4. Add the durable wake queue with claim recovery, deduplication, and idempotent handling.
-5. Add the deterministic observer and bounded local wake mechanism.
-6. Integrate full startup reconciliation across projects, tasks, inbox packages, messages, events, resource leases, and one runtime listing.
+1. Define versioned durable schemas, writer ownership, atomic migrations, refusal of invalid input, and retention rules.
+2. Add the durable message outbox and restart recovery.
+3. Extract one read-only status check shared by status, the session context, and recovery.
+4. Add pane-bound worker reports prompted by a coding-agent stop hook.
+5. Add the Foreman session prompt hook that surfaces unread reports and anomalies.
 
 ### Phase P1: supervisor autonomy
 
 1. Complete verified runtime lifecycle control with a distinct interrupt operation.
 2. Add structured handoff and bounded automatic recovery for confirmed dead or missing workers.
-3. Add the durable decision lifecycle and acknowledged human-decision delivery.
-4. Add bounded blocker triage that separates technical blockers from authority blockers.
+3. Add the durable decision lifecycle and human-decision delivery.
+4. Let Foreman separate technical blockers from authority blockers when it reads a `blocked` report.
 5. Add ship and scout task semantics before scheduler behavior depends on them.
 
 ### Phase P2: scheduling and fleet scale
@@ -665,12 +580,11 @@ P0 is complete only when all of the following are directly demonstrated:
 1. Every active record is schema-validated, and an interrupted migration can restart without losing the original record.
 2. Every worker message is durable before send, survives restart, and stays bound to its task, worker, generation, and endpoint.
 3. Delivered prompts are not resent, and delayed endpoint inspection records runtime status without interrupting work.
-4. Failed or expired message delivery emits one actionable event instead of retrying forever.
-5. The deterministic observer consumes no model tokens while no actionable event exists.
-6. An observer event survives Foreman downtime, duplicate observations do not produce duplicate effects, and an interrupted processing claim is recovered after restart.
-7. A clean Foreman session reconstructs active state, applies valid inbox records, drains pending events, and reconciles all assignments from one runtime listing without conversation history.
-8. Reconciliation detects missing workers, endpoint mismatch, stale generation, missing workspace, invalid resource leases, and orphan workers without guessing recovery state.
-9. A second Foreman session cannot mutate canonical state, while the observer and workers remain limited to their explicitly owned write paths.
+4. No background process runs, and no model tokens are consumed while no Foreman turn runs.
+5. A worker report survives Foreman downtime and stays unread until a Foreman session is shown it.
+6. A clean Foreman session reconstructs active state and classifies all assignments from one runtime listing without conversation history.
+7. A status check detects missing or dead workers, workers idle without a report, endpoint or pane mismatch, missing workspace, and invalid resource leases without guessing recovery state.
+8. A second Foreman session cannot mutate canonical state, and workers change state only through pane-bound reports.
 
 ### 15.2 P1 supervisor autonomy
 
@@ -679,8 +593,8 @@ P1 is complete only when all of the following are directly demonstrated:
 1. Spawn, inspect, send, read, interrupt, and stop actions have verified outcomes and lifecycle control is not encoded as normal chat.
 2. A confirmed dead or missing worker is replaced with a new generation without losing the workspace, requirements, human decisions, progress, evidence, or unresolved checks.
 3. `unknown` runtime state never triggers automatic recovery.
-4. The replacement worker inspects existing state, and stale messages or packages from the prior generation cannot update the new assignment.
-5. A technical blocker receives bounded worker follow-up, while an authority blocker produces one complete Decision Package for the user.
+4. The replacement worker inspects existing state, and the prior generation's pane cannot update the new assignment.
+5. A `blocked` report leads to either a Foreman follow-up for a technical blocker or one complete Decision Package for an authority blocker.
 6. A human decision is preserved verbatim and delivered to the correct generation before work resumes.
 7. A scout cannot modify production code, completes through report review, and can produce a ship task from its report only through explicit user-approved promotion before acceptance.
 
@@ -692,7 +606,7 @@ Multi-project support is complete only when:
 
 1. At least two registered projects run assignments concurrently.
 2. Project IDs and canonical roots cannot collide.
-3. A worker or event from project A cannot mutate task state for project B.
+3. A worker report from project A cannot mutate task state for project B.
 4. Fleet restart reconstructs both projects from disk and one runtime listing.
 5. Per-project status and fleet status agree on lifecycle and ownership.
 6. Dispatch refuses an unregistered, disabled, missing, or relocated project until the registry is explicitly reconciled.
@@ -715,7 +629,7 @@ P3 is complete only when every new task produces a durable routing record, the r
 - Delivery mode: `local-only` first.
 - Acceptance: user only.
 - Merge authority: none in the initial release.
-- Supervision: deterministic event observer plus on-demand Foreman turns.
+- Supervision: worker stop-hook reports plus on-demand Foreman turns; no background observer.
 - Project mutation: workers only, in client-prepared shared workspaces; resource leases guard concurrent mutation.
 - Legacy code: preserved under `legacy/` until parity and cutover are proven.
 
@@ -725,7 +639,7 @@ A new feature belongs in Foreman core only if it passes every check:
 
 1. Its necessary state survives a cleared session.
 2. It preserves Foreman's global-context and worker deep-context boundary.
-3. It preserves user wording, decisions, and original worker packages.
+3. It preserves user wording, decisions, and original worker reports.
 4. It keeps the user as acceptance and material-policy authority.
 5. It materially reduces user coordination or protects fleet correctness.
 6. Any new state has one writer, a stable identity, and a cleanup lifecycle.
@@ -762,54 +676,50 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 ### 20.1 Implemented paths
 
-- P0 durable coordination is implemented with schema-v1 validation at active-record load boundaries, an atomic migration seam that preserves the source record, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, delivery tracking, bounded pending-message retries, durable pending/processing/handled wake queues, event deduplication, processing-claim recovery, and one-pass fleet reconciliation.
-- A pending event is marked `handled` only when its handler returns `handled: true`.
-- A missing handler, a rejected handler, or a handler that does not apply the event leaves that event `pending`.
-- Production restart drains events before and after its single runtime listing.
-- It applies dead or missing recovery, idle or completion follow-up, and blocker triage when the evidence is sufficient.
-- It reports orphan, unknown, mismatch, and message anomalies without adopting an orphan or recovering from `unknown`.
-- The deterministic observer compares runtime, project, workspace, branch, lease, message, inbox, endpoint, owner, and generation evidence.
-- It emits actionable transitions and bounded wakes without model calls and never converts `unknown` into `dead`.
-- `observer once`, `observer start`, `observer stop`, and `observer run` are production entry points.
-- The start/stop loop stays up only while supervised work remains and wakes the same reconcile path.
-- Restart reconciliation applies valid generation-bound inbox packages and acknowledgements before retrying messages and performing one runtime listing.
-- Invalid external records are quarantined byte-for-byte.
+- P0 durable coordination is implemented with schema-v1 validation at active-record load boundaries, an atomic migration seam that preserves the source record, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, and delivery tracking.
+- `foreman init` records `FOREMAN_ROOT` and `FOREMAN_HOME` in the login shell's startup file as described in section 6.
+- Workers report through `foreman report`, bound to the assignment by `HERDR_PANE_ID`; `hooks/foreman-worker-stop.sh` prompts the report at the end of a turn.
+- `hooks/foreman-session-context.sh`, configured in `.claude/settings.json`, gives the Foreman session unread reports and status anomalies on each non-`DEV` prompt.
+- `foreman status` performs one read-only runtime listing and flags dead, missing, mismatched, input-blocked, and idle-without-report workers without interrupting them.
+- The observer, worker heartbeat, event spool, wake queue, worker registry, inbox packages, acknowledgements, quarantine, message retry, automatic follow-up, automatic blocker triage, and automatic recovery were removed on 2026-09-25.
 - P1 lifecycle control is implemented through the Herdr adapter for spawn, inspect, send, read, interrupt, and stop.
 - The compatibility gate checks the agent, workspace, and pane verbs used for dispatch.
 - Interrupt returns success only after a later inspection shows the endpoint still exists and is no longer working.
-- Recovery composes inspect, stop or confirmed absence, a new generation, spawn, and durable handoff delivery.
-- Confirmed `dead` or `missing` workers can be recovered with a bounded durable handoff message containing the brief, decisions, progress, report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
-- The successor receives a new generation and stale records remain rejected.
-- Blocker triage, bounded persisted technical follow-up, authority Decision Packages, verbatim human responses, delivered decision application, and scout-to-ship promotion are implemented.
+- Recovery composes a status check that confirms `dead` or `missing`, stop or confirmed absence, a new generation, spawn, and a brief carrying the durable handoff.
+- The handoff contains the brief, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
+- Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
 - Adoption is an explicit request.
-- It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation without sending the task again.
+- It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and its pane without sending the task again.
 - A scout stores a workspace fingerprint at assignment.
-- Completion, acceptance, and restart compare that fingerprint.
-- Herdr does not sandbox the worker, so a detected production-file change is quarantined, reported, and refused.
+- A `done` report, promotion, and acceptance compare that fingerprint.
+- Herdr does not sandbox the worker, so a detected production-file change is recorded and completion is refused.
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
-- The same proof covers concurrent assignments in two projects, cross-project package refusal, one restart listing, fleet and project status agreement, disabled or missing or relocated projects, acceptance that cannot address another project, and idle-endpoint reuse only after the prior assignment is terminal and its messages and lease are released.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
 - Mandatory task-intake routing is implemented through the tracked `FOREMAN_ROOT/config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
 - Routing supports the `codex`, `claude`, and `omp` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
 - Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
 - A compatible dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
-- `bin/foreman` is a thin wrapper over the core modules for dispatch, schedule, adopt, recover, decision lifecycle, accept-and-delete, reconcile, observer, and wake-driven follow-up.
+- `bin/foreman` is a thin wrapper over the core modules.
 - Default `status` and `task list` render the grouped Vietnamese report.
 - `--json` keeps the machine-readable record.
-- Production distribution artifacts are present under `AGENTS.md`, `.agents/skills/`, `docs/`, `bin/`, and `adapters/herdr/`.
+- Production distribution artifacts are present under `AGENTS.md`, `.agents/skills/`, `docs/`, `bin/`, `hooks/`, and `adapters/herdr/`.
 - `legacy/` remains preserved but is not a production entry point.
 
 ### 20.2 Runtime proof
 
-- On 2026-09-22, `npm test` ran 41 tests: 39 passed and 2 were skipped.
-- The skipped tests are the live Herdr cases, and they stay skipped unless `RUN_HERDR_LIVE=1`.
-- `npm run test:live` was not run for this status update.
-- The installed runtime is Herdr 0.9.1 and `HERDR_ENV=1`, but the session already has active user agents, so spawning the live workers was not treated as a safe proof.
+- On 2026-09-25, `npm test` ran 59 tests: 52 passed, 2 live cases were skipped, and 5 failed.
+- The 5 failures predate the report change: four Herdr adapter tests use a transport mock without the `pane list` verb and `workspace create` response, and one routing test expects the committed `config/model-routing.json`.
+- `npm run test:live` spawned real Codex workers through Herdr 0.9.1, and both cases passed: each worker received its brief, reported through its pane, and its task became `review-ready`.
+- Before the folder-trust fix, the ship case in an untrusted temporary folder failed because the brief's Enter answered Codex's trust screen and the brief was lost.
 
 ### 20.3 Explicit compatibility limits and deferrals
 
 - Task briefs are sent as text prompts to workers in separate Herdr workspaces.
-- Brief delivery no longer requires a worker ACK; delivered prompts are not automatically resent.
+- Brief delivery requires no worker acknowledgement, and delivered prompts are not automatically resent.
+- Herdr reports an agent showing a startup screen as idle, so spawn confirms Codex and Claude folder-trust screens with Enter before it treats the agent as ready; the workspace is a registered project that the user dispatched work into.
+- A startup screen that Foreman does not recognize can still consume the brief; `foreman status` then shows the worker idle without a report.
+- Resource leases have no expiry; a task that is never accepted keeps its lease until it is reassigned.
+- Stop-hook support is verified for Claude Code's `decision: block` and `stop_hook_active` contract; other coding agents may use a different hook payload or output.
 - Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; the adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.

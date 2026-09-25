@@ -6,12 +6,10 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask,
-  listMessages, createDecision, answerDecision, restartReconcile,
-  retryMessages, StaleGenerationError, ValidationError, HerdrAdapter,
-  recoverDeadWorker, buildHandoff, migrateJsonRecord, reconcileFleet,
+  listMessages, createDecision, answerDecision, recordReport, ValidationError, HerdrAdapter,
+  recoverDeadWorker, buildHandoff, migrateJsonRecord, fleetStatus,
   findProject, listResourceLeases, withHomeLock, HomeLock, HomeLockError,
 } = require("../src/foreman");
-const { listEvents, DeterministicObserver } = require("../src/coordination");
 
 function fixture() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-gaps-"));
@@ -32,7 +30,7 @@ function fixture() {
   const transport = {
     verifyCompatibility: () => ({ compatible: true, protocol: 22, endpointProtocolGeneration: 1 }),
     capabilities: () => ({ agentKind: true, model: false, reasoningEffort: false }),
-    spawn(request) { const endpoint = `worker-${workers.size + 1}`; workers.set(endpoint, { ...request, endpoint, status: "working" }); return { endpoint }; },
+    spawn(request) { const endpoint = `worker-${workers.size + 1}`; workers.set(endpoint, { ...request, endpoint, status: "working" }); return { endpoint, paneId: `pane-${endpoint}` }; },
     inspect(endpoint) { return workers.get(endpoint) || { endpoint, status: "missing" }; },
     list() { lists += 1; return [...workers.values()]; },
     send(endpoint) { return workers.has(endpoint) ? { delivered: true } : { delivered: false }; },
@@ -40,44 +38,6 @@ function fixture() {
   };
   return { base, roots, project, transport, workers, adapter: new HerdrAdapter({ transport }), get lists() { return lists; }, cleanup() { fs.rmSync(base, { recursive: true, force: true }); } };
 }
-
-function packageFor(task, assignment, type, body) {
-  return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, "", body].join("\n");
-}
-
-test("restart applies a valid direct inbox completion before its single runtime listing", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "restart inbox" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const inbox = path.join(f.roots.foremanHome, "data", "tasks", task.id, "inbox");
-    const completion = packageFor(task, assignment, "completion", "durable completion");
-    fs.writeFileSync(path.join(inbox, "generation-1-completion.md"), completion);
-    const result = restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
-    assert.equal(f.lists, 1);
-    assert.equal(result.inbox.applied.length, 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
-  } finally { f.cleanup(); }
-});
-
-test("message retry fails once at its bound and emits one durable actionable event", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "retry" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const messageFile = path.join(f.roots.foremanHome, "data", "messages", `${assignment.briefMessageId}.json`);
-    const message = JSON.parse(fs.readFileSync(messageFile, "utf8"));
-    message.status = "pending";
-    message.attempts = message.maxAttempts - 1;
-    message.lastAttemptAt = new Date(0).toISOString();
-    fs.writeFileSync(messageFile, `${JSON.stringify(message, null, 2)}\n`);
-    const failed = retryMessages({ roots: f.roots, adapter: { send: () => ({ delivered: false }) }, force: true });
-    assert.equal(failed[0].status, "failed");
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "message.delivery-failed").length, 1);
-    retryMessages({ roots: f.roots, adapter: { send: () => ({ delivered: false }) }, force: true });
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "message.delivery-failed").length, 1);
-  } finally { f.cleanup(); }
-});
 
 test("unsupported profile fails before spawn and explicit fallback is forwarded unchanged", () => {
   const f = fixture();
@@ -97,13 +57,21 @@ test("dead recovery sends a durable inspect-first handoff and bounds repeated at
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "recover" });
     const first = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
     f.workers.get(first.endpoint).status = "dead";
+    recordReport({ roots: f.roots, paneId: first.paneId, status: "progress", summary: "half of the work is done" });
     const replacement = recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "successor", adapter: f.adapter });
     assert.equal(replacement.generation, 2);
     assert.match(replacement.handoff.inspectFirst, /Inspect the existing workspace/);
-    const handoffMessage = listMessages({ roots: f.roots }).find((item) => item.kind === "recovery-handoff");
-    assert.equal(handoffMessage.generation, 2);
-    assert.equal(handoffMessage.payload.inspectFirst, replacement.handoff.inspectFirst);
+    assert.match(replacement.handoff.lastReport, /half of the work is done$/);
+    const brief = listMessages({ roots: f.roots }).find((item) => item.kind === "task-brief" && item.generation === 2);
+    assert.equal(brief.payload.handoff.inspectFirst, replacement.handoff.inspectFirst);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "handoff.json"), "utf8")).schemaVersion, 1);
+    const killCurrent = () => { f.workers.get(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).endpoint).status = "dead"; };
+    killCurrent();
+    recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "third", adapter: f.adapter });
+    killCurrent();
+    recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "fourth", adapter: f.adapter });
+    killCurrent();
+    assert.throws(() => recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "fifth", adapter: f.adapter }), /attempt limit is exhausted/);
   } finally { f.cleanup(); }
 });
 
@@ -119,11 +87,11 @@ test("dead recovery carries prior-generation decisions into the successor handof
     const replacement = recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "successor", adapter: f.adapter });
     assert.equal(replacement.generation, 2);
     assert.deepEqual(replacement.handoff.decisions.map((item) => item.generation), [1]);
-    assert.equal(replacement.handoffMessage.generation, 2);
+    assert.equal(listMessages({ roots: f.roots }).find((item) => item.kind === "task-brief" && item.generation === 2).payload.handoff.decisions[0].humanResponse, "A");
   } finally { f.cleanup(); }
 });
 
-test("schema migration keeps the original record and missing confirmation needs two durable observations", () => {
+test("schema migration keeps the original record and a missing worker is reported from one listing", () => {
   const f = fixture();
   try {
     const migrationFile = path.join(f.roots.foremanHome, "data", "migration.json");
@@ -136,8 +104,7 @@ test("schema migration keeps the original record and missing confirmation needs 
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "missing" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
     f.workers.delete(assignment.endpoint);
-    assert.equal(reconcileFleet({ roots: f.roots, adapter: f.adapter, missingConfirmationMs: 60_000, requireCompletionPackage: false }).tasks.find((item) => item.taskId === task.id).state, "unknown");
-    assert.equal(reconcileFleet({ roots: f.roots, adapter: f.adapter, missingConfirmationMs: 0, requireCompletionPackage: false }).tasks.find((item) => item.taskId === task.id).state, "missing");
+    assert.equal(fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id).state, "missing");
     assert.equal(buildHandoff({ roots: f.roots, taskId: task.id, reason: "missing" }).reason, "missing");
   } finally { f.cleanup(); }
 });
@@ -156,61 +123,25 @@ test("startup migrates legacy home records and accepts an external linked worktr
     execFileSync("git", ["-C", f.project, "worktree", "add", "-b", "linked-worker", linked], { stdio: "pipe" });
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "use linked worktree" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, workspacePath: linked });
-    const state = reconcileFleet({ roots: f.roots, adapter: f.adapter, requireCompletionPackage: false }).tasks.find((item) => item.taskId === task.id);
+    const state = fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id);
     assert.equal(state.state, "working");
     assert.equal(state.issues.some((issue) => issue.type === "task.project-mismatch"), false);
     assert.equal(assignment.workspace, fs.realpathSync(linked));
   } finally { f.cleanup(); }
 });
 
-test("a runtime worker bound to a task by name is not reported as an orphan when it also has a pane ID", () => {
+test("a runtime worker bound to a task by name is matched even when it also has a pane ID", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "bound pane" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const adapter = { list: () => [{ pane_id: "w1:p1", name: assignment.endpoint, agent_status: "working" }, { pane_id: "w1:p2", name: "stranger", agent_status: "idle" }] };
-    const result = reconcileFleet({ roots: f.roots, adapter });
+    const adapter = { list: () => [{ pane_id: "pane-worker-1", name: assignment.endpoint, agent_status: "working" }, { pane_id: "w1:p2", name: "stranger", agent_status: "idle" }] };
+    const result = fleetStatus({ roots: f.roots, adapter });
     assert.equal(result.tasks[0].worker.name, assignment.endpoint);
-    const orphans = listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.eventType === "worker.orphan");
-    assert.deepEqual(orphans.map((event) => event.endpoint), ["w1:p2"]);
-  } finally { f.cleanup(); }
-});
-
-test("the observer loop skips a pass while another process holds the home lock", async () => {
-  const f = fixture();
-  const observer = new DeterministicObserver({ roots: f.roots, adapter: f.adapter, intervalMs: 100 });
-  try {
-    const lock = path.join(f.roots.foremanHome, "data", ".lock");
-    fs.mkdirSync(lock);
-    observer.start();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const listsWhileLocked = f.lists;
-    fs.rmSync(lock, { recursive: true });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.equal(listsWhileLocked, 0);
-    assert.ok(f.lists > 0);
-  } finally { observer.stop(); f.cleanup(); }
-});
-
-test("a worker follows the brief reporting contract and wakes Foreman", () => {
-  const f = fixture();
-  try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "protocol" });
-    const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources: [{ key: "file/out", mode: "write" }] });
-    const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
-    const instructions = message.payload.instructions.join("\n");
-    const completionPath = instructions.match(/completion package to (\S+)/)[1];
-    const doneCommand = instructions.match(/then run: (.+ event emit .+ done .+)$/m)[1];
-    assert.equal(completionPath, message.payload.reportPath);
-    assert.match(instructions, /GENERATION: 1/);
-    assert.equal(assignment.status, "working");
-    assert.equal(message.status, "delivered");
-    const headerBlock = instructions.match(/^TASK: .+\nPROJECT: .+\nAGENT: .+\nGENERATION: \d+\nTYPE: completion$/m)[0];
-    fs.writeFileSync(completionPath, `${headerBlock}\n\noutcome: done\n`);
-    execFileSync("/bin/sh", ["-c", doneCommand], { stdio: "pipe" });
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).filter((event) => event.taskId === task.id && event.eventType === "worker.done").length, 1);
-    restartReconcile({ roots: f.roots, adapter: f.adapter, retryMessages: false });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
+    assert.equal(result.tasks[0].state, "working");
+    assert.deepEqual(result.anomalies, []);
+    const moved = { list: () => [{ pane_id: "w9:p9", name: assignment.endpoint, agent_status: "working" }] };
+    assert.deepEqual(fleetStatus({ roots: f.roots, adapter: moved }).anomalies.map((issue) => issue.type), ["task.runtime-pane-mismatch"]);
   } finally { f.cleanup(); }
 });
 

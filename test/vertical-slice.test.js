@@ -5,10 +5,10 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  HomeLock, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, ResourceBusyError,
+  HomeLock, HomeLockError, ValidationError, CleanupRefusedError, ResourceBusyError,
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
-  recordPackage, reconstructTask, acceptTask,
-  renewResources, listResourceLeases,
+  recordReport, reconstructTask, acceptTask,
+  listResourceLeases,
   validateWorkspace,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
@@ -30,7 +30,7 @@ function fixture() {
   const endpoints = new Map();
   const adapter = {
     verifyCompatibility: () => ({ protocol: 1 }),
-    spawn(request) { const endpoint = `endpoint-${endpoints.size + 1}`; endpoints.set(endpoint, { ...request, endpoint, status: "working" }); return { endpoint }; },
+    spawn(request) { const endpoint = `endpoint-${endpoints.size + 1}`; endpoints.set(endpoint, { ...request, endpoint, paneId: `pane-${endpoint}`, status: "working" }); return { endpoint, paneId: `pane-${endpoint}` }; },
     send() { return { delivered: true }; },
     inspect(endpoint) { const item = endpoints.get(endpoint); return item?.status === "missing" ? { endpoint, status: "missing" } : item; },
     stop(endpoint) { endpoints.get(endpoint).status = "missing"; return { stopped: true }; },
@@ -67,9 +67,21 @@ test("resource leases allow disjoint work and block overlapping work", () => {
     assert.throws(() => assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/auth/login", mode: "read" }] }), ResourceBusyError);
     const second = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "db/users/record/2", mode: "write" }] }).resourceLease;
     assert.deepEqual(listResourceLeases({ roots: f.roots }).map((lease) => lease.leaseId).sort(), [first.leaseId, second.leaseId].sort());
-    const renewed = renewResources({ roots: f.roots, leaseId: first.leaseId });
-    assert.equal(renewed.leaseId, first.leaseId);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, "data", "tasks", one.id, "meta.json"), "utf8")).resourceLease.expiresAt, renewed.expiresAt);
+  } finally { f.cleanup(); }
+});
+
+test("a resource lease is held until acceptance however long the worker takes", () => {
+  const f = fixture();
+  try {
+    const one = createTask({ roots: f.roots, projectId: "fixture", brief: "long task" });
+    const two = createTask({ roots: f.roots, projectId: "fixture", brief: "overlapping task" });
+    assignTask({ roots: f.roots, taskId: one.id, owner: "worker-1", adapter: f.adapter, resources: [{ key: "file/src/**", mode: "write" }] });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 24 * 60 * 60 * 1000;
+    try {
+      assert.equal(listResourceLeases({ roots: f.roots }).length, 1);
+      assert.throws(() => assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/app.js", mode: "write" }] }), ResourceBusyError);
+    } finally { Date.now = realNow; }
   } finally { f.cleanup(); }
 });
 
@@ -104,15 +116,15 @@ test("dispatch binds Herdr endpoint, workspace, owner, and generation", () => {
   } finally { f.cleanup(); }
 });
 
-test("stale generation package is rejected and quarantined", () => {
+test("a replaced generation's worker pane cannot report", () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "handoff" });
-    assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
-    assignTask({ roots: f.roots, taskId: task.id, owner: "worker-2", adapter: f.adapter });
-    const stale = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: completion\n\nold`;
-    assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw: stale, type: "completion" }), StaleGenerationError);
-    assert.ok(fs.readdirSync(path.join(f.home, "data", "tasks", task.id, "inbox", "quarantine")).length > 0);
+    const first = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
+    const second = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-2", adapter: f.adapter });
+    assert.notEqual(first.paneId, second.paneId);
+    assert.throws(() => recordReport({ roots: f.roots, paneId: first.paneId, status: "done", summary: "old" }), ValidationError);
+    assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id, "reports")), false);
   } finally { f.cleanup(); }
 });
 
@@ -121,12 +133,10 @@ test("completion, acceptance, and restart reconstruction end by deleting task re
   try {
     const task = createTask({ roots: f.roots, projectId: "fixture", brief: "finish and verify" });
     const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker-1", adapter: f.adapter });
-    const progress = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: progress\n\nRAW progress package`;
-    recordPackage({ roots: f.roots, taskId: task.id, raw: progress, type: "progress" });
-    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).progress, progress);
-    const completion = `TASK: ${task.id}\nPROJECT: fixture\nAGENT: worker-1\nGENERATION: 1\nTYPE: completion\n\nRAW completion package`;
-    recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
-    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).report, completion);
+    recordReport({ roots: f.roots, paneId: assignment.paneId, status: "progress", summary: "RAW progress report" });
+    assert.match(reconstructTask({ roots: f.roots, taskId: task.id }).lastReport, /\n\nRAW progress report$/);
+    recordReport({ roots: f.roots, paneId: assignment.paneId, status: "done", summary: "RAW completion report" });
+    assert.match(reconstructTask({ roots: f.roots, taskId: task.id }).report, /STATUS: done\n.*\n\nRAW completion report$/);
     assert.throws(() => acceptTask({ roots: f.roots, taskId: task.id, adapter: { stop: () => ({ stopped: true }), inspect: () => { throw new Error("unavailable"); } } }), CleanupRefusedError);
     assert.equal(fs.existsSync(path.join(f.home, "data", "tasks", task.id)), true);
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });

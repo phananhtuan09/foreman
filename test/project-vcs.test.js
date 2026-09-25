@@ -5,7 +5,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage, acceptTask,
+  resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, acceptTask,
   fleetStatus, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
@@ -18,7 +18,7 @@ function fixture() {
   const transport = {
     verifyCompatibility: () => ({ compatible: true, protocol: 22, endpointProtocolGeneration: 1 }),
     capabilities: () => ({ agentKind: true, model: false, reasoningEffort: false }),
-    spawn(request) { const endpoint = `worker-${workers.size + 1}`; workers.set(endpoint, { ...request, endpoint, status: "working" }); return { endpoint }; },
+    spawn(request) { const endpoint = `worker-${workers.size + 1}`; workers.set(endpoint, { ...request, endpoint, status: "working" }); return { endpoint, paneId: `pane-${endpoint}` }; },
     inspect(endpoint) { return workers.get(endpoint) || { endpoint, status: "missing" }; },
     list() { return [...workers.values()]; },
     send(endpoint) { return workers.has(endpoint) ? { delivered: true } : { delivered: false }; },
@@ -47,8 +47,8 @@ function gitProject(base, name, branch) {
   return fs.realpathSync(root);
 }
 
-function packageFor(task, assignment, type, body) {
-  return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, "", body].join("\n");
+function report(f, assignment, status, summary) {
+  return recordReport({ roots: f.roots, paneId: assignment.paneId, status, summary });
 }
 
 function dispatch(f, task, resources) {
@@ -82,7 +82,7 @@ test("acceptance deletes task records and releases a ship lease in a project wit
     const state = fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id);
     assert.deepEqual(state.issues.filter((issue) => /project|branch|workspace/.test(issue.type)), []);
     fs.writeFileSync(path.join(root, "README.md"), "edited\n");
-    recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "edited README"), type: "completion" });
+    report(f, assignment, "done", "edited README");
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workspaceRetained, root);
@@ -99,13 +99,13 @@ test("scout in a project without Git detects file changes outside excluded direc
     const clean = createTask({ roots: f.roots, projectId: "plain", type: "scout", brief: "read only" });
     const cleanAssignment = dispatch(f, clean, [{ key: "file/README.md", mode: "read" }]);
     fs.writeFileSync(path.join(root, "node_modules", "dep", "index.js"), "module.exports = 2;\n");
-    recordPackage({ roots: f.roots, taskId: clean.id, raw: packageFor(clean, cleanAssignment, "completion", "no edits"), type: "completion" });
+    report(f, cleanAssignment, "done", "no edits");
     acceptTask({ roots: f.roots, taskId: clean.id, adapter: f.adapter });
 
     const dirty = createTask({ roots: f.roots, projectId: "plain", type: "scout", brief: "read only" });
     const dirtyAssignment = assignTask({ roots: f.roots, taskId: dirty.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/README.md", mode: "read" }] });
     fs.writeFileSync(path.join(root, "notes.txt"), "scout wrote this\n");
-    assert.throws(() => recordPackage({ roots: f.roots, taskId: dirty.id, raw: packageFor(dirty, dirtyAssignment, "completion", "claimed no edits"), type: "completion" }), /Scout modified production files/);
+    assert.throws(() => report(f, dirtyAssignment, "done", "claimed no edits"), /Scout modified production files/);
   } finally { f.cleanup(); }
 });
 
@@ -117,7 +117,7 @@ test("Git ship work can be accepted without a separate landing step", () => {
     const task = createTask({ roots: f.roots, projectId: "repo", brief: "change on current branch" });
     const assignment = dispatch(f, task);
     assert.equal(assignment.branch, "develop");
-    recordPackage({ roots: f.roots, taskId: task.id, raw: packageFor(task, assignment, "completion", "done"), type: "completion" });
+    report(f, assignment, "done", "done");
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workspaceRetained, root);

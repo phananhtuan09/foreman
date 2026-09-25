@@ -2,9 +2,11 @@
 
 Foreman keeps global fleet state in a private file home and treats each registered project as an exact identity: the Git common directory for Git projects and the canonical root path for projects without Git.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
-`src/coordination.js` owns the durable message outbox, generation-bound inbox reconciliation, worker event spool, worker registry, restart reconciliation, and handoff snapshots.
-All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, inbox, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` and `data/events/` hold fleet-wide coordination.
+`src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
+`src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
+All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
 `src/herdr.js` is the narrow Herdr adapter.
+`hooks/` holds the worker stop hook and the Foreman session prompt hook.
 `adapters/herdr/` is the distribution wrapper.
 
 Every task enters a durable `routing` state after its verbatim brief is stored.
@@ -16,24 +18,21 @@ Worker profiles support `codex`, `claude`, and `omp`; Herdr starts the selected 
 
 Canonical writes use the home lock and atomic replacement.
 JSON records carry `schemaVersion: 1`; unsupported or malformed active records fail closed.
-Worker files are external input: valid current-generation packages are applied idempotently, while invalid packages and acknowledgements are copied byte-for-byte to the task quarantine.
+Worker reports are external input: `foreman report` accepts one only from the Herdr pane bound to a working or blocked assignment and stores it verbatim as a new file.
 
-The supervision cycle applies inbox records and recovers event claims before one runtime listing.
-Events stay pending unless a handler actually applies them.
-Restart then performs the required dead, missing, idle, blocked, or completion follow-up.
-Recovery composes inspect, stop, and spawn.
-Reconciliation compares project, owner, generation, endpoint, workspace, branch, lease, message, and package evidence and persists actionable events under `data/events/<taskId>/`.
-It stores its latest observation and the worker connection status in task metadata, and the worker registry is derived from those connection records on read.
-The resource lease also lives in task metadata, so lease conflicts are checked against the leases of existing tasks.
-The observer loop runs the event handlers after any pass that leaves pending events.
-Runtime classification still decides `dead`, `missing`, and `unknown`.
+Supervision is pull-based and runs only in Foreman turns.
+A worker's stop hook asks it to run `foreman report` when it ends a turn without having reported since Foreman last prompted it.
+The report records `lastReport` in task metadata and moves a `done` task to `review-ready` or a `blocked` task to `blocked`.
+The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
+The status check lists Herdr once, classifies each assignment as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and flags an idle worker that has not reported; it never writes state or interrupts a worker.
+Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
 Herdr creates a separate workspace for each new worker and receives a concise text prompt.
-The private outbox retains message identity and payload; delivered prompts are not resent for a missing worker acknowledgement.
+The private outbox retains message identity and payload; delivered prompts are not resent.
 After submission, Foreman inspects the endpoint without interrupting the worker and records the result as runtime evidence.
-Failed delivery produces an actionable event, while an uncertain task-brief submission keeps the endpoint for inspection.
+An uncertain task-brief submission keeps the endpoint for inspection.
 
 Task ownership changes create a new generation.
-A confirmed dead or missing worker is replaced only through a durable handoff containing the original brief, decisions, progress, report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
+A confirmed dead or missing worker is replaced only through a durable handoff containing the original brief, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
 Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, and deletes task-specific Foreman records and coordination state.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.

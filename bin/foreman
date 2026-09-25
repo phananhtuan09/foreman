@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const core = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
+const { installShellEnv } = require("../src/shell-env");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
 function arg(name, fallback) {
@@ -20,12 +21,12 @@ function args(name) {
 }
 function roots() { return core.resolveRoots({ foremanRoot: process.env.FOREMAN_ROOT || process.cwd(), foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd() }); }
 function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) }); }
-function armObserver(roots) {
-  try {
-    core.startObserver({ roots });
-  } catch (_) {
-    // The lifecycle result remains authoritative; the next explicit reconcile can retry supervision.
-  }
+function readStdin() {
+  if (process.stdin.isTTY) return "";
+  try { return fs.readFileSync(0, "utf8"); } catch (_) { return ""; }
+}
+function hookPayload() {
+  try { return JSON.parse(readStdin() || "{}"); } catch (_) { return {}; }
 }
 function output(value) {
   if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
@@ -45,7 +46,7 @@ function resourceClaims() {
 
 const usage = [
   "usage:",
-  "  init",
+  "  init [--home PATH]",
   "  routing init",
   "  routing show",
   "  routing route --task ID",
@@ -57,32 +58,60 @@ const usage = [
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
+  "  task message --task ID (--text TEXT|--text-file FILE)",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
   "  decision deliver --task ID --decision ID",
-  "  decision acknowledge --task ID --decision ID --message ID --digest DIGEST",
-  "  decision apply --task ID --decision ID",
   "  status [--project ID] [--json]",
-  "  reconcile",
-  "  observer once [--interval MS]",
-  "  observer start [--interval MS]",
-  "  observer stop",
-  "  observer run [--interval MS]",
-  "  event emit TASK TYPE --project PROJECT --worker OWNER --generation N --endpoint ENDPOINT [--payload JSON]",
-  "  worker heartbeat --task TASK --worker OWNER --generation N [--pid N] [--endpoint ENDPOINT]",
+  "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
+  "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
+  "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
 ].join("\n");
 
 function main() {
   const command = process.argv[2];
   const action = process.argv[3];
-  const home = roots();
   if (!command || command === "--help" || command === "-h" || command === "help") { output(usage); return; }
   if (command === "init") {
+    // The Foreman checkout that runs init becomes the root recorded in the shell startup file.
+    const root = process.cwd();
+    if (!fs.existsSync(path.join(root, "bin", "foreman"))) throw new Error(`init must run from the Foreman checkout; ${root} has no bin/foreman`);
+    const home = core.resolveRoots({ foremanRoot: root, foremanHome: arg("--home", root) });
     const initialized = core.initHome(home);
     const routing = core.initRoutingConfig({ roots: home });
-    output({ ...initialized, routingConfig: routing.file });
+    const shell = installShellEnv({ vars: { FOREMAN_ROOT: home.foremanRoot, FOREMAN_HOME: home.foremanHome } });
+    output({ ...initialized, routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed } });
     return;
   }
+  if (command === "worker" && action === "hook") {
+    // A stop hook must never break the coding agent, so every failure ends silently.
+    try {
+      if (!process.env.FOREMAN_ROOT || !process.env.HERDR_PANE_ID) return;
+      if (!fs.existsSync(path.join(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT, "data", "tasks"))) return;
+      const decision = core.workerStopHook({ roots: roots(), paneId: process.env.HERDR_PANE_ID, payload: hookPayload() });
+      if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
+    } catch (error) { process.stderr.write(`foreman worker hook: ${error.message}\n`); }
+    return;
+  }
+  if (command === "session" && action === "context") {
+    try {
+      const payload = hookPayload();
+      const adapter = process.env.HERDR_ENV === "1" ? runtimeAdapter() : null;
+      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd });
+      // Claude Code and Codex both read prompt context from this JSON shape.
+      if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
+    } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
+    return;
+  }
+  if (command === "report") {
+    if (!process.env.FOREMAN_ROOT) throw new Error("FOREMAN_ROOT is not set; run bin/foreman init in the Foreman checkout");
+    if (!process.env.HERDR_PANE_ID) throw new Error("HERDR_PANE_ID is not set; only a Foreman worker pane can report");
+    const summaryFile = arg("--summary-file");
+    const summary = summaryFile ? fs.readFileSync(path.resolve(summaryFile), "utf8") : (arg("--summary") ?? readStdin());
+    output(core.recordReport({ roots: roots(), paneId: process.env.HERDR_PANE_ID, status: arg("--status"), summary }));
+    return;
+  }
+  const home = roots();
   if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home })); return; }
   if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanRoot, { required: true })); return; }
   if (command === "routing" && action === "route") { output(core.routeTask({ roots: home, taskId: arg("--task") })); return; }
@@ -102,7 +131,6 @@ function main() {
   }
   if (command === "task" && action === "dispatch") {
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint") });
-    armObserver(home);
     output(result);
     return;
   }
@@ -116,23 +144,27 @@ function main() {
     const max = arg("--max");
     const owner = arg("--owner");
     const result = core.dispatchReadyTasks({ roots: home, adapter: runtimeAdapter(), ownerForTask: owner ? () => owner : undefined, maxConcurrency: max === undefined ? Infinity : Number(max), projectLimits });
-    armObserver(home);
     output(result);
     return;
   }
   if (command === "task" && action === "adopt") {
     const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
-    armObserver(home);
     output(result);
     return;
   }
   if (command === "task" && action === "recover") {
     const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
-    armObserver(home);
     output(result);
     return;
   }
   if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "message") {
+    const textFile = arg("--text-file");
+    const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
+    if (!text) throw new Error("task message requires --text or --text-file");
+    output(core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter() }));
+    return;
+  }
   if (command === "decision" && action === "create") {
     output(core.createDecision({ roots: home, taskId: arg("--task"), finding: arg("--finding"), why: arg("--why"), options: args("--option"), impact: arg("--impact"), evidence: arg("--evidence"), recommendation: arg("--recommendation") }));
     return;
@@ -145,52 +177,10 @@ function main() {
     output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
     return;
   }
-  if (command === "decision" && action === "acknowledge") {
-    output(core.acknowledgeDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), messageId: arg("--message"), ack: { payloadDigest: arg("--digest") } }));
-    return;
-  }
-  if (command === "decision" && action === "apply") {
-    output(core.applyDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision") }));
-    return;
-  }
   if (command === "status") {
     const adapter = runtimeAdapter();
     const status = arg("--project") ? core.projectStatus({ roots: home, projectId: arg("--project"), adapter }) : core.fleetStatus({ roots: home, adapter });
-    // A status check also revives supervision if the observer has stopped while work is still active.
-    armObserver(home);
     output(flag("--json") ? status : core.renderUserReport(status, home));
-    return;
-  }
-  if (command === "reconcile") {
-    const result = core.restartReconcile({ roots: home, adapter: runtimeAdapter() });
-    armObserver(home);
-    output(result);
-    return;
-  }
-  if (command === "observer" && action === "once") { output(core.runObserverOnce({ roots: home, adapter: runtimeAdapter() })); return; }
-  if (command === "observer" && action === "start") { output(core.startObserver({ roots: home, intervalMs: Number(arg("--interval", "1000")) })); return; }
-  if (command === "observer" && action === "stop") { output(core.stopObserver({ roots: home })); return; }
-  if (command === "observer" && action === "run") {
-    core.runObserverLoop({ roots: home, adapter: runtimeAdapter(), intervalMs: Number(arg("--interval", "1000")) });
-    return;
-  }
-  if (command === "event" && action === "emit") {
-    const taskId = process.argv[4];
-    const eventType = process.argv[5];
-    if (!taskId || !eventType || taskId.startsWith("--") || eventType.startsWith("--")) { die(usage); return; }
-    const payloadFile = arg("--payload-file");
-    const payloadArg = arg("--payload");
-    let payload = null;
-    if (payloadFile) payload = JSON.parse(fs.readFileSync(path.resolve(payloadFile), "utf8"));
-    else if (payloadArg !== undefined) { try { payload = JSON.parse(payloadArg); } catch (_) { payload = payloadArg; } }
-    const rawGeneration = arg("--generation");
-    output(core.emitWorkerEvent({ roots: home, taskId, projectId: arg("--project"), eventType, worker: arg("--worker"), generation: rawGeneration === undefined ? undefined : Number(rawGeneration), endpoint: arg("--endpoint"), payload }));
-    return;
-  }
-  if (command === "worker" && action === "heartbeat") {
-    const rawGeneration = arg("--generation");
-    const pid = arg("--pid");
-    output(core.recordWorkerHeartbeat({ roots: home, taskId: arg("--task"), worker: arg("--worker"), generation: rawGeneration === undefined ? undefined : Number(rawGeneration), pid: pid === undefined ? undefined : Number(pid), endpoint: arg("--endpoint") }));
     return;
   }
   die(usage);

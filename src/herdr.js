@@ -9,6 +9,9 @@ function parseVersion(value) {
   return { text: match[0], major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
+// Startup screens that consume the next Enter; a prompt submitted while one is shown is lost.
+const STARTUP_DIALOG = /Press enter to continue|Yes, continue|Trust this folder\?|Trust and continue|Do you trust the files in this folder|Yes, I trust this folder/i;
+
 function isBelow(actual, required) {
   return actual.major < required.major
     || (actual.major === required.major && actual.minor < required.minor)
@@ -155,9 +158,10 @@ class HerdrCliTransport {
     while (Date.now() < deadline) {
       let output = "";
       try { output = this._run(["pane", "read", paneId, "--lines", "100"]); } catch (_) {}
-      if (/Press enter to continue|Yes, continue/i.test(output)) {
+      // Herdr reports these screens as idle, so they must be dismissed before idle counts as ready.
+      if (STARTUP_DIALOG.test(output)) {
         this._run(["pane", "send-keys", paneId, "return"]);
-        this._sleep(500);
+        this._sleep(1000);
         continue;
       }
       if (/Ask Codex to do anything|Ask Claude to do anything|Ask Gemini to do anything|Ask .* to do anything/i.test(output)) return;

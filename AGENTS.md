@@ -32,8 +32,9 @@ Project code changes belong to assigned workers in their leased workspaces.
   Its `data/` directory is private runtime state and must not be edited by workers.
 - Every active JSON record is versioned and identity-bound.
   Acquire the home lock before canonical mutations.
-- A worker may write only its generation-bound inbox/package paths and its leased project resources.
-- Preserve original briefs, decisions, worker packages, evidence, and quarantine bytes.
-- Transport delivery is not acknowledgement.
-  A brief, decision, follow-up, or handoff cannot activate or resume work until a matching ACK is durably recorded.
+- A worker changes Foreman state only through `foreman report` from its bound Herdr pane, and writes only its leased project resources.
+- Preserve original briefs, decisions, worker reports, and evidence.
+- Herdr accepting a prompt proves delivery only, not that the worker read it.
+  A new worker report or the runtime status is the evidence that work continues.
+- Supervision runs only in Foreman turns, from the session prompt-hook context or one non-interrupting status check; workers never prompt the Foreman session.
 - Never infer a dead worker from unknown evidence, cross project boundaries, or silently choose a dispatch fallback.

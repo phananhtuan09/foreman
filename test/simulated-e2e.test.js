@@ -10,7 +10,7 @@ const {
   registerProject,
   createTask,
   assignTask,
-  recordPackage,
+  recordReport,
   reconstructTask,
   acceptTask,
   HerdrAdapter,
@@ -29,8 +29,8 @@ class SimulatedHerdrTransport {
 
   spawn(request) {
     const endpoint = `sim-worker-${this.nextEndpoint++}`;
-    this.workers.set(endpoint, { ...request, endpoint, status: "working" });
-    return { endpoint };
+    this.workers.set(endpoint, { ...request, endpoint, paneId: `pane-${endpoint}`, status: "working" });
+    return { endpoint, paneId: `pane-${endpoint}` };
   }
 
   inspect(endpoint) {
@@ -82,16 +82,8 @@ function fixture() {
   };
 }
 
-function workerPackage(task, assignment, type, body) {
-  return [
-    `TASK: ${task.id}`,
-    `PROJECT: ${task.projectId}`,
-    `AGENT: ${assignment.owner}`,
-    `GENERATION: ${assignment.generation}`,
-    `TYPE: ${type}`,
-    "",
-    body,
-  ].join("\n");
+function report(f, assignment, status, summary) {
+  return recordReport({ roots: f.roots, paneId: assignment.paneId, status, summary });
 }
 
 test("simulated end-to-end flow coordinates two workers through delivery and cleanup", () => {
@@ -107,22 +99,17 @@ test("simulated end-to-end flow coordinates two workers through delivery and cle
     assert.deepEqual(f.transport.messages.map(({ endpoint }) => endpoint), [assignmentOne.endpoint, assignmentTwo.endpoint]);
     assert.match(f.transport.messages[0].message, new RegExp(`Task ${taskOne.id} \\| project fixture`));
     assert.match(f.transport.messages[1].message, new RegExp(`Task ${taskTwo.id} \\| project fixture`));
-    assert.match(f.transport.messages[0].message, /GENERATION: 1/);
-    assert.match(f.transport.messages[1].message, /GENERATION: 1/);
+    assert.doesNotMatch(f.transport.messages[0].message, /event emit|completion package/);
 
-    const progressOne = workerPackage(taskOne, assignmentOne, "progress", "worker one is halfway done");
-    const progressTwo = workerPackage(taskTwo, assignmentTwo, "progress", "worker two is halfway done");
-    recordPackage({ roots: f.roots, taskId: taskOne.id, raw: progressOne, type: "progress" });
-    recordPackage({ roots: f.roots, taskId: taskTwo.id, raw: progressTwo, type: "progress" });
-    assert.equal(reconstructTask({ roots: f.roots, taskId: taskOne.id }).progress, progressOne);
-    assert.equal(reconstructTask({ roots: f.roots, taskId: taskTwo.id }).progress, progressTwo);
+    report(f, assignmentOne, "progress", "worker one is halfway done");
+    report(f, assignmentTwo, "progress", "worker two is halfway done");
+    assert.match(reconstructTask({ roots: f.roots, taskId: taskOne.id }).lastReport, /worker one is halfway done$/);
+    assert.match(reconstructTask({ roots: f.roots, taskId: taskTwo.id }).lastReport, /worker two is halfway done$/);
 
-    const completionOne = workerPackage(taskOne, assignmentOne, "completion", "worker one complete");
-    const completionTwo = workerPackage(taskTwo, assignmentTwo, "completion", "worker two complete");
-    recordPackage({ roots: f.roots, taskId: taskOne.id, raw: completionOne, type: "completion" });
-    recordPackage({ roots: f.roots, taskId: taskTwo.id, raw: completionTwo, type: "completion" });
-    assert.equal(reconstructTask({ roots: f.roots, taskId: taskOne.id }).report, completionOne);
-    assert.equal(reconstructTask({ roots: f.roots, taskId: taskTwo.id }).report, completionTwo);
+    report(f, assignmentOne, "done", "worker one complete");
+    report(f, assignmentTwo, "done", "worker two complete");
+    assert.match(reconstructTask({ roots: f.roots, taskId: taskOne.id }).report, /worker one complete$/);
+    assert.match(reconstructTask({ roots: f.roots, taskId: taskTwo.id }).report, /worker two complete$/);
 
     const acceptedOne = acceptTask({ roots: f.roots, taskId: taskOne.id, adapter: f.adapter });
     const acceptedTwo = acceptTask({ roots: f.roots, taskId: taskTwo.id, adapter: f.adapter });

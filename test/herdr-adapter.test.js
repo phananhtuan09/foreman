@@ -132,6 +132,28 @@ test("Herdr accepts an idle Claude endpoint when its prompt has no legacy hint t
   assert.doesNotThrow(() => transport._ensureInteractiveReady("w1:p2", "worker-1", 100));
 });
 
+test("Herdr dismisses a folder-trust screen before treating an idle agent as ready", () => {
+  for (const dialog of [
+    "Folder access\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n  enter continue · esc quit\n",
+    "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n",
+  ]) {
+    const calls = [];
+    let trusted = false;
+    const transport = new HerdrCliTransport();
+    transport._sleep = () => {};
+    transport._run = (args) => {
+      calls.push(args.join(" "));
+      if (args[0] === "pane" && args[1] === "read") return trusted ? "› Ask Codex to do anything\n" : dialog;
+      if (args[0] === "pane" && args[1] === "send-keys") { trusted = true; return ""; }
+      if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", pane_id: "w1:p2", agent_status: "idle", cwd: "/tmp/worktree" }] } });
+      throw new Error(`Unexpected Herdr command: ${args.join(" ")}`);
+    };
+    transport._ensureInteractiveReady("w1:p2", "worker-1", 1000);
+    assert.deepEqual(calls.filter((call) => call.startsWith("pane send-keys")), ["pane send-keys w1:p2 return"]);
+    assert.equal(calls.filter((call) => call.startsWith("agent list")).length, 0, "an idle status is not trusted while the trust screen is shown");
+  }
+});
+
 test("adapter interrupt fails closed unless a later inspection shows the endpoint survived idle", () => {
   let status = "working";
   const transport = {

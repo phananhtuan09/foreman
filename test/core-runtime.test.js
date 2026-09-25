@@ -5,11 +5,10 @@ const path = require("node:path");
 const { spawn, execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  resolveRoots, initHome, registerProject, createTask, assignTask, recordPackage,
-  listMessages, observeRuntime, listEvents, drainWakeQueue,
-  recoverProcessingEvents, recoverDeadWorker, createDecision, answerDecision,
+  resolveRoots, initHome, registerProject, createTask, assignTask, recordReport,
+  listMessages, fleetStatus, recoverDeadWorker, createDecision, answerDecision,
   deliverDecision, createTask: intake, acceptTask,
-  dispatchReadyTasks, ResourceBusyError, HerdrAdapter, StaleGenerationError,
+  dispatchReadyTasks, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
 class ChildWorkerTransport {
@@ -27,7 +26,7 @@ class ChildWorkerTransport {
     const worker = { ...request, endpoint, child, status: "working" };
     this.workers.set(endpoint, worker);
     child.on("exit", (code) => { if (worker.status === "working") worker.status = code === 0 ? "done" : "dead"; });
-    return { endpoint };
+    return { endpoint, paneId: `pane-${endpoint}` };
   }
 
   inspect(endpoint) {
@@ -92,11 +91,7 @@ function fixture() {
   return { base, one, two, roots, transport, adapter: new HerdrAdapter({ transport }), cleanup: () => fs.rmSync(base, { recursive: true, force: true }) };
 }
 
-function packageFor(task, assignment, type, body, extra = {}) {
-  return [`TASK: ${task.id}`, `PROJECT: ${task.projectId}`, `AGENT: ${assignment.owner}`, `GENERATION: ${assignment.generation}`, `TYPE: ${type}`, ...Object.entries(extra).map(([key, value]) => `${key}: ${value}`), "", body].join("\n");
-}
-
-test("real child workers complete a direct assignment and survive observer/restart reconciliation", async () => {
+test("real child workers complete a direct assignment and a status check flags the missing report", async () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "one", brief: "write a runtime artifact" });
@@ -104,46 +99,34 @@ test("real child workers complete a direct assignment and survive observer/resta
     const message = listMessages({ roots: f.roots }).find((item) => item.messageId === assignment.briefMessageId);
     assert.equal(message.status, "delivered");
     assert.equal(assignment.status, "working");
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "working");
     await f.transport.wait(assignment.endpoint);
     assert.equal(fs.readFileSync(path.join(f.one, "worker-real.out"), "utf8"), "worker-real completed\n");
 
-    const observed = observeRuntime({ roots: f.roots, adapter: f.adapter });
-    assert.equal(observed.tasks.find((item) => item.taskId === task.id).state, "unknown");
-    const events = listEvents({ roots: f.roots, state: "pending" });
-    assert.equal(events.filter((event) => event.taskId === task.id && event.eventType === "worker.unknown").length, 1);
-    const handled = drainWakeQueue({ roots: f.roots, handler: (event) => ({ handled: true, observed: event.eventType }) });
-    assert.ok(handled.some((event) => event.taskId === task.id));
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.taskId === task.id), false);
-    observeRuntime({ roots: f.roots, adapter: f.adapter });
-    observeRuntime({ roots: f.roots, adapter: f.adapter });
-    assert.equal(listEvents({ roots: f.roots, state: "pending" }).some((event) => event.taskId === task.id && event.eventType === "worker.unknown"), false);
-    recoverProcessingEvents({ roots: f.roots, maxAgeMs: 0 });
+    const observed = fleetStatus({ roots: f.roots, adapter: f.adapter });
+    const item = observed.tasks.find((entry) => entry.taskId === task.id);
+    assert.equal(item.state, "idle");
+    assert.deepEqual(item.issues.map((issue) => issue.type), ["worker.idle-without-report"]);
 
-    const completion = packageFor(task, assignment, "completion", "runtime worker verified completion");
-    recordPackage({ roots: f.roots, taskId: task.id, raw: completion, type: "completion" });
+    recordReport({ roots: f.roots, paneId: assignment.paneId, status: "done", summary: "runtime worker verified completion" });
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).status, "review-ready");
     const accepted = acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workerStopped, true);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
-    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
   } finally { f.cleanup(); }
 });
 
-test("dead child recovery preserves handoff state and rejects stale completion", async () => {
+test("dead child recovery preserves handoff state and rejects the old pane", async () => {
   const f = fixture();
   try {
     const task = createTask({ roots: f.roots, projectId: "one", brief: "recover dead worker" });
     const first = assignTask({ roots: f.roots, taskId: task.id, owner: "dead-worker", adapter: f.adapter, resources: [{ key: "file/recovery", mode: "write" }] });
     await f.transport.wait(first.endpoint);
-    const before = observeRuntime({ roots: f.roots, adapter: f.adapter });
-    assert.equal(before.tasks.find((item) => item.taskId === task.id).state, "dead");
+    assert.equal(fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id).state, "dead");
     const replacement = recoverDeadWorker({ roots: f.roots, taskId: task.id, owner: "replacement", adapter: f.adapter });
     assert.equal(replacement.generation, 2);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).owner, "replacement");
-    const stale = packageFor(task, first, "completion", "stale completion");
-    assert.throws(() => recordPackage({ roots: f.roots, taskId: task.id, raw: stale, type: "completion" }), StaleGenerationError);
+    assert.throws(() => recordReport({ roots: f.roots, paneId: first.paneId, status: "done", summary: "stale completion" }), ValidationError);
     await f.transport.wait(replacement.endpoint);
   } finally { f.cleanup(); }
 });
@@ -163,6 +146,7 @@ test("multi-project dependency, scout, decision, and scheduler paths use durable
     assert.equal(answered.humanResponse, "A");
     const delivered = deliverDecision({ roots: f.roots, taskId: scout.id, decisionId: blocker.decisionId, adapter: f.adapter });
     assert.equal(delivered.status, "delivered");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", scout.id, "meta.json"), "utf8")).status, "working");
     assert.equal(scoutAssignment.projectId, "two");
     assert.equal(dispatchReadyTasks({ roots: f.roots, adapter: f.adapter, ownerForTask: () => "shipper" }).length, 0);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "projects.json")), true);
