@@ -70,7 +70,7 @@ function routingConfig() {
   };
 }
 
-test("routing config supports codex, claude, omp and reads the repository file", () => {
+test("routing config supports codex, claude, omp, opencode and reads the repository file", () => {
   const f = fixture();
   try {
     assert.throws(() => initRoutingConfig({ roots: f.roots }), /Model routing config does not exist/);
@@ -81,10 +81,13 @@ test("routing config supports codex, claude, omp and reads the repository file",
     assert.equal(initialized.config.router.tool, "codex");
     assert.equal(initialized.config.default, "codex-luna");
     assert.equal(initialized.config.router.model, "gpt-6-luna");
+    assert.ok(initialized.config.router.command.includes("--skip-git-repo-check"));
     assert.deepEqual(initialized.config.profiles["codex-luna"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="max"']);
-    assert.deepEqual(initialized.config.profiles["omp-luna"].command, ["omp", "--auto-approve", "--thinking", "max"]);
-    assert.equal(initialized.config.profiles["omp-luna"].model, "openai-codex/gpt-6-luna");
-    assert.equal(initialized.config.profiles["claude-opus"].model, "claude-opus-5-5");
+    assert.deepEqual(initialized.config.profiles["opencode-sol"].command, ["opencode", "--auto", "mini", "--standalone"]);
+    assert.equal(initialized.config.profiles["opencode-sol"].model, "openai/gpt-6-sol");
+    assert.deepEqual(initialized.config.profiles["opencode-luna"].command, ["opencode", "--auto", "mini", "--standalone"]);
+    assert.equal(initialized.config.profiles["opencode-luna"].model, "openai/gpt-6-luna");
+    assert.deepEqual([...initialized.config.inactiveProfiles].sort(), ["claude-opus", "claude-sonnet"]);
     assert.deepEqual(loadRoutingConfig(f.roots.foremanRoot), initialized.config);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "config", "model-routing.json")), false);
     const normalized = validateRoutingConfig(routingConfig());
@@ -102,6 +105,22 @@ test("routing config supports codex, claude, omp and reads the repository file",
     assert.deepEqual(normalizedEffort.profiles["claude-deep"].command.slice(-2), ["--effort", "xhigh"]);
     assert.deepEqual(normalizedEffort.profiles["omp-fast"].command.slice(-2), ["--thinking", "medium"]);
     assert.throws(() => validateRoutingConfig({ ...withEffort, router: { ...withEffort.router, effort: "ultra" } }), ValidationError);
+    const openCode = routingConfig();
+    openCode.groups.ordinary.profiles.push("opencode-worker");
+    openCode.profiles["opencode-worker"] = { tool: "opencode", command: ["opencode", "--auto", "mini", "--standalone"], model: "openai/gpt-6-sol", effort: null, whenToUse: "Explicit OpenCode requests." };
+    assert.deepEqual(validateRoutingConfig(openCode).profiles["opencode-worker"].command, ["opencode", "--auto", "mini", "--standalone"]);
+    openCode.profiles["opencode-worker"].effort = "high";
+    assert.throws(() => validateRoutingConfig(openCode), /OpenCode routing effort is not supported/);
+    openCode.profiles["opencode-worker"].effort = null;
+    openCode.profiles["opencode-worker"].model = "gpt-6-sol";
+    assert.throws(() => validateRoutingConfig(openCode), /provider\/model/);
+    openCode.profiles["opencode-worker"].model = "openai/gpt-6-sol";
+    openCode.profiles["opencode-worker"].command = ["opencode", "mini"];
+    assert.throws(() => validateRoutingConfig(openCode), /pane-local standalone server/);
+    openCode.profiles["opencode-worker"].command = ["opencode", "--auto"];
+    assert.throws(() => validateRoutingConfig(openCode), /interactive mini interface/);
+    openCode.profiles["opencode-worker"].command = ["opencode", "mini", "--auto", "--standalone"];
+    assert.throws(() => validateRoutingConfig(openCode), /global --auto must precede/);
     assert.throws(() => validateRoutingConfig({ ...withEffort, profiles: { ...withEffort.profiles, "omp-fast": { ...withEffort.profiles["omp-fast"], command: ["omp", "--thinking", "low"] } } }), /must not duplicate its effort field/);
     assert.throws(() => validateRoutingConfig({ ...routingConfig(), router: { ...routingConfig().router, tool: "unknown" } }), ValidationError);
     const invalidGroups = routingConfig();

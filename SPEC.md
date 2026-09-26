@@ -209,7 +209,7 @@ No separate priority field is introduced initially.
 
 ### 7.3 Task records
 
-Task records live under `data/tasks/<id>/` until user acceptance:
+Task records live under `data/tasks/<id>/` until user acceptance or explicit discard of an untouched queued task:
 
 ```text
 data/tasks/T-000123/
@@ -234,6 +234,7 @@ data/
 
 Acceptance removes the task directory and its task messages.
 The project workspace stays on disk.
+`foreman task discard --task ID` removes only a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, and refuses while another task depends on it. Discard also removes its task-scoped messages and runs under the home lock; it never stops a worker because no worker may be bound.
 
 ### 7.4 Assignment generation
 
@@ -709,7 +710,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
 - Mandatory task-intake routing is implemented through the tracked `FOREMAN_ROOT/config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
-- Routing supports the `codex`, `claude`, and `omp` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
+- Routing supports the `codex`, `claude`, `omp`, and `opencode` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
 - Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
 - A compatible dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
 - `bin/foreman` is a thin wrapper over the core modules.
@@ -739,3 +740,9 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Scout read-only behavior relies on the worker instruction and resource lease; the runtime does not sandbox project files.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
+
+### OpenCode V2 tool dispatch within Herdr
+
+This adds a coding **tool**, not a new runtime backend: Herdr remains the only transport and owns the workspace, pane, prompt delivery, inspection, and stop lifecycle. An explicit `opencode` worker profile uses OpenCode V2's interactive `mini` interface with `command: ["opencode", "--auto", "mini", "--standalone"]` and a `provider/model` model ID. `--auto` is a global CLI option placed before `mini`; it auto-approves permissions not explicitly denied, and does not override explicit deny rules. The pane-local server must inherit `HERDR_PANE_ID`, `FOREMAN_ROOT`, and `FOREMAN_HOME`; a shared OpenCode service may inherit another pane's identity and cannot run the worker stop hook safely. The command and model are forwarded as argument arrays without a shell; the router retains its existing explicit-default policy. Fail before dispatch for a non-interactive or non-standalone OpenCode command or a non-null `effort`, since OpenCode mini has no supported effort flag. Do not silently substitute another coding tool.
+
+The global OpenCode V2 worker-stop plugin is an installation prerequisite, not part of Foreman's project state. It listens for the root worker session becoming idle and, when the bound task has no report since the last prompt, asks that session to run `foreman report`. Herdr's agent-state integration supplies pane liveness; neither prompt delivery nor plugin activation counts as a report. The existing pane-bound report validation, supervision, recovery, and human acceptance rules are unchanged. No new runtime backend, service lifecycle authority, or implicit profile fallback is added.

@@ -62,6 +62,7 @@ const usage = [
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
+  "  task discard --task ID      (untouched, unassigned queued task only)",
   "  task message --task ID (--text TEXT|--text-file FILE)",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
@@ -162,6 +163,7 @@ function main() {
     return;
   }
   if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "discard") { output(core.discardQueuedTask({ roots: home, taskId: arg("--task") })); return; }
   if (command === "task" && action === "message") {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");

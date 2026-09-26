@@ -247,7 +247,7 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
     const accepted = execFileSync(process.execPath, [bin, "task", "accept", "--task", task.id], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome }, encoding: "utf8" });
     assert.equal(JSON.parse(accepted).deleted, true);
     const help = execFileSync(process.execPath, [bin, "help"], { encoding: "utf8" });
-    for (const phrase of ["task dispatch", "task schedule", "task adopt", "task recover", "task accept", "task message", "decision deliver", "report --status", "worker hook", "session context"]) {
+    for (const phrase of ["task dispatch", "task schedule", "task adopt", "task recover", "task accept", "task discard", "task message", "decision deliver", "report --status", "worker hook", "session context"]) {
       assert.match(help, new RegExp(phrase));
     }
     for (const removed of ["task mark-landed", "task cleanup", "observer", "reconcile", "event emit", "heartbeat", "decision acknowledge", "decision apply"]) assert.doesNotMatch(help, new RegExp(removed));

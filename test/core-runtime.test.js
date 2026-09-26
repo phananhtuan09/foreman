@@ -7,7 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport,
   listMessages, fleetStatus, recoverDeadWorker, createDecision, answerDecision,
-  deliverDecision, createTask: intake, acceptTask,
+  deliverDecision, createTask: intake, acceptTask, discardQueuedTask,
   dispatchReadyTasks, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
@@ -113,6 +113,23 @@ test("real child workers complete a direct assignment and a status check flags t
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.workerStopped, true);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
+  } finally { f.cleanup(); }
+});
+
+test("an untouched queued test task can be explicitly discarded but assigned or depended-on tasks cannot", () => {
+  const f = fixture();
+  try {
+    const queued = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "remove test intake" });
+    assert.deepEqual(discardQueuedTask({ roots: f.roots, taskId: queued.id }), { taskId: queued.id, discarded: true, deleted: true });
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", queued.id)), false);
+
+    const dependency = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "dependency" });
+    createTask({ roots: f.roots, projectId: "one", type: "scout", dependencies: [dependency.id], brief: "dependent" });
+    assert.throws(() => discardQueuedTask({ roots: f.roots, taskId: dependency.id }), /still a dependency/);
+
+    const assigned = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "assigned" });
+    assignTask({ roots: f.roots, taskId: assigned.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/read", mode: "read" }] });
+    assert.throws(() => discardQueuedTask({ roots: f.roots, taskId: assigned.id }), /Only untouched, unassigned queued tasks/);
   } finally { f.cleanup(); }
 });
 

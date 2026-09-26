@@ -12,12 +12,16 @@ function fakeHerdr({ version = "0.9.1", protocol = 22, endpointGeneration = 1, a
     if (args.join(" ") === "status client --json") return JSON.stringify({ version, protocol, endpoint_protocol_generation: endpointGeneration });
     if (args.join(" ") === "status server --json") return JSON.stringify({ running: true, compatible: true, endpoint_compatible: true, private_protocol_compatible: true, capabilities: { endpoint_protocol_generation: endpointGeneration } });
     if (args.join(" ") === "agent --help") return agentHelp || "herdr agent start\nherdr agent list\nherdr agent prompt\nherdr agent read\nherdr agent send-keys\n";
-    if (args.join(" ") === "pane --help") return paneHelp || "herdr pane split\nherdr pane close\nherdr pane process-info\nherdr pane send-keys\nherdr pane read\n";
-    if (args.join(" ") === "pane split --current --direction right --cwd /tmp/worktree --no-focus") return JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } });
+    if (args.join(" ") === "pane --help") return paneHelp || "herdr pane list\nherdr pane close\nherdr pane process-info\nherdr pane send-keys\nherdr pane read\n";
+    if (args.join(" ") === "workspace --help") return "herdr workspace create\nherdr workspace get\nherdr workspace close\n";
+    if (args.join(" ") === "workspace create --cwd /tmp/worktree --label worker-1 --no-focus") return JSON.stringify({ result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "w1:p2" } } });
+    if (args.join(" ") === "workspace get w1") return JSON.stringify({ result: { workspace: { label: "worker-1" } } });
+    if (args.join(" ") === "pane list --workspace w1") return JSON.stringify({ result: { panes: [{ pane_id: "w1:p2" }] } });
+    if (args.join(" ") === "workspace close w1") return JSON.stringify({ result: { type: "workspace_closed" } });
     if (args.join(" ") === "pane process-info --pane w1:p2") return JSON.stringify({ result: { process_info: { shell_pid: 42, foreground_processes: [{ pid: 42, name: "zsh" }] } } });
     if (args[0] === "agent" && args[1] === "start" && args[2] === "worker-1") return JSON.stringify({ result: { type: "agent_started" } });
     if (args[0] === "agent" && args[1] === "send-keys" && args[3] === "ctrl-c") { agentStatus = "idle"; return ""; }
-    if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: agentStatus, cwd: "/tmp/worktree", pane_id: "w1:p2" }] } });
+    if (args[0] === "agent" && args[1] === "list") return JSON.stringify({ result: { agents: [{ name: "worker-1", agent: "codex", agent_status: agentStatus, cwd: "/tmp/worktree", pane_id: "w1:p2", workspace_id: "w1" }] } });
     if (args[0] === "agent" && args[1] === "prompt") return JSON.stringify({ result: { type: "agent_prompt_submitted" } });
     if (args[0] === "agent" && args[1] === "read") return "worker output";
     if (args.join(" ") === "pane close w1:p2") return JSON.stringify({ result: { type: "pane_closed" } });
@@ -49,6 +53,7 @@ test("Herdr 0.9 transport gates the contract and maps worker lifecycle commands"
       owner: "worker-1",
       cwd: "/tmp/worktree",
       paneId: "w1:p2",
+      workspaceId: "w1",
       status: "working",
     });
     assert.deepEqual(transport.send("worker-1", { taskId: "T-000001" }), { delivered: true });
@@ -61,7 +66,7 @@ test("Herdr 0.9 transport gates the contract and maps worker lifecycle commands"
     assert.equal(adapter.relaunch, undefined);
     assert.deepEqual(transport.stop("worker-1"), { stopped: true });
 
-    assert.ok(fake.calls.some((args) => args[0] === "pane" && args[1] === "split"));
+    assert.ok(fake.calls.some((args) => args[0] === "workspace" && args[1] === "create"));
     assert.ok(fake.calls.some((args) => args[0] === "agent" && args[1] === "start"));
     assert.ok(fake.calls.some((args) => args[0] === "agent" && args[1] === "prompt"));
     assert.equal(fake.calls.some((args) => args[1] === "send"), false);
@@ -98,6 +103,24 @@ test("Herdr starts a routed coding tool with configured arguments and model", ()
       },
     });
     assert.ok(fake.calls.some((args) => args.join(" ") === "agent start worker-1 --kind claude --pane w1:p2 -- --dangerously-skip-permissions --model claude-opus"));
+  } finally {
+    if (previous === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = previous;
+  }
+});
+
+test("Herdr forwards an OpenCode mini worker and its model without changing tools", () => {
+  const previous = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "1";
+  try {
+    const fake = fakeHerdr();
+    const transport = new HerdrCliTransport({ runner: fake.runner });
+    transport.spawn({
+      owner: "worker-1",
+      cwd: "/tmp/worktree",
+      dispatchProfile: { name: "opencode-sol", tool: "opencode", command: ["opencode", "--auto", "mini", "--standalone"], model: "openai/gpt-6-sol" },
+    });
+    assert.ok(fake.calls.some((args) => args.join(" ") === "agent start worker-1 --kind opencode --pane w1:p2 -- --auto mini --standalone --model openai/gpt-6-sol"));
   } finally {
     if (previous === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = previous;

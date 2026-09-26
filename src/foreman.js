@@ -15,7 +15,7 @@ class DeliveryError extends ForemanError {}
 class ResourceBusyError extends ForemanError {}
 
 const SUPPORTED_SCHEMA_VERSION = 1;
-const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp"]);
+const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode"]);
 
 function canonical(p) {
   try { return fs.realpathSync(p); } catch (_) { throw new ValidationError(`Path does not exist: ${p}`); }
@@ -400,10 +400,19 @@ function normalizeRoutingProfile(profile, name) {
   const command = normalizeRoutingCommand(profile.command);
   const executable = path.basename(command[0]).replace(/\.(?:cmd|exe)$/i, "");
   if (executable !== tool) throw new ValidationError(`Routing profile command must launch its declared tool: ${name}`);
+  if (tool === "opencode") {
+    const usesAuto = command[1] === "--auto";
+    const miniIndex = usesAuto ? 2 : 1;
+    if (command.includes("--auto") && !usesAuto) throw new ValidationError(`OpenCode global --auto must precede the mini subcommand: ${name}`);
+    if (command[miniIndex] !== "mini") throw new ValidationError(`OpenCode routing command must use the interactive mini interface: ${name}`);
+    if (!command.includes("--standalone") || command.includes("--server")) throw new ValidationError(`OpenCode routing command must use a pane-local standalone server: ${name}`);
+  }
   if (command.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) throw new ValidationError(`Routing profile command must not duplicate its model field: ${name}`);
   if (typeof profile.model !== "string" || !profile.model.trim()) throw new ValidationError(`Routing profile model is required: ${name}`);
+  if (tool === "opencode" && !/^[^/\s]+\/\S+$/.test(profile.model.trim())) throw new ValidationError(`OpenCode routing model must be provider/model: ${name}`);
   if (typeof profile.whenToUse !== "string" || !profile.whenToUse.trim()) throw new ValidationError(`Routing profile whenToUse is required: ${name}`);
   const effort = profile.effort ?? null;
+  if (tool === "opencode" && effort !== null) throw new ValidationError(`OpenCode routing effort is not supported: ${name}`);
   const allowedEfforts = tool === "codex" ? ["none", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"];
   if (effort !== null && !allowedEfforts.includes(effort)) throw new ValidationError(`Unsupported routing effort: ${name}`);
   const commandSetsEffort = tool === "claude"
@@ -993,6 +1002,26 @@ function acceptTask({ roots, taskId, adapter }) {
   });
 }
 
+function discardQueuedTask({ roots, taskId }) {
+  return withHomeLock(roots.foremanHome, () => {
+    if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (meta.status !== "queued"
+      || meta.owner || meta.endpoint || meta.paneId || meta.workspace || meta.resourceLease
+      || (meta.resources?.length || 0) > 0 || meta.lastReport || meta.completionReport || meta.handoff) {
+      throw new ValidationError("Only untouched, unassigned queued tasks can be discarded");
+    }
+    for (const id of taskIds(roots.foremanHome)) {
+      if (id === taskId) continue;
+      const dependent = readMeta(roots.foremanHome, id);
+      if ((dependent.dependencies || []).includes(taskId)) throw new ValidationError(`Task is still a dependency of ${id}`);
+    }
+    coordination.purgeTaskRecordsUnlocked({ roots, taskId });
+    fs.rmSync(taskDir(roots.foremanHome, taskId), { recursive: true, force: true });
+    return { taskId, discarded: true, deleted: true };
+  });
+}
+
 function projectForWorkerCwd(home, cwd, projectId) {
   let top;
   try { top = gitTop(cwd); } catch (_) { return projectWithoutGitForWorkerCwd(home, canonical(cwd), projectId); }
@@ -1363,7 +1392,7 @@ module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, createTask, routeTask, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
-  assignTask, adoptExistingWorker, reconstructTask, acceptTask,
+  assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardQueuedTask,
   recordReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, buildHandoff,

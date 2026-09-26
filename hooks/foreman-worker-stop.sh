@@ -32,6 +32,26 @@
 #   once interactively after adding the hook and approve it, so Foreman-spawned workers do not
 #   stop at an approval screen.
 #
+# OpenCode V2 (global plugin for Herdr workers): OpenCode does not load this shell file as a
+# native Stop hook. Install the companion adapter in this checkout by merging its absolute path
+# into the `plugins` array of ~/.config/opencode/opencode.jsonc (or opencode.json):
+#   {
+#     "$schema": "https://opencode.ai/config.json",
+#     "plugins": ["/absolute/path/to/foreman/hooks/foreman-worker-stop.opencode.js"]
+#   }
+# Preserve existing config and plugin entries; use the absolute path to this checkout on each
+# machine. Keep only one installation of plugin ID `foreman.worker-stop`: remove/disable an older
+# copy (for example ~/.config/opencode/plugins/foreman-worker-stop.js) before adding this entry,
+# and do not also copy this adapter into ~/.config/opencode/plugins/.
+# Then run `bin/foreman init` in that checkout and start Herdr workers with
+# `opencode --auto mini --standalone`. The pane-local server must inherit FOREMAN_ROOT, FOREMAN_HOME,
+# and HERDR_PANE_ID; a shared OpenCode service can carry a different pane identity. The adapter
+# gets FOREMAN_ROOT from the worker environment to find this script, listens for the root
+# session's V2 `session.execution.succeeded` event, and injects the report reminder when this
+# script says a working task has not reported. Check installation with `opencode plugin list`.
+# This is a V2 event adapter, not a native OpenCode shell Stop hook; it does not infer task done
+# or blocked status—those are recorded only by `foreman report --status done|blocked`.
+#
 # omp loads JavaScript extension files through --hook=<file>; this shell script is not an omp
 # extension, so omp workers are not covered yet.
 #

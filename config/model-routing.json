@@ -7,6 +7,7 @@
       "exec",
       "--sandbox",
       "read-only",
+      "--skip-git-repo-check",
       "--ephemeral"
     ],
     "model": "gpt-6-luna",
@@ -19,15 +20,16 @@
       "whenToUse": "Mechanical edits, initial bug investigation and fixes, features within an existing design, UI, tests, and reviews. Use when the brief does not establish a need for deep redesign; file count alone does not make a task deep.",
       "profiles": [
         "codex-luna",
-        "omp-luna",
-        "claude-sonnet",
-        "codex-sol"
+        "opencode-sol",
+        "opencode-luna",
+        "claude-sonnet"
       ]
     },
     "deep": {
       "whenToUse": "New architecture or data-model design, difficult concurrency or security reasoning, or a bug still unexplained after earlier investigation. File count or initial investigation alone is not enough.",
       "profiles": [
-        "claude-opus"
+        "claude-opus",
+        "codex-sol"
       ]
     }
   },
@@ -40,8 +42,7 @@
       ],
       "model": "gpt-6-sol",
       "effort": "medium",
-      "whenToUse": "Use for tooling-heavy builds, tests, dependencies, CI, or scripted batch edits when this profile is explicitly requested.",
-      "isActive": false
+      "whenToUse": "Use for tooling-heavy builds, tests, dependencies, CI, or scripted batch edits when this profile is explicitly requested."
     },
     "codex-luna": {
       "tool": "codex",
@@ -53,15 +54,29 @@
       "effort": "max",
       "whenToUse": "Preferred within its group unless another tool is explicitly requested or needs native capabilities this tool lacks."
     },
-    "omp-luna": {
-      "tool": "omp",
+    "opencode-sol": {
+      "tool": "opencode",
       "command": [
-        "omp",
-        "--auto-approve"
+        "opencode",
+        "--auto",
+        "mini",
+        "--standalone"
       ],
-      "model": "xai-oauth/grok-4.6",
-      "effort": "medium",
-      "whenToUse": "Use when OMP is explicitly requested or its native capabilities are needed."
+      "model": "openai/gpt-6-sol",
+      "effort": null,
+      "whenToUse": "Use when OpenCode is explicitly requested."
+    },
+    "opencode-luna": {
+      "tool": "opencode",
+      "command": [
+        "opencode",
+        "--auto",
+        "mini",
+        "--standalone"
+      ],
+      "model": "openai/gpt-6-luna",
+      "effort": null,
+      "whenToUse": "Use for OpenCode V2 tasks when the Luna model is requested."
     },
     "claude-sonnet": {
       "tool": "claude",
@@ -71,7 +86,8 @@
       ],
       "model": "claude-sonnet-5",
       "effort": "high",
-      "whenToUse": "Use when Claude is explicitly requested or codex-luna is not active."
+      "whenToUse": "Use when Claude is explicitly requested or codex-luna is not active.",
+      "isActive": false
     },
     "claude-opus": {
       "tool": "claude",

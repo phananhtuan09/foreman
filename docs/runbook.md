@@ -47,6 +47,7 @@ bin/foreman task message --task T-000001 --text "Please add tests."
 bin/foreman task adopt --worker worker --task T-000001
 bin/foreman task recover --task T-000001
 bin/foreman task accept --task T-000001
+bin/foreman task discard --task T-000001
 bin/foreman status
 ```
 
@@ -74,11 +75,15 @@ Every report is kept under `data/tasks/<id>/reports/`.
 It stops the worker endpoint, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk, and accepted tasks are not archived.
 
+`task discard` is only for a queued task that was never assigned: it refuses if the task has an owner, endpoint, workspace, lease, report, handoff, or dependent tasks. Use it to remove an unassigned intake that should not be dispatched; it cannot stop or remove a worker pane.
+
 ## Routing
 
 Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
 Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
 Leave it `null` to use the tool's default.
+OpenCode V2 profiles use `command: ["opencode", "--auto", "mini", "--standalone"]` and a `provider/model` model ID. `--auto` is a global OpenCode CLI option and must precede `mini`; it auto-approves permissions not explicitly denied. The pane-local server is required so the global worker-stop plugin inherits the worker's `HERDR_PANE_ID`; a shared service may have another pane's ID. Their `effort` must be `null` because OpenCode mini has no supported effort flag. OpenCode `--auto` does not override explicit permission-deny rules. Install the global OpenCode V2 Foreman worker-stop plugin before dispatch; a loaded plugin alone is not proof that a worker reported.
+For V2, the plugin reads `event.data.sessionID` from `session.execution.succeeded` (not V1 `session.idle`/`event.properties`) and prompts the root session with `ctx.session.prompt({ sessionID, text: reason })` only when the worker hook returns `decision: block`.
 Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
 The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.
 Foreman passes Codex effort through `--config model_reasoning_effort=...`, Claude effort through `--effort`, and OMP effort through `--thinking`.
