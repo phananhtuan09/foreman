@@ -51,7 +51,7 @@
         "--yolo"
       ],
       "model": "gpt-6-luna",
-      "effort": "max",
+      "effort": "high",
       "whenToUse": "Preferred within its group unless another tool is explicitly requested or needs native capabilities this tool lacks."
     },
     "opencode-sol": {
@@ -73,7 +73,7 @@
         "--standalone"
       ],
       "model": "openai/gpt-6-luna",
-      "effort": "max",
+      "effort": "high",
       "whenToUse": "Use for OpenCode V2 tasks when the Luna model is requested."
     },
     "claude-sonnet": {

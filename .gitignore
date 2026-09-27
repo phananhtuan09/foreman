@@ -3,4 +3,5 @@
 /config/*
 !/config/model-routing.json
 /data/
+/state/
 /projects/
