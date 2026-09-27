@@ -80,9 +80,15 @@ The project workspace stays on disk, and accepted tasks are not archived.
 ## Routing
 
 Edit the tracked `FOREMAN_ROOT/config/model-routing.json` to change the router, the named worker profiles, or the `default` profile.
-Set a profile's `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
+For Codex, Claude, and OMP, set `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
+For OpenCode V2, `effort` names a model-specific variant and the selected model must provide that variant.
 Leave it `null` to use the tool's default.
-OpenCode V2 profiles use `command: ["opencode", "--auto", "mini", "--standalone"]` and a `provider/model` model ID. `--auto` is a global OpenCode CLI option and must precede `mini`; it auto-approves permissions not explicitly denied. The pane-local server is required so the global worker-stop plugin inherits the worker's `HERDR_PANE_ID`; a shared service may have another pane's ID. Their `effort` must be `null` because OpenCode mini has no supported effort flag. OpenCode `--auto` does not override explicit permission-deny rules. Install the global OpenCode V2 Foreman worker-stop plugin before dispatch; a loaded plugin alone is not proof that a worker reported.
+OpenCode V2 profiles use `command: ["opencode", "mini", "--standalone"]` and a `provider/model` model ID.
+Foreman encodes a non-null `effort` as the model variant suffix `#<effort>` on `--model`, for example `openai/model#high`.
+OpenCode resolves whether the selected variant exists for that model; an unknown variant fails model resolution.
+OpenCode V2's `mini` interface does not accept `--auto`, so Foreman rejects profiles that include it.
+The pane-local server is required so the global worker-stop plugin inherits the worker's `HERDR_PANE_ID`; a shared service may have another pane's ID.
+Install the global OpenCode V2 Foreman worker-stop plugin before dispatch; a loaded plugin alone is not proof that a worker reported.
 For V2, the plugin reads `event.data.sessionID` from `session.execution.succeeded` (not V1 `session.idle`/`event.properties`) and prompts the root session with `ctx.session.prompt({ sessionID, text: reason })` only when the worker hook returns `decision: block`.
 Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
 The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.

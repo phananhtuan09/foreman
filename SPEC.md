@@ -392,7 +392,7 @@ The dispatched brief includes:
 
 - task ID, project ID, and workspace;
 - user requirements verbatim;
-- Foreman notes, kept separate from the user's words, when Foreman adds context such as related report paths;
+- Foreman notes, kept separate from the user's words, may add supporting context such as related report paths but must not reinterpret the request or add requirements, limits, or rules;
 - accepted follow-up decisions verbatim;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
@@ -734,8 +734,8 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - A startup screen that Foreman does not recognize can still consume the brief; `foreman status` then shows the worker idle without a report.
 - Resource leases have no expiry; a task that is never accepted keeps its lease until it is reassigned.
 - Stop-hook support is verified for Claude Code's `decision: block` and `stop_hook_active` contract; other coding agents may use a different hook payload or output.
-- Model names are passed to the selected coding tool and are not independently enumerated by Herdr; an invalid model therefore fails during tool startup.
-- A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; the adapter-level `reasoningEffort` capability remains unsupported.
+- Model names and OpenCode variants are passed to the selected coding tool and are not independently enumerated by Herdr; the coding tool reports unsupported models or variants.
+- A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; OpenCode V2 maps `effort` to its `provider/model#variant` reference. The adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Scout read-only behavior relies on the worker instruction and resource lease; the runtime does not sandbox project files.
@@ -743,6 +743,14 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 ### OpenCode V2 tool dispatch within Herdr
 
-This adds a coding **tool**, not a new runtime backend: Herdr remains the only transport and owns the workspace, pane, prompt delivery, inspection, and stop lifecycle. An explicit `opencode` worker profile uses OpenCode V2's interactive `mini` interface with `command: ["opencode", "--auto", "mini", "--standalone"]` and a `provider/model` model ID. `--auto` is a global CLI option placed before `mini`; it auto-approves permissions not explicitly denied, and does not override explicit deny rules. The pane-local server must inherit `HERDR_PANE_ID`, `FOREMAN_ROOT`, and `FOREMAN_HOME`; a shared OpenCode service may inherit another pane's identity and cannot run the worker stop hook safely. The command and model are forwarded as argument arrays without a shell; the router retains its existing explicit-default policy. Fail before dispatch for a non-interactive or non-standalone OpenCode command or a non-null `effort`, since OpenCode mini has no supported effort flag. Do not silently substitute another coding tool.
+This adds a coding **tool**, not a new runtime backend: Herdr remains the only transport and owns the workspace, pane, prompt delivery, inspection, and stop lifecycle.
+An explicit `opencode` worker profile uses OpenCode V2's interactive `mini` interface with `command: ["opencode", "mini", "--standalone"]` and a `provider/model` model ID.
+When `effort` is set, Herdr receives the model as `provider/model#<effort>` through `--model`; if the profile model already contains a variant, configuration validation refuses the duplicate.
+OpenCode resolves whether that variant exists for the selected model; an unknown variant fails model resolution.
+OpenCode V2's `mini` interface does not accept `--auto`; routing validation rejects that flag before dispatch.
+The pane-local server must inherit `HERDR_PANE_ID`, `FOREMAN_ROOT`, and `FOREMAN_HOME`; a shared OpenCode service may inherit another pane's identity and cannot run the worker stop hook safely.
+The command and model are forwarded as argument arrays without a shell; the router retains its existing explicit-default policy.
+Fail before dispatch for a non-interactive or non-standalone OpenCode command.
+Do not silently substitute another coding tool.
 
 The global OpenCode V2 worker-stop plugin is an installation prerequisite, not part of Foreman's project state. It listens for the root worker session becoming idle and, when the bound task has no report since the last prompt, asks that session to run `foreman report`. Herdr's agent-state integration supplies pane liveness; neither prompt delivery nor plugin activation counts as a report. The existing pane-bound report validation, supervision, recovery, and human acceptance rules are unchanged. No new runtime backend, service lifecycle authority, or implicit profile fallback is added.

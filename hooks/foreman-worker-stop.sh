@@ -44,7 +44,8 @@
 # copy (for example ~/.config/opencode/plugins/foreman-worker-stop.js) before adding this entry,
 # and do not also copy this adapter into ~/.config/opencode/plugins/.
 # Then run `bin/foreman init` in that checkout and start Herdr workers with
-# `opencode --auto mini --standalone`. The pane-local server must inherit FOREMAN_ROOT, FOREMAN_HOME,
+# `opencode mini --standalone`. OpenCode V2's `mini` interface does not accept `--auto`.
+# The pane-local server must inherit FOREMAN_ROOT, FOREMAN_HOME,
 # and HERDR_PANE_ID; a shared OpenCode service can carry a different pane identity. The adapter
 # gets FOREMAN_ROOT from the worker environment to find this script, listens for the root
 # session's V2 `session.execution.succeeded` event, and injects the report reminder when this

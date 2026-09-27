@@ -118,9 +118,9 @@ test("Herdr forwards an OpenCode mini worker and its model without changing tool
     transport.spawn({
       owner: "worker-1",
       cwd: "/tmp/worktree",
-      dispatchProfile: { name: "opencode-sol", tool: "opencode", command: ["opencode", "--auto", "mini", "--standalone"], model: "openai/gpt-6-sol" },
+      dispatchProfile: { name: "opencode-sol", tool: "opencode", command: ["opencode", "mini", "--standalone"], model: "openai/gpt-6-sol" },
     });
-    assert.ok(fake.calls.some((args) => args.join(" ") === "agent start worker-1 --kind opencode --pane w1:p2 -- --auto mini --standalone --model openai/gpt-6-sol"));
+    assert.ok(fake.calls.some((args) => args.join(" ") === "agent start worker-1 --kind opencode --pane w1:p2 -- mini --standalone --model openai/gpt-6-sol"));
   } finally {
     if (previous === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = previous;
@@ -137,7 +137,8 @@ test("Herdr spawn command matches every profile in model-routing.json", () => {
       const transport = new HerdrCliTransport({ runner: fake.runner });
       transport.spawn({ owner: "worker-1", cwd: "/tmp/worktree", dispatchProfile: { name, ...profile } });
       const actual = fake.calls.find((args) => args[0] === "agent" && args[1] === "start");
-      assert.deepEqual(actual, ["agent", "start", "worker-1", "--kind", profile.tool, "--pane", "w1:p2", "--", ...profile.command.slice(1), "--model", profile.model], name);
+      const model = profile.tool === "opencode" && profile.effort != null ? `${profile.model}#${profile.effort}` : profile.model;
+      assert.deepEqual(actual, ["agent", "start", "worker-1", "--kind", profile.tool, "--pane", "w1:p2", "--", ...profile.command.slice(1), "--model", model], name);
     }
   } finally {
     if (previous === undefined) delete process.env.HERDR_ENV;

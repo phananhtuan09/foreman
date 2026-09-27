@@ -401,31 +401,46 @@ function normalizeRoutingProfile(profile, name) {
   const executable = path.basename(command[0]).replace(/\.(?:cmd|exe)$/i, "");
   if (executable !== tool) throw new ValidationError(`Routing profile command must launch its declared tool: ${name}`);
   if (tool === "opencode") {
-    const usesAuto = command[1] === "--auto";
-    const miniIndex = usesAuto ? 2 : 1;
-    if (command.includes("--auto") && !usesAuto) throw new ValidationError(`OpenCode global --auto must precede the mini subcommand: ${name}`);
-    if (command[miniIndex] !== "mini") throw new ValidationError(`OpenCode routing command must use the interactive mini interface: ${name}`);
+    if (command.includes("--auto")) throw new ValidationError(`OpenCode mini does not support --auto: ${name}`);
+    if (command[1] !== "mini") throw new ValidationError(`OpenCode routing command must use the interactive mini interface: ${name}`);
     if (!command.includes("--standalone") || command.includes("--server")) throw new ValidationError(`OpenCode routing command must use a pane-local standalone server: ${name}`);
+    if (command.some((arg) => arg === "--variant" || arg.startsWith("--variant=") || arg === "--effort" || arg.startsWith("--effort="))) {
+      throw new ValidationError(`OpenCode mini variants must be configured through the model or effort field: ${name}`);
+    }
   }
   if (command.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) throw new ValidationError(`Routing profile command must not duplicate its model field: ${name}`);
   if (typeof profile.model !== "string" || !profile.model.trim()) throw new ValidationError(`Routing profile model is required: ${name}`);
-  if (tool === "opencode" && !/^[^/\s]+\/\S+$/.test(profile.model.trim())) throw new ValidationError(`OpenCode routing model must be provider/model: ${name}`);
+  const model = profile.model.trim();
+  let modelVariant = null;
+  if (tool === "opencode") {
+    const [modelRef, ...variants] = model.split("#");
+    if (!/^[^/\s#]+\/[^#\s]+$/.test(modelRef) || variants.length > 1 || (variants.length === 1 && !/^[^/#\s]+$/.test(variants[0]))) {
+      throw new ValidationError(`OpenCode routing model must be provider/model with an optional #variant: ${name}`);
+    }
+    modelVariant = variants[0] ?? null;
+  }
   if (typeof profile.whenToUse !== "string" || !profile.whenToUse.trim()) throw new ValidationError(`Routing profile whenToUse is required: ${name}`);
   const effort = profile.effort ?? null;
-  if (tool === "opencode" && effort !== null) throw new ValidationError(`OpenCode routing effort is not supported: ${name}`);
+  if (tool === "opencode" && effort !== null) {
+    if (typeof effort !== "string" || !effort.trim() || /[#/\s]/.test(effort)) throw new ValidationError(`OpenCode routing effort must be a model variant name: ${name}`);
+    if (modelVariant !== null) throw new ValidationError(`OpenCode routing model and effort must not both specify a variant: ${name}`);
+  }
   const allowedEfforts = tool === "codex" ? ["none", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"];
-  if (effort !== null && !allowedEfforts.includes(effort)) throw new ValidationError(`Unsupported routing effort: ${name}`);
+  if (effort !== null && tool !== "opencode" && !allowedEfforts.includes(effort)) throw new ValidationError(`Unsupported routing effort: ${name}`);
   const commandSetsEffort = tool === "claude"
     ? command.some((arg) => arg === "--effort" || arg.startsWith("--effort="))
     : tool === "omp"
       ? command.some((arg) => arg === "--thinking" || arg.startsWith("--thinking="))
-      : command.some((arg) => arg.startsWith("model_reasoning_effort="));
+      : tool === "codex"
+        ? command.some((arg) => arg.startsWith("model_reasoning_effort="))
+        : false;
   if (effort !== null && commandSetsEffort) throw new ValidationError(`Routing profile command must not duplicate its effort field: ${name}`);
   if (effort !== null) {
     if (tool === "codex") command.push("--config", `model_reasoning_effort="${effort}"`);
-    else command.push(tool === "omp" ? "--thinking" : "--effort", effort);
+    else if (tool === "omp") command.push("--thinking", effort);
+    else if (tool === "claude") command.push("--effort", effort);
   }
-  return { tool, command, model: profile.model.trim(), effort, whenToUse: profile.whenToUse.trim() };
+  return { tool, command, model, effort, whenToUse: profile.whenToUse.trim() };
 }
 
 function validateRoutingConfig(config) {
@@ -1213,6 +1228,16 @@ function promoteScout({ roots, taskId, brief, dependencies = [] }) {
 
 function buildHandoff({ roots, taskId, reason }) { return coordination.buildHandoffPackage({ roots, taskId, reason }); }
 
+function recoveryOwnerName(meta) {
+  const generation = Number(meta.generation || 0) + 1;
+  const task = String(meta.taskId || "task").toLowerCase();
+  const suffix = `-${task}-r${generation}`;
+  const project = String(meta.projectId || "worker").toLowerCase().replace(/^[^a-z]+/, "p");
+  const prefix = project.slice(0, 32 - suffix.length);
+  if (!prefix) throw new ValidationError("Task identity is too long for a Herdr recovery worker name");
+  return `${prefix}${suffix}`;
+}
+
 function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts = 3 }) {
   initHome(roots);
   const fleet = coordination.reconcileFleet({ roots, adapter });
@@ -1229,7 +1254,7 @@ function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts 
   });
   let assignment;
   try {
-    assignment = assignTask({ roots, taskId, owner: owner || `${meta.owner || "worker"}-recovery`, adapter, workspacePath: meta.workspace, resources: meta.resources, handoff });
+    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff });
   } catch (error) {
     withHomeLock(roots.foremanHome, () => {
       const current = readMeta(roots.foremanHome, taskId);

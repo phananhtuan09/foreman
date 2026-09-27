@@ -58,24 +58,22 @@
       "tool": "opencode",
       "command": [
         "opencode",
-        "--auto",
         "mini",
         "--standalone"
       ],
       "model": "openai/gpt-6-sol",
-      "effort": null,
+      "effort": "medium",
       "whenToUse": "Use when OpenCode is explicitly requested."
     },
     "opencode-luna": {
       "tool": "opencode",
       "command": [
         "opencode",
-        "--auto",
         "mini",
         "--standalone"
       ],
       "model": "openai/gpt-6-luna",
-      "effort": null,
+      "effort": "max",
       "whenToUse": "Use for OpenCode V2 tasks when the Luna model is requested."
     },
     "claude-sonnet": {

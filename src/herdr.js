@@ -270,7 +270,14 @@ class HerdrCliTransport {
       agentArgs = command.slice(1);
     }
     if (dispatchProfile?.model && dispatchProfile.model !== "default" && !agentArgs.some((arg) => arg === "--model" || arg === "-m" || arg.startsWith("--model="))) {
-      agentArgs.push("--model", dispatchProfile.model);
+      let model = dispatchProfile.model;
+      if (agentKind === "opencode" && dispatchProfile.effort != null) {
+        if (typeof dispatchProfile.effort !== "string" || !dispatchProfile.effort.trim() || /[#/\s]/.test(dispatchProfile.effort) || model.includes("#")) {
+          throw new HerdrCompatibilityError("OpenCode dispatch effort must be one variant and cannot duplicate a model variant");
+        }
+        model = `${model}#${dispatchProfile.effort}`;
+      }
+      agentArgs.push("--model", model);
     }
     const created = this._runJson(["workspace", "create", "--cwd", cwd, "--label", owner, "--no-focus"]);
     const workspaceId = created?.result?.workspace?.workspace_id || created?.result?.workspace_id;
