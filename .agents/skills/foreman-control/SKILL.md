@@ -16,7 +16,7 @@ Do not invoke the global `foreman-agent` skill or the historical copy under `leg
 When creating a task, pass the user's request verbatim as `--brief`, including any tool or profile they asked for, since the router reads only the brief.
 Use `--notes` only for supporting context, such as related task report paths or facts needed to understand the request.
 Do not use notes to reinterpret the user's request or add requirements, limits, or rules.
-Do not restate rules, resources, Git limits, or how to report in either field; the worker prompt template adds them.
+Do not add rules or Git limits in either field, and do not restate resources or how to report; the worker prompt template adds those.
 Dispatch without `--owner` so the worker is named after its project and task in the Herdr sidebar.
 Send a follow-up with `bin/foreman task message` using the user's words, adding context only when it helps the worker understand the request.
 

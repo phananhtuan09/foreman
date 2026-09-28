@@ -830,11 +830,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError("Herdr endpoint identity verification failed");
       deliveryEndpoint = endpoint;
       paneId = spawned?.paneId || inspected.paneId || null;
-      const instructions = ["Do not run git switch, reset, clean, merge, or commit.", "Do not change files outside the leased resources.", "Request a new resource lease before expanding scope.", "Change Foreman state only through the report command; put questions for the user in a blocked report."];
-      if (taskType === "scout") instructions.push("Do not modify production files. This scout has read-only resource claims.");
       const notesFile = path.join(taskDir(roots.foremanHome, taskId), "notes.md");
       const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : null;
-      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", instructions, brief, notes, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, notes, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
       promptAttempted = true;

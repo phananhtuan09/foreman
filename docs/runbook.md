@@ -53,7 +53,7 @@ bin/foreman status
 
 `task dispatch` names the worker `<project>-<task>` in lowercase, such as `app-t-000001`, and uses that name as the Herdr workspace label; pass `--owner` only to override it.
 `--brief` holds the user's request verbatim; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
-Foreman adds the rules, resources, and report command to every worker prompt, so a brief does not repeat them.
+Foreman adds the resources and report command to every worker prompt, so a brief does not repeat them; the prompt has no rules section.
 
 A worker reports from its own pane:
 

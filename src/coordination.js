@@ -115,7 +115,6 @@ function deliveryPrompt(message) {
       ...section("User request", String(payload.brief || "")),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
       ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
-      ...section("Rules", (payload.instructions || []).map((rule) => `- ${rule}`).join("\n")),
       ...section("Report", ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
     ].join("\n");
   }

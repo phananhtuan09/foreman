@@ -135,11 +135,11 @@ test("every worker prompt uses the fixed layout and carries the report command",
     assert.equal(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "notes.md"), "utf8"), "read reports/one.md first");
     const brief = f.sent[0].text;
     const headings = brief.split("\n").filter((line) => line.startsWith("## "));
-    assert.deepEqual(headings, ["## User request", "## Foreman notes", "## Rules", "## Report"]);
+    assert.deepEqual(headings, ["## User request", "## Foreman notes", "## Report"]);
     assert.match(brief, new RegExp(`^Foreman task ${task.id} \\| project app \\| scout \\| generation 1\\n`));
     assert.match(brief, /## User request\ncheck the issue verbatim\n/);
     assert.match(brief, /## Foreman notes\nread reports\/one\.md first\n/);
-    assert.match(brief, /- Do not modify production files\./);
+    assert.doesNotMatch(brief, /## Rules|Do not run git/);
     assert.match(brief, /"\$FOREMAN_ROOT\/bin\/foreman" report --status <done\|blocked\|progress>/);
 
     sendWorkerMessage({ roots: f.roots, taskId: task.id, payload: { request: "add UI steps" }, adapter: f.adapter });

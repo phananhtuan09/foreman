@@ -255,7 +255,7 @@ A report is accepted only while the task is `working` or `blocked`.
 `progress` leaves the task `working`.
 Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
 A scout's `done` report follows the same report lifecycle as other tasks.
-Foreman does not scan or fingerprint project files; scout read-only scope is communicated through its brief and read-only resource lease.
+Foreman does not scan or fingerprint project files; scout read-only scope is communicated only through the read-only resource lease shown in its brief.
 
 ### 7.6 State schemas and migration
 
@@ -272,7 +272,8 @@ Every Foreman-to-worker message is persisted before runtime delivery.
 The same outbox is used for task briefs, steering, follow-up requests, human decisions, and recovery instructions.
 The worker receives a concise text prompt containing the task brief and only the operational details needed to work within its lease.
 Every worker prompt is rendered by one fixed template.
-A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, `Rules`, and `Report`.
+A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, and `Report`.
+The prompt carries no rules section; Git and resource limits are not restated to the worker.
 A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
 The `Report` section carries the same report command and status guidance as the worker stop hook.
 The outbox retains the full message identity, payload, and delivery evidence privately.
@@ -396,10 +397,9 @@ The dispatched brief includes:
 - accepted follow-up decisions verbatim;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
-- required deliverable and evidence contract, given as the report command and status guidance;
-- prohibition on expanding scope, changing lifecycle, or addressing the user directly;
-- permission to write only the leased project resources;
-- prohibition on `git switch`, `git reset`, `git clean`, `git merge`, and `git commit`; Git lifecycle remains client-owned.
+- required deliverable and evidence contract, given as the report command and status guidance.
+
+The brief does not list worker rules such as scope, Git, or lease prohibitions; Git lifecycle remains client-owned.
 
 ### 9.3 Worker communication
 
@@ -705,7 +705,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
 - Adoption is an explicit request.
 - It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and its pane without sending the task again.
-- A scout receives read-only resource claims and an instruction not to modify production files.
+- A scout receives read-only resource claims; its brief has no separate instruction not to modify production files.
 - Foreman does not scan or fingerprint project files to verify scout behavior; Herdr does not sandbox the worker.
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
@@ -738,7 +738,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; OpenCode V2 maps `effort` to its `provider/model#variant` reference. The adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
-- Scout read-only behavior relies on the worker instruction and resource lease; the runtime does not sandbox project files.
+- Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 
 ### OpenCode V2 tool dispatch within Herdr
