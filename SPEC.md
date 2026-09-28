@@ -1,6 +1,6 @@
 # Foreman specification
 
-Status: Draft 0.5 — backend mode launchers added; Herdr runtime remains implemented; Paseo runtime is pending
+Status: Draft 0.6 — Herdr and Paseo runtimes are implemented behind backend-specific adapters
 Scope: New standalone Foreman repository
 Language: User-facing communication is Vietnamese; identifiers, paths, commands, and runtime state values remain verbatim.
 
@@ -22,7 +22,7 @@ Foreman owns:
 - workspace, resource-lease, and runtime-endpoint identity;
 - event-driven supervision and restart recovery;
 - concise user-facing status, decision, and approval packages;
-- runtime adapters, initially Herdr only;
+- runtime adapters for the accepted local Herdr and Paseo backends;
 - operational state inside the Foreman home.
 
 Managed projects own:
@@ -137,7 +137,9 @@ foreman/
 ├── SPEC.md                    product and architecture authority
 ├── docs/                      detailed durable architecture and runbooks
 ├── .agents/skills/            conditionally loaded Foreman workflows for Codex
-├── config/model-routing.json  tracked model routing configuration
+├── config/model-routing.json  Herdr routing and worker profiles
+├── config/paseo-routing.json  Paseo routing groups and router
+├── config/paseo-agent-profiles.json  repo-owned Paseo agent profiles
 ├── bin/                       deterministic helpers and runtime adapters
 ├── hooks/                     coding-agent hook scripts for worker reports and the Foreman session
 ├── adapters/
@@ -154,14 +156,16 @@ Definitions:
 
 - `FOREMAN_ROOT`: tracked source checkout containing instructions, scripts, adapters, tests, and this specification.
 - `FOREMAN_HOME`: private operational root containing `data/`; client-owned workspaces live outside Foreman home.
-- Model routing reads the tracked `FOREMAN_ROOT/config/model-routing.json`; it does not read a same-named file in `FOREMAN_HOME`.
+- Herdr routing reads `FOREMAN_ROOT/config/model-routing.json`.
+- Paseo routing and profiles read `FOREMAN_ROOT/config/paseo-routing.json` and `FOREMAN_ROOT/config/paseo-agent-profiles.json`.
+- Paseo's installed profile list changes only through explicit profile sync; sync preserves profiles that Foreman does not own.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
 - `foreman init` run in the Foreman checkout records that checkout as `FOREMAN_ROOT` and `FOREMAN_HOME` (or `--home`) in the startup file of the machine's login shell: `$ZDOTDIR/.zshrc` or `~/.zshrc` for zsh, `~/.bashrc` for bash (`~/.bash_profile` on macOS), `~/.config/fish/conf.d/foreman.fish` for fish, and `~/.profile` for `sh`, `dash`, `ksh`, or `mksh`.
 - `bin/foreman-herdr` and `bin/foreman-paseo` set `FOREMAN_BACKEND` for one Foreman CLI process; `foreman init` never writes the backend choice to a shell startup file.
 - `FOREMAN_BACKEND` accepts `herdr` or `paseo`, defaults to `herdr` for existing callers, and rejects any other value.
 - It rewrites only its own marked block, leaves the rest of the file unchanged, and refuses an unrecognized shell by printing the lines to add manually.
-- Worker panes opened after `init` inherit both variables, which the worker stop hook and `foreman report` rely on.
+- Herdr worker panes opened after `init` inherit both variables, which the worker stop hook and `foreman report` rely on.
 
 ## 7. Durable data model
 
@@ -242,15 +246,18 @@ The project workspace stays on disk.
 
 ### 7.4 Assignment generation
 
-Each ownership change increments `generation` in task metadata and records the new worker's Herdr pane as `paneId`.
+Each ownership change increments `generation` in task metadata and records the runtime endpoint identity.
+Herdr assignments bind `paneId`; Paseo assignments bind `agentId` as the endpoint and also persist `workspaceId`.
 Every prompt and steering message carries task ID, project ID, owner, and generation.
-A worker report is bound to the assignment through its pane, so a pane from an older generation cannot update lifecycle or reports.
+A worker report is bound to the current endpoint and generation, so a stale pane or Paseo agent cannot update task lifecycle or reports.
 
 ### 7.5 Worker reports
 
-A worker reports with `foreman report --status done|blocked|progress`, giving the summary as `--summary`, `--summary-file`, or standard input.
+Herdr workers report with `foreman report --status done|blocked|progress`, giving the summary as `--summary`, `--summary-file`, or standard input.
+Paseo workers return one JSON object with `status` and a non-empty `summary` at the end of each turn; Foreman tolerates a leading Markdown horizontal rule emitted by the Paseo timeline and preserves the full original response.
+Paseo workers do not invoke `foreman report` or depend on a stop hook.
 `done` means the task is complete, `blocked` means only the user can unblock it, and `progress` means the worker stopped before finishing for another reason.
-Each report is stored verbatim as `reports/generation-<n>-<seq>-<status>.md` after an identity header of task, project, agent, generation, status, and report time.
+Each accepted report is stored verbatim under the task reports directory after an identity header of task, project, agent, generation, status, and report time.
 Earlier reports are never overwritten.
 
 A report is accepted only while the task is `working` or `blocked`.
@@ -279,7 +286,7 @@ Every worker prompt is rendered by one fixed template.
 A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, and `Report`.
 The prompt carries no rules section; Git and resource limits are not restated to the worker.
 A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
-The `Report` section carries the same report command and status guidance as the worker stop hook.
+The `Report` section uses the Herdr report command and stop-hook guidance for Herdr assignments, and the required JSON response shape for Paseo assignments.
 The outbox retains the full message identity, payload, and delivery evidence privately.
 
 Each message records at least:
@@ -294,8 +301,8 @@ Each message records at least:
 - lifecycle state.
 
 Message lifecycle is `pending`, `delivered`, or `failed`.
-`delivered` means that Herdr accepted prompt submission.
-Foreman inspects the endpoint after a short delay and records the observed status without interrupting it.
+`delivered` means the selected runtime accepted prompt submission.
+Foreman records the returned delivery evidence without interrupting the worker.
 
 Messages are never resent automatically.
 An uncertain task-brief submission is recorded for follow-up without stopping the worker or sending the same prompt again.
@@ -316,7 +323,7 @@ Decision records live under `data/tasks/<id>/decisions/` and preserve the origin
 Each Decision Package contains the finding, why human authority is required, concrete options, impact, evidence, and either the worker recommendation or an explicit statement that no recommendation is available.
 
 Decision lifecycle is `pending`, `answered`, and `delivered`.
-Foreman does not resume authority-blocked work until Herdr accepts delivery to the current assignment generation; that delivery returns the task to `working`.
+Foreman does not resume authority-blocked work until the selected runtime accepts delivery to the current assignment generation; that delivery returns the task to `working`.
 
 ### 7.10 Task types and dependencies
 
@@ -368,10 +375,11 @@ Every lifecycle action must return evidence that Foreman verifies through a subs
 Lifecycle commands are separate from normal worker messages and cannot be represented as chat instructions.
 Relaunch is a Foreman recovery workflow composed from inspected stop or missing evidence, a new assignment generation, spawn, identity verification, and durable message delivery; it is not a runtime adapter primitive.
 
-The first adapter is Herdr. The accepted second adapter is Paseo and follows the same backend-neutral task identity model.
-Herdr identifiers and Paseo agent IDs are stored as opaque backend metadata and do not replace task, project, owner, or generation identity.
+Herdr and Paseo are the implemented local adapters and follow the same backend-neutral task identity model.
+Herdr pane IDs and Paseo agent IDs are stored as opaque backend metadata and do not replace task, project, owner, or generation identity.
 
-Foreman must version-gate against the installed Herdr protocol it relies on and fail closed when required semantics cannot be verified. It must not guess CLI syntax.
+Herdr must version-gate against the installed Herdr protocol it relies on and fail closed when required semantics cannot be verified.
+Paseo uses the supported `@getpaseo/client` SDK surface, checks the selected daemon home and compatible daemon version, and fails closed when provider, model, workspace, endpoint, or timeline evidence cannot be verified.
 
 An adapter may expose optional dispatch capabilities such as agent harness, model, and reasoning effort.
 Foreman validates a selected dispatch profile against those capabilities before assignment and falls back only to an explicitly configured compatible profile.
@@ -381,9 +389,13 @@ Foreman validates a selected dispatch profile against those capabilities before 
 `foreman-herdr` and `foreman-paseo` are the backend-specific skill entrypoints.
 Both use the same Foreman home and shared operational workflow.
 Their CLI wrappers set `FOREMAN_BACKEND` only for the child process, so selecting a backend does not mutate the login shell or affect another Foreman session.
-The Herdr entrypoint supports the implemented runtime.
-The Paseo entrypoint supports common setup and non-runtime project or task reads.
-Task creation and routing, worker lifecycle, runtime status, reports, and Paseo profile mapping fail closed until its adapter is implemented.
+The Herdr entrypoint supports Herdr-backed task routing, dispatch, reports, supervision, recovery, and acceptance.
+The Paseo entrypoint supports Paseo-backed task routing, dispatch, report collection, supervision, recovery, and acceptance.
+Paseo profile source files are `config/paseo-agent-profiles.json` and `config/paseo-routing.json`.
+`bin/foreman-paseo profiles sync` replaces repo-owned `foreman-*` profiles in the selected Paseo home, preserves other profiles and their order, and verifies the readback.
+Profile sync is explicit and never runs during `init` or task creation.
+Paseo agents use the `@getpaseo/client` SDK bridge, and their provider/model/mode/thinking/features are materialized from the profile selected and confirmed by the human.
+Paseo task collection uses a persisted timeline cursor and turn completion evidence; idle state or prompt acceptance alone never marks a task complete.
 Foreman never retries a Paseo operation through Herdr.
 
 ## 9. Worker, workspace, and resource model
@@ -413,13 +425,15 @@ The dispatched brief includes:
 - accepted follow-up decisions verbatim;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
-- required deliverable and evidence contract, given as the report command and status guidance.
+- required deliverable and evidence contract, given as the backend's report command or JSON response shape.
 
 The brief does not list worker rules such as scope, Git, or lease prohibitions; Git lifecycle remains client-owned.
 
 ### 9.3 Worker communication
 
-Workers report only through `"$FOREMAN_ROOT/bin/foreman" report`, which every worker prompt states and the stop hook in section 7.8 repeats when a worker stops without reporting.
+Herdr workers report through `"$FOREMAN_ROOT/bin/foreman" report`, which every Herdr worker prompt states and the stop hook in section 7.8 repeats when a worker stops without reporting.
+Paseo workers return the required `status` and non-empty `summary` JSON object at the end of each turn.
+Foreman collects Paseo reports using the persisted timeline cursor and current endpoint, workspace, generation, and turn evidence.
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form request, and a request to a `blocked` or `review-ready` task returns it to `working`.
 Workers never edit the project registry or task metadata.
 
@@ -440,7 +454,8 @@ An idle endpoint may receive another task only after its prior assignment is ter
 Supervision runs only inside Foreman turns; there is no observer, heartbeat, or event queue.
 
 1. On its first operational turn, a Foreman session runs `foreman init` so the shell environment points at this checkout.
-2. Before answering the user, the session reads the supervision context from its prompt hook, or runs `foreman status` when that context is absent.
+2. Before answering the user, the session reads the supervision context from its prompt hook, or runs the selected backend's supervision commands when that context is absent.
+   In Paseo mode, it runs `task collect` before `status` to reconcile reports after a missed event or disconnected turn.
 3. It reads each new worker report named in the context from its file.
 4. It acts on anomalies: it sends a follow-up with `foreman task message`, creates a Decision Package, or confirms a dead or missing worker with a second status check before `foreman task recover`.
 5. It persists lifecycle changes before reporting them.
@@ -448,8 +463,9 @@ Supervision runs only inside Foreman turns; there is no observer, heartbeat, or 
 
 ### 10.1 Status check
 
-`foreman status` lists Herdr runtime state once and classifies every assigned task as in section 7.11.
+`foreman status` lists the selected runtime once and classifies every assigned task as in section 7.11.
 It does not interrupt workers, write state, or recover anything.
+In Paseo mode, run `task collect` first; it re-reads assigned agent timelines and writes only validated finished-turn reports.
 
 ### 10.2 Foreman session context
 
@@ -489,10 +505,10 @@ Nothing is lost while no Foreman session runs: reports stay unread until a sessi
 2. Create a new assignment generation.
 3. Receive and validate the client-prepared workspace and resource claims.
 4. Persist the brief, pending assignment, and task-brief outbox message before runtime delivery.
-5. Spawn the worker through the Herdr adapter.
+5. Spawn the worker through the selected runtime adapter.
 6. Verify stable endpoint identity and deliver the persisted task-brief message.
-7. After Herdr accepts the text prompt, Foreman marks the task `working` and records the worker pane.
-8. A delayed, passive endpoint inspection records the worker state. If submission is uncertain, Foreman preserves the endpoint and records the uncertainty without resending or interrupting it.
+7. After the selected runtime accepts the text prompt, Foreman marks the task `working` and records the endpoint identity; Paseo also records the workspace ID and timeline cursor.
+8. If submission is uncertain, Foreman preserves the endpoint and records the uncertainty without resending or interrupting it.
 
 ### 11.4 Adopt existing worker
 
@@ -655,13 +671,13 @@ P3 is complete only when every new task produces a durable routing record, the r
 ## 17. Deliberate initial decisions
 
 - Repository model: standalone agent distribution.
-- Runtime backend: Herdr is implemented; Paseo has an entrypoint but its adapter and profile mapping remain pending.
+- Runtime backends: Herdr and Paseo are implemented behind separate entrypoints and adapters; the task backend is stored with every assignment.
 - Deployment: local machine only.
 - State store: files with atomic writes and explicit locks; no database.
 - Delivery mode: `local-only` first.
 - Acceptance: user only.
 - Merge authority: none in the initial release.
-- Supervision: worker stop-hook reports plus on-demand Foreman turns; no background observer.
+- Supervision: Herdr stop-hook reports and Paseo turn-report collection during Foreman turns; no background observer.
 - Project mutation: workers only, in client-prepared shared workspaces; resource leases guard concurrent mutation.
 - Legacy code: preserved under `legacy/` until parity and cutover are proven.
 
@@ -703,33 +719,40 @@ Milestone implementation contract correction: the Herdr step is implemented behi
 
 ## 20. Current implementation status
 
-This section records the behavior present in the repository on 2026-09-25.
+This section records the behavior present in the repository on 2026-09-28.
 Sections 14–16 remain the normative roadmap and acceptance contract; this section records which paths are implemented and which limitations are explicit.
 
 ### 20.1 Implemented paths
 
 - P0 durable coordination is implemented with schema-v1 validation at active-record load boundaries, an atomic migration seam that preserves the source record, durable outbox persistence before send, message IDs, task/project/worker/generation/endpoint bindings, payload digests, and delivery tracking.
 - `foreman init` records `FOREMAN_ROOT` and `FOREMAN_HOME` in the login shell's startup file as described in section 6.
-- Workers report through `foreman report`, bound to the assignment by `HERDR_PANE_ID`; `hooks/foreman-worker-stop.sh` prompts the report at the end of a turn.
+- Herdr workers report through `foreman report`, bound to the assignment by `HERDR_PANE_ID`; `hooks/foreman-worker-stop.sh` prompts the report at the end of a turn.
+- Paseo workers return one JSON report object per finished turn; Foreman validates the bound agent, workspace, generation, and timeline cursor before recording it.
 - `hooks/foreman-session-context.sh`, configured in `.claude/settings.json` and `.codex/hooks.json`, gives the Foreman session unread reports and status anomalies on each non-`DEV` prompt.
-- `foreman status` performs one read-only runtime listing and flags dead, missing, mismatched, input-blocked, and idle-without-report workers without interrupting them.
+- `foreman status` performs one read-only listing of the selected backend, flags dead, missing, mismatched, input-blocked, and idle-without-report workers without interrupting them, and shows assignments on the other backend as unobserved.
 - The observer, worker heartbeat, event spool, wake queue, worker registry, inbox packages, acknowledgements, quarantine, message retry, automatic follow-up, automatic blocker triage, and automatic recovery were removed on 2026-09-25.
-- P1 lifecycle control is implemented through the Herdr adapter for spawn, inspect, send, read, interrupt, and stop.
+- P1 lifecycle control is implemented through the Herdr adapter and the Paseo SDK bridge for spawn, inspect, send, read, interrupt, and stop/archive.
 - The compatibility gate checks the agent, workspace, and pane verbs used for dispatch.
 - Interrupt returns success only after a later inspection shows the endpoint still exists and is no longer working.
 - Recovery composes a status check that confirms `dead` or `missing`, stop or confirmed absence, a new generation, spawn, and a brief carrying the durable handoff.
 - The handoff contains the brief, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
 - Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
 - Adoption is an explicit request.
-- It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and its pane without sending the task again.
+- It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and the backend-specific endpoint; Paseo adoption sends the persisted brief before reports can be collected.
 - A scout receives read-only resource claims; its brief has no separate instruction not to modify production files.
 - Foreman does not scan or fingerprint project files to verify scout behavior; Herdr does not sandbox the worker.
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
-- Mandatory task-intake routing is implemented through the tracked `FOREMAN_ROOT/config/model-routing.json` with a fixed router, an explicit default, and named worker profiles.
+- Herdr task routing is implemented through `FOREMAN_ROOT/config/model-routing.json`; Paseo routing uses the separate `config/paseo-routing.json` and `config/paseo-agent-profiles.json` sources.
+- `bin/foreman-paseo profiles sync [--dry-run]` updates only Foreman-owned Paseo profile IDs, preserves Paseo-created profiles and their order, checks the selected daemon home, and verifies the written profile list.
+- Paseo routing persists the selected profile snapshot on each task; profile edits do not alter existing assignments.
 - Routing supports the `codex`, `claude`, `omp`, and `opencode` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
 - Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
-- A compatible dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
+- A compatible Herdr dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
+- Paseo dispatch creates an agent in the verified Foreman workspace, persists its agent and workspace IDs, and does not bind a terminal pane.
+- Paseo report collection runs explicitly through `task collect` and during Paseo supervision turns; it uses the durable timeline cursor to recover missed finish events and does not treat idle or prompt acceptance as completion.
+- Permission requests, worker errors, cancellations, timeline gaps, and missing or malformed reports remain visible for review; Foreman does not synthesize a successful report.
+- Paseo agent acceptance archives the bound endpoint and releases resources only after endpoint closure is verified.
 - `bin/foreman` is a thin wrapper over the core modules.
 - Default `status` and `task list` render the grouped Vietnamese report.
 - `--json` keeps the machine-readable record.
@@ -738,14 +761,16 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 
 ### 20.2 Runtime proof
 
-- On 2026-09-25, `npm test` ran 59 tests: 52 passed, 2 live cases were skipped, and 5 failed.
-- The 5 failures predate the report change: four Herdr adapter tests use a transport mock without the `pane list` verb and `workspace create` response, and one routing test expects the committed `config/model-routing.json`.
+- On 2026-09-28, the Paseo focused suite ran 6 tests and all passed.
+- On 2026-09-28, `npm run test:paseo:live` started an isolated Paseo daemon, synced profiles, dispatched a real read-only scout, collected its report, checked status, accepted the task, and passed.
+- The complete suite passed serially with `node --test --test-concurrency=1 test/*.test.js`: 71 passed and 3 live tests were skipped.
+- The default parallel `npm test` invocation passed 70 tests and skipped 3, but twice hit the same `ENOTEMPTY` cleanup failure in `core-runtime.test.js`; running that file alone and the complete suite serially passed.
 - `npm run test:live` spawned real Codex workers through Herdr 0.9.1, and both cases passed: each worker received its brief, reported through its pane, and its task became `review-ready`.
 - Before the folder-trust fix, the ship case in an untrusted temporary folder failed because the brief's Enter answered Codex's trust screen and the brief was lost.
 
 ### 20.3 Explicit compatibility limits and deferrals
 
-- Task briefs are sent as text prompts to workers in separate Herdr workspaces.
+- Task briefs are sent as text prompts to workers in Herdr workspaces or Paseo-managed workspaces verified against their Foreman assignment.
 - Brief delivery requires no worker acknowledgement, and delivered prompts are not automatically resent.
 - Herdr reports an agent showing a startup screen as idle, so spawn confirms Codex and Claude folder-trust screens with Enter before it treats the agent as ready; the workspace is a registered project that the user dispatched work into.
 - A startup screen that Foreman does not recognize can still consume the brief; `foreman status` then shows the worker idle without a report.
@@ -755,9 +780,10 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; OpenCode V2 maps `effort` to its `provider/model#variant` reference. The adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - The router's selection is a recommendation shown as option 1 before every other active profile; `foreman task confirm --task ID --profile NAME` records the human's choice, and dispatch and scheduling refuse a routed, unassigned task until it is confirmed. Recovery keeps the confirmed profile of the assignment it replaces.
-- A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
+- Herdr profiles with `isActive: false` are excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
+- Paseo uses its own provider profiles and routing groups; profile synchronization is explicit and is never triggered by initialization or task creation.
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
-- Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
+- Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 
 ### OpenCode V2 tool dispatch within Herdr
 

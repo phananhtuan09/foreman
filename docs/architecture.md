@@ -5,10 +5,11 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
-`bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and rejects unavailable Paseo runtime operations.
+`bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and selects the matching runtime adapter.
 All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
 `src/herdr.js` is the narrow Herdr adapter.
-Paseo currently has a skill and CLI launcher only; its runtime adapter and profile mapping remain pending.
+`src/paseo.js` invokes the SDK bridge in `bin/foreman-paseo-bridge.js`; each command opens a short-lived Paseo client and does not add a Foreman observer process.
+`config/paseo-agent-profiles.json` is the source for Foreman-owned Paseo profiles, and `bin/foreman-paseo profiles sync` replaces only those IDs while preserving app-owned profiles.
 `hooks/` holds the worker stop hook and the Foreman session prompt hook.
 `adapters/herdr/` is the distribution wrapper.
 
@@ -18,20 +19,26 @@ Each configured profile belongs to exactly one group; inactive profiles are remo
 The router may select only a configured profile; failure selects the configured default and records the error.
 Task metadata records the selected profile, source, reason, any router error, and timestamp before the task becomes `queued`.
 The routed profile is a recommendation; `task confirm` records the human's chosen active profile as the dispatch profile with `profileConfirmedAt`, and assignment refuses a routed task without it.
-Worker profiles support `codex`, `claude`, `omp`, and `opencode`; Herdr starts the selected tool with the configured command arguments and model.
-OpenCode uses its V2 interactive `mini --standalone` interface and global V2 stop plugin in a pane-local server; Herdr remains the only runtime backend.
+Herdr profiles support `codex`, `claude`, `omp`, and `opencode` and start the selected tool with its configured command arguments and model.
+Paseo profiles materialize a provider, model, mode, thinking option, and features into the SDK agent creation call.
+Paseo stores an `agentId` and `workspaceId`; Herdr stores a pane-bound endpoint.
 
 Canonical writes use the home lock and atomic replacement.
 JSON records carry `schemaVersion: 1`; unsupported or malformed active records fail closed.
-Worker reports are external input: `foreman report` accepts one only from the Herdr pane bound to a working or blocked assignment and stores it verbatim as a new file.
+Worker reports are external input.
+Herdr's `foreman report` accepts one only from the bound Herdr pane, while Paseo collection reads the assistant response from the bound agent timeline after confirming assignment identity and turn completion.
+Both backends store original report text under the task report directory and bind task-state changes to the current generation.
 
 Supervision is pull-based and runs only in Foreman turns.
-A worker's stop hook asks it to run `foreman report` when it ends a turn without having reported since Foreman last prompted it.
+A Herdr worker's stop hook asks it to run `foreman report` when it ends a turn without having reported since Foreman last prompted it.
+Paseo workers return a JSON report object at the end of each turn; Foreman collects new turns through an explicit command and re-reads timeline state during Paseo supervision turns.
 The report records `lastReport` in task metadata and moves a `done` task to `review-ready` or a `blocked` task to `blocked`.
 The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
-The status check lists Herdr once, classifies each assignment as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and flags an idle worker that has not reported; it never writes state or interrupts a worker.
+The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
+It never writes state or interrupts a worker.
 Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
 Herdr creates a separate workspace for each new worker and receives a concise text prompt.
+Paseo creates an agent in a verified Foreman workspace, receives the durable prompt through the SDK, and exposes turn status and timeline data for report collection.
 The private outbox retains message identity and payload; delivered prompts are not resent.
 After submission, Foreman inspects the endpoint without interrupting the worker and records the result as runtime evidence.
 An uncertain task-brief submission keeps the endpoint for inspection.

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "foreman-codex-luna",
+    "name": "Foreman Codex Luna",
+    "provider": "codex",
+    "model": "gpt-6-luna",
+    "modeId": "full-access",
+    "thinkingOptionId": "high",
+    "notes": "Preferred for ordinary implementation, bug fixes, tests, and review unless another configured profile better matches the request."
+  },
+  {
+    "id": "foreman-codex-sol",
+    "name": "Foreman Codex Sol",
+    "provider": "codex",
+    "model": "gpt-6-sol",
+    "modeId": "full-access",
+    "thinkingOptionId": "medium",
+    "notes": "Use for tooling-heavy builds, dependencies, CI, or scripted batch edits when this profile is explicitly requested."
+  },
+  {
+    "id": "foreman-opencode-sol",
+    "name": "Foreman OpenCode Sol",
+    "provider": "opencode",
+    "model": "openai/gpt-6-sol",
+    "modeId": "build",
+    "notes": "Use when OpenCode is explicitly requested. Paseo currently has no matching thinking option for the prior Herdr effort setting."
+  },
+  {
+    "id": "foreman-opencode-luna",
+    "name": "Foreman OpenCode Luna",
+    "provider": "opencode",
+    "model": "openai/gpt-6-luna",
+    "modeId": "build",
+    "notes": "Use for OpenCode tasks when the Luna model is requested. Paseo currently has no matching thinking option for the prior Herdr effort setting."
+  }
+]

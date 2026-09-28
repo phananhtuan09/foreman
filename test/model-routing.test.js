@@ -86,7 +86,7 @@ test("routing config supports codex, claude, omp, opencode and reads the reposit
     assert.equal(initialized.config.default, "codex-luna");
     assert.equal(initialized.config.router.model, "gpt-6-luna");
     assert.ok(initialized.config.router.command.includes("--skip-git-repo-check"));
-    assert.deepEqual(initialized.config.profiles["codex-luna"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="max"']);
+    assert.deepEqual(initialized.config.profiles["codex-luna"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="high"']);
     assert.deepEqual(initialized.config.profiles["opencode-sol"].command, ["opencode", "mini", "--standalone"]);
     assert.equal(initialized.config.profiles["opencode-sol"].model, "openai/gpt-6-sol");
     assert.deepEqual(initialized.config.profiles["opencode-luna"].command, ["opencode", "mini", "--standalone"]);

@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const core = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
+const { PaseoAdapter } = require("../src/paseo");
+const paseoRouting = require("../src/paseo-routing");
 const { installShellEnv } = require("../src/shell-env");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
@@ -27,8 +29,14 @@ function selectedBackend() {
 }
 function runtimeAdapter() {
   const backend = selectedBackend();
-  if (backend === "paseo") throw new Error("FOREMAN_BACKEND=paseo is selected, but the Paseo runtime adapter is not implemented yet; no worker was contacted");
+  if (backend === "paseo") return new PaseoAdapter();
   return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) });
+}
+function assertSelectedTaskBackend(taskId) {
+  const meta = core.reconstructTask({ roots: roots(), taskId }).meta;
+  const taskBackend = meta.backend || "herdr";
+  if (taskBackend !== selectedBackend()) throw new Error(`Task backend is ${taskBackend}; use bin/foreman-${taskBackend} for this operation`);
+  return meta;
 }
 function readStdin() {
   if (process.stdin.isTTY) return "";
@@ -68,12 +76,14 @@ const usage = [
   "  routing init",
   "  routing show",
   "  routing route --task ID",
+  "  profiles sync [--dry-run]   (Paseo: sync repo-owned profiles into the selected Paseo home)",
   "  project register --id ID --root PATH [--name NAME]",
   "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
   "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
+  "  task collect   (Paseo: collect finished-turn reports from assigned agents)",
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
@@ -99,7 +109,7 @@ function main() {
     if (!fs.existsSync(path.join(root, "bin", "foreman"))) throw new Error(`init must run from the Foreman checkout; ${root} has no bin/foreman`);
     const home = core.resolveRoots({ foremanRoot: root, foremanHome: arg("--home", root) });
     const initialized = core.initHome(home);
-    const routing = core.initRoutingConfig({ roots: home });
+    const routing = core.initRoutingConfig({ roots: home, backend: selectedBackend() });
     const shell = installShellEnv({ vars: { FOREMAN_ROOT: home.foremanRoot, FOREMAN_HOME: home.foremanHome } });
     output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed } });
     return;
@@ -107,7 +117,7 @@ function main() {
   if (command === "worker" && action === "hook") {
     // A stop hook must never break the coding agent, so every failure ends silently.
     try {
-      if (!process.env.FOREMAN_ROOT || !process.env.HERDR_PANE_ID) return;
+      if (selectedBackend() !== "herdr" || !process.env.FOREMAN_ROOT || !process.env.HERDR_PANE_ID) return;
       if (!fs.existsSync(path.join(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT, "data", "tasks"))) return;
       const decision = core.workerStopHook({ roots: roots(), paneId: process.env.HERDR_PANE_ID, payload: hookPayload() });
       if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
@@ -117,7 +127,7 @@ function main() {
   if (command === "session" && action === "context") {
     try {
       const payload = hookPayload();
-      const adapter = process.env.HERDR_ENV === "1" ? runtimeAdapter() : null;
+      const adapter = process.env.FOREMAN_BACKEND || process.env.HERDR_ENV === "1" ? runtimeAdapter() : null;
       const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
@@ -125,6 +135,7 @@ function main() {
     return;
   }
   if (command === "report") {
+    if (selectedBackend() !== "herdr") throw new Error("Paseo workers report by returning the required JSON response; Foreman collects it with task collect");
     if (!process.env.FOREMAN_ROOT) throw new Error("FOREMAN_ROOT is not set; run bin/foreman init in the Foreman checkout");
     if (!process.env.HERDR_PANE_ID) throw new Error("HERDR_PANE_ID is not set; only a Foreman worker pane can report");
     const summaryFile = arg("--summary-file");
@@ -133,10 +144,15 @@ function main() {
     return;
   }
   const home = roots();
-  if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home })); return; }
-  if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanRoot, { required: true })); return; }
+  if (command === "profiles" && action === "sync") {
+    if (selectedBackend() !== "paseo") throw new Error("Profile sync is available only through bin/foreman-paseo");
+    output(paseoRouting.syncPaseoProfiles({ foremanRoot: home.foremanRoot, dryRun: flag("--dry-run") }));
+    return;
+  }
+  if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home, backend: selectedBackend() })); return; }
+  if (command === "routing" && action === "show") { output(core.initRoutingConfig({ roots: home, backend: selectedBackend() }).config); return; }
   if (command === "routing" && action === "route") {
-    if (selectedBackend() !== "herdr") throw new Error("Paseo task routing is not available until the Paseo adapter and profile mapping are implemented");
+    assertSelectedTaskBackend(arg("--task"));
     output(core.routeTask({ roots: home, taskId: arg("--task") }));
     return;
   }
@@ -145,9 +161,8 @@ function main() {
     return;
   }
   if (command === "task" && action === "create") {
-    if (selectedBackend() !== "herdr") throw new Error("Paseo task routing is not available until the Paseo adapter and profile mapping are implemented; no task was created");
-    core.initRoutingConfig({ roots: home });
-    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
+    core.initRoutingConfig({ roots: home, backend: selectedBackend() });
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend() }));
     return;
   }
   if (command === "task" && action === "list") {
@@ -155,7 +170,12 @@ function main() {
     output(flag("--json") ? tasks.map((item) => item.meta) : core.renderUserReport({ tasks }, home));
     return;
   }
-  if (command === "task" && action === "confirm") { output(core.confirmTaskProfile({ roots: home, taskId: arg("--task"), profile: arg("--profile") })); return; }
+  if (command === "task" && action === "confirm") { assertSelectedTaskBackend(arg("--task")); output(core.confirmTaskProfile({ roots: home, taskId: arg("--task"), profile: arg("--profile") })); return; }
+  if (command === "task" && action === "collect") {
+    if (selectedBackend() !== "paseo") throw new Error("Paseo report collection is available only through bin/foreman-paseo");
+    output(core.collectPaseoReports({ roots: home, adapter: runtimeAdapter() }));
+    return;
+  }
   if (command === "task" && action === "dispatch") {
     // A human dispatch proceeds past held leases; the overlaps are reported as a warning.
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint"), allowResourceConflicts: true });
@@ -183,14 +203,16 @@ function main() {
     return;
   }
   if (command === "task" && action === "recover") {
+    assertSelectedTaskBackend(arg("--task"));
     const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
     warnResourceConflicts(result);
     output(result);
     return;
   }
-  if (command === "task" && action === "accept") { output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
-  if (command === "task" && action === "discard") { output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
   if (command === "task" && action === "message") {
+    assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task message requires --text or --text-file");
@@ -198,14 +220,17 @@ function main() {
     return;
   }
   if (command === "decision" && action === "create") {
+    assertSelectedTaskBackend(arg("--task"));
     output(core.createDecision({ roots: home, taskId: arg("--task"), finding: arg("--finding"), why: arg("--why"), options: args("--option"), impact: arg("--impact"), evidence: arg("--evidence"), recommendation: arg("--recommendation") }));
     return;
   }
   if (command === "decision" && action === "answer") {
+    assertSelectedTaskBackend(arg("--task"));
     output(core.answerDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), response: arg("--response") }));
     return;
   }
   if (command === "decision" && action === "deliver") {
+    assertSelectedTaskBackend(arg("--task"));
     output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
     return;
   }

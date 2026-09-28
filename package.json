@@ -10,6 +10,10 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:live": "RUN_HERDR_LIVE=1 node --test test/herdr-live.integration.test.js"
+    "test:live": "RUN_HERDR_LIVE=1 node --test test/herdr-live.integration.test.js",
+    "test:paseo:live": "RUN_PASEO_LIVE=1 node --test test/paseo-live.integration.test.js"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.10.0"
   }
 }

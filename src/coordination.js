@@ -51,6 +51,8 @@ function validateTaskMetaRecord(meta, taskId) {
   if (!meta.status || !TASK_STATUSES.includes(meta.status)) throw new SchemaValidationError(`Task metadata status is invalid: ${taskId || meta.taskId}`);
   if (meta.owner !== null && meta.owner !== undefined && typeof meta.owner !== "string") throw new SchemaValidationError(`Task metadata owner is invalid: ${taskId || meta.taskId}`);
   if (meta.endpoint !== null && meta.endpoint !== undefined && typeof meta.endpoint !== "string") throw new SchemaValidationError(`Task metadata endpoint is invalid: ${taskId || meta.taskId}`);
+  if (meta.backend !== undefined && !["herdr", "paseo"].includes(meta.backend)) throw new SchemaValidationError(`Task metadata backend is invalid: ${taskId || meta.taskId}`);
+  if (meta.workspaceId !== undefined && meta.workspaceId !== null && typeof meta.workspaceId !== "string") throw new SchemaValidationError(`Task metadata workspace ID is invalid: ${taskId || meta.taskId}`);
   return meta;
 }
 
@@ -105,6 +107,9 @@ function deliveryPrompt(message) {
     return Object.entries(value).map(([key, item]) => `${indent}${key}: ${typeof item === "object" && item !== null ? `\n${plainText(item, `${indent}  `)}` : plainText(item)}`).join("\n");
   };
   const section = (title, body) => ["", `## ${title}`, body];
+  const reportInstruction = payload.backend === "paseo"
+    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman."
+    : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
   if (message.kind === "task-brief") {
     const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
     return [
@@ -115,14 +120,14 @@ function deliveryPrompt(message) {
       ...section("User request", String(payload.brief || "")),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
       ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
-      ...section("Report", ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+      ...section("Report", reportInstruction),
     ].join("\n");
   }
   return [
     `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
     "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
-    ...section("Report", ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+    ...section("Report", payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
   ].join("\n");
 }
 
@@ -226,7 +231,7 @@ function activeTaskMetas(roots) {
 }
 
 function runtimeWorkerFor(meta, workers) {
-  if (meta.endpoint) return workers.find((worker) => worker.endpoint === meta.endpoint || worker.endpointId === meta.endpoint || worker.name === meta.endpoint || worker.agent === meta.endpoint || worker.pane_id === meta.endpoint);
+  if (meta.endpoint) return workers.find((worker) => worker.endpoint === meta.endpoint || worker.endpointId === meta.endpoint || worker.agentId === meta.endpoint || worker.id === meta.endpoint || worker.name === meta.endpoint || worker.agent === meta.endpoint || worker.pane_id === meta.endpoint);
   return workers.find((worker) => worker.owner === meta.owner || worker.name === meta.owner);
 }
 
@@ -235,7 +240,10 @@ function classifyRuntime(meta, worker) {
   if (!meta.endpoint) return ["routing", "queued", "pending"].includes(meta.status) ? meta.status : "unknown";
   if (!worker) return "missing";
   if (worker.owner && worker.owner !== meta.owner && worker.name !== meta.owner) return "mismatch";
+  if (worker.attentionReason === "permission" || (worker.pendingPermissions || []).length) return "waiting-input";
   const status = String(worker.status || worker.agent_status || "unknown").toLowerCase();
+  if (worker.attentionReason === "error" || status === "error") return "unknown";
+  if (status === "closed") return "unknown";
   if (["dead", "crashed", "terminated"].includes(status)) return "dead";
   if (["idle", "waiting", "done", "completed", "complete", "exited"].includes(status)) return "idle";
   if (status === "blocked") return "waiting-input";
@@ -292,6 +300,10 @@ function reconcileFleet({ roots, adapter }) {
   const tasks = [];
   for (const { taskId, meta } of activeTaskMetas(roots)) {
     if (["accepted", "review-ready", "cleaned"].includes(meta.status)) continue;
+    if (adapter?.backend && (meta.backend || "herdr") !== adapter.backend) {
+      tasks.push({ taskId, meta, worker: null, state: "unobserved", issues: [] });
+      continue;
+    }
     const worker = runtimeWorkerFor(meta, workers);
     const issues = taskConsistencyIssues({ roots, meta });
     if (worker?.projectId && worker.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker.projectId });

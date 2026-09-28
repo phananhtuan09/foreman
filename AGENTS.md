@@ -35,10 +35,10 @@ Project code changes belong to assigned workers in their leased workspaces.
   Its `data/` directory is private runtime state and must not be edited by workers.
 - Every active JSON record is versioned and identity-bound.
   Acquire the home lock before canonical mutations.
-- A worker changes Foreman state only through `foreman report` from its bound Herdr pane, and writes only its leased project resources.
-- The Paseo launcher currently supports initialization only; runtime operations fail closed until its adapter and profile mapping are implemented.
+- Herdr workers change Foreman state through `foreman report` from their bound pane; Paseo workers return a JSON report that Foreman collects from the bound agent timeline.
+- Workers write only within their leased project resources; Herdr and Paseo assignments remain bound to their selected backend.
 - Preserve original briefs, decisions, worker reports, and evidence.
 - Herdr accepting a prompt proves delivery only, not that the worker read it.
   A new worker report or the runtime status is the evidence that work continues.
-- Supervision runs only in Foreman turns, from the session prompt-hook context or one non-interrupting status check; workers never prompt the Foreman session.
+- Supervision runs only in Foreman turns; Paseo turns are collected with `task collect` before one non-interrupting status check, and workers never prompt the Foreman session.
 - Never infer a dead worker from unknown evidence, cross project boundaries, or silently choose a dispatch fallback.
