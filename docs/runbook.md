@@ -88,7 +88,7 @@ Foreman encodes a non-null `effort` as the model variant suffix `#<effort>` on `
 OpenCode resolves whether the selected variant exists for that model; an unknown variant fails model resolution.
 OpenCode V2's `mini` interface does not accept `--auto`, so Foreman rejects profiles that include it.
 The pane-local server is required so the global worker-stop plugin inherits the worker's `HERDR_PANE_ID`; a shared service may have another pane's ID.
-Install the global OpenCode V2 Foreman worker-stop plugin before dispatch; a loaded plugin alone is not proof that a worker reported.
+Install the global OpenCode V2 Foreman worker-stop plugin before dispatch by adding the absolute directory `FOREMAN_ROOT/hooks/foreman-worker-stop-opencode` to `plugins` in `~/.config/opencode/opencode.jsonc` (preserving other entries). Check that `opencode plugin list` shows `foreman.worker-stop`; a loaded plugin alone is not proof that a worker reported.
 For V2, the plugin reads `event.data.sessionID` from `session.execution.succeeded` (not V1 `session.idle`/`event.properties`) and prompts the root session with `ctx.session.prompt({ sessionID, text: reason })` only when the worker hook returns `decision: block`.
 Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
 The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.

@@ -1,0 +1,6 @@
+{
+  "name": "foreman-worker-stop-opencode",
+  "private": true,
+  "type": "module",
+  "main": "./index.js"
+}

@@ -33,11 +33,11 @@
 #   stop at an approval screen.
 #
 # OpenCode V2 (global plugin for Herdr workers): OpenCode does not load this shell file as a
-# native Stop hook. Install the companion adapter in this checkout by merging its absolute path
-# into the `plugins` array of ~/.config/opencode/opencode.jsonc (or opencode.json):
+# native Stop hook. Install the companion plugin directory in this checkout by merging its
+# absolute path into the `plugins` array of ~/.config/opencode/opencode.jsonc (or opencode.json):
 #   {
 #     "$schema": "https://opencode.ai/config.json",
-#     "plugins": ["/absolute/path/to/foreman/hooks/foreman-worker-stop.opencode.js"]
+#     "plugins": ["/absolute/path/to/foreman/hooks/foreman-worker-stop-opencode"]
 #   }
 # Preserve existing config and plugin entries; use the absolute path to this checkout on each
 # machine. Keep only one installation of plugin ID `foreman.worker-stop`: remove/disable an older
