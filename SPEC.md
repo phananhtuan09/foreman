@@ -580,6 +580,7 @@ Each phase must preserve the core invariants and add focused recovery and failur
 
 1. Configure a default router and named worker profiles with a coding tool, command, model, and natural-language usage policy.
 2. Route every newly created task before it becomes scheduler-eligible, and persist the selected profile and evidence.
+   The routed profile is a recommendation: the user confirms it or chooses another active profile before the task can dispatch.
 3. Validate profiles against runtime adapter capabilities and use only the explicitly configured default when routing fails.
 
 ### Deferred expansion
@@ -739,6 +740,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Model names and OpenCode variants are passed to the selected coding tool and are not independently enumerated by Herdr; the coding tool reports unsupported models or variants.
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; OpenCode V2 maps `effort` to its `provider/model#variant` reference. The adapter-level `reasoningEffort` capability remains unsupported.
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
+- The router's selection is a recommendation shown as option 1 before every other active profile; `foreman task confirm --task ID --profile NAME` records the human's choice, and dispatch and scheduling refuse a routed, unassigned task until it is confirmed. Recovery keeps the confirmed profile of the assignment it replaces.
 - A worker profile with `isActive: false` is excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - Pull-request delivery, additional runtime backends, remote homes, relay channels, automatic model optimization, and autonomous merge authority remain deferred according to sections 4, 14, and 17.

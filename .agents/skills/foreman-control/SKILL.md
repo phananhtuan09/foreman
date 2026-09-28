@@ -17,6 +17,9 @@ When creating a task, pass the user's request verbatim as `--brief`, including a
 Use `--notes` only for supporting context, such as related task report paths or facts needed to understand the request.
 Do not use notes to reinterpret the user's request or add requirements, limits, or rules.
 Do not add rules or Git limits in either field, and do not restate resources or how to report; the worker prompt template adds those.
+The router only recommends a worker profile; never dispatch a routed task before the user chooses one.
+After `task create`, show the user the numbered `routing.profileOptions`: option 1 is the recommended profile with the router's reason, and the others are the remaining active profiles with their tool, model, and effort.
+When the user answers with an option number or profile name, record it with `bin/foreman task confirm --task ID --profile NAME`, then dispatch.
 Dispatch without `--owner` so the worker is named after its project and task in the Herdr sidebar.
 Send a follow-up with `bin/foreman task message` using the user's words, adding context only when it helps the worker understand the request.
 

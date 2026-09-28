@@ -231,7 +231,8 @@ function runtimeWorkerFor(meta, workers) {
 }
 
 function classifyRuntime(meta, worker) {
-  if (!meta.endpoint) return meta.status === "pending" ? "pending" : "unknown";
+  // A task that was never assigned has no worker to observe; its lifecycle status is its state.
+  if (!meta.endpoint) return ["routing", "queued", "pending"].includes(meta.status) ? meta.status : "unknown";
   if (!worker) return "missing";
   if (worker.owner && worker.owner !== meta.owner && worker.name !== meta.owner) return "mismatch";
   const status = String(worker.status || worker.agent_status || "unknown").toLowerCase();

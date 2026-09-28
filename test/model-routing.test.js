@@ -12,7 +12,11 @@ const {
   validateRoutingConfig,
   registerProject,
   createTask,
+  confirmTaskProfile,
   assignTask,
+  dispatchReadyTasks,
+  renderUserReport,
+  fleetStatus,
   listTasks,
   ValidationError,
 } = require("../src/foreman");
@@ -160,6 +164,7 @@ test("each configured profile reaches worker spawn unchanged", () => {
     for (const [name, profile] of Object.entries(config.profiles)) {
       const task = createTask({ roots: f.roots, projectId: "fixture", brief: `Test ${name}`, routingRunner: () => ({ profile: name, reason: "Test selection." }) });
       assert.equal(task.routing.profile, name);
+      confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: name });
       const assigned = assignTask({ roots: f.roots, taskId: task.id, owner: `worker-${name}`, adapter, resources: [{ key: `file/${name}`, mode: "write" }] });
       const expected = { name, ...profile };
       assert.deepEqual(requests.at(-1).dispatchProfile, expected);
@@ -212,6 +217,45 @@ test("task creation always routes and persists the selected worker profile", () 
     assert.equal(record.reason, "Broad architectural work.");
     assert.match(record.configDigest, /^[a-f0-9]{64}$/);
     assert.match(record.briefDigest, /^[a-f0-9]{64}$/);
+  } finally { f.cleanup(); }
+});
+
+test("a routed task dispatches only after the human confirms a recommended or other active profile", () => {
+  const f = fixture();
+  try {
+    const configured = routingConfig();
+    configured.profiles["omp-fast"].isActive = false;
+    fs.mkdirSync(path.join(f.roots.foremanRoot, "config"));
+    fs.writeFileSync(path.join(f.roots.foremanRoot, "config", "model-routing.json"), `${JSON.stringify(configured, null, 2)}\n`);
+    const spawned = [];
+    const adapter = {
+      verifyCompatibility: () => ({ compatible: true }),
+      capabilities: () => ({ agentKind: true, tool: true, command: true, model: true, reasoningEffort: false }),
+      spawn(request) { spawned.push(request); return { endpoint: request.owner }; },
+      inspect(endpoint) { const request = spawned.find((item) => item.owner === endpoint); return { endpoint, owner: endpoint, cwd: request.cwd, status: "working" }; },
+      send() { return { delivered: true }; },
+    };
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Routine fix.", routingRunner: () => ({ profile: "claude-deep", reason: "Test selection." }) });
+    assert.deepEqual(task.routing.profileOptions.map(({ option, profile, recommended }) => ({ option, profile, recommended })), [
+      { option: 1, profile: "claude-deep", recommended: true },
+      { option: 2, profile: "codex-default", recommended: false },
+    ]);
+    assert.throws(() => assignTask({ roots: f.roots, taskId: task.id, adapter }), /not confirmed/);
+    assert.deepEqual(dispatchReadyTasks({ roots: f.roots, adapter }), []);
+    assert.equal(spawned.length, 0);
+    assert.match(renderUserReport({ tasks: listTasks({ roots: f.roots }) }, f.roots), /Cần bạn chọn model[\s\S]*đề xuất `claude-deep`/);
+    assert.throws(() => confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "omp-fast" }), /inactive/);
+    assert.throws(() => confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "invented" }), /Unknown worker profile/);
+    const confirmed = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "codex-default" });
+    assert.equal(confirmed.recommended, "claude-deep");
+    const waiting = fleetStatus({ roots: f.roots, adapter: { list: () => [] } });
+    assert.equal(waiting.tasks[0].state, "queued");
+    assert.doesNotMatch(renderUserReport(waiting, f.roots), /Bất thường|chọn model/);
+    const assigned = assignTask({ roots: f.roots, taskId: task.id, adapter });
+    assert.equal(spawned[0].dispatchProfile.name, "codex-default");
+    assert.equal(assigned.dispatchProfile.model, "default-codex");
+    assert.equal(assigned.routingProfile, "claude-deep");
+    assert.throws(() => confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "claude-deep" }), /unassigned queued task/);
   } finally { f.cleanup(); }
 });
 

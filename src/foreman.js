@@ -613,7 +613,38 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
     if (current.status !== "routing") throw new ValidationError(`Task routing state changed while evaluating: ${taskId}`);
     const dispatchProfile = selected ? { name: selectedName, ...selected } : null;
     atomicJson(metaFile(roots.foremanHome, taskId), { ...current, status: "queued", routingProfile: selectedName, routingSource: source, routingReason: reason, ...(error ? { routingError: error } : {}), dispatchProfile, routedAt });
-    return record;
+    return { ...record, profileOptions: config ? profileOptions(config, selectedName) : [] };
+  });
+}
+
+// The routed profile is only a recommendation: it is option 1, followed by every other active profile in config order.
+function profileOptions(config, recommended) {
+  const names = Object.keys(config.profiles);
+  const ordered = names.includes(recommended) ? [recommended, ...names.filter((name) => name !== recommended)] : names;
+  return ordered.map((name, index) => {
+    const profile = config.profiles[name];
+    return { option: index + 1, profile: name, tool: profile.tool, model: profile.model, effort: profile.effort ?? null, recommended: name === recommended };
+  });
+}
+
+const ROUTING_EVIDENCE_FIELDS = ["routingProfile", "routingSource", "routingReason", "routingError", "routedAt", "profileConfirmedAt"];
+
+function needsProfileConfirmation(meta) {
+  return Boolean(meta.routingProfile) && !meta.profileConfirmedAt && !meta.endpoint;
+}
+
+// Records the human's choice of worker profile; a routed task cannot dispatch before it.
+function confirmTaskProfile({ roots, taskId, profile }) {
+  if (typeof profile !== "string" || !profile) throw new ValidationError("A worker profile name is required");
+  const config = loadRoutingConfig(roots.foremanRoot, { required: true });
+  if (config.inactiveProfiles.includes(profile)) throw new ValidationError(`Worker profile is inactive: ${profile}`);
+  if (!config.profiles[profile]) throw new ValidationError(`Unknown worker profile: ${profile}`);
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (!["queued", "pending"].includes(meta.status) || meta.endpoint) throw new ValidationError(`Only an unassigned queued task can have its worker profile confirmed: ${taskId}`);
+    const confirmed = { ...meta, dispatchProfile: { name: profile, ...config.profiles[profile] }, profileConfirmedAt: now() };
+    atomicJson(metaFile(roots.foremanHome, taskId), confirmed);
+    return { taskId, profile, recommended: meta.routingProfile || null, dispatchProfile: confirmed.dispatchProfile, profileConfirmedAt: confirmed.profileConfirmedAt };
   });
 }
 
@@ -723,6 +754,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
     const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId) });
+    if (!handoff && needsProfileConfirmation(prior)) throw new ValidationError(`Task worker profile is not confirmed; run task confirm first: ${taskId}`);
     const actualProjectId = projectId || prior?.projectId;
     if (!actualProjectId) throw new ValidationError("Task has no project binding");
     // The default owner names the worker after its project and task, so the Herdr sidebar identifies each task.
@@ -771,6 +803,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       endpoint: null,
       status: "pending",
       dispatchProfile: dispatchProfile || prior.dispatchProfile || null,
+      ...Object.fromEntries(ROUTING_EVIDENCE_FIELDS.filter((key) => prior[key] !== undefined).map((key) => [key, prior[key]])),
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
@@ -1338,7 +1371,7 @@ function taskBriefLine(roots, taskId) {
 
 function renderUserReport(status, roots) {
   const tasks = status?.tasks || [];
-  const groups = { approve: [], decide: [], anomaly: [] };
+  const groups = { approve: [], decide: [], profile: [], anomaly: [] };
   const seen = new Set();
   for (const item of tasks) {
     const meta = item.meta || item;
@@ -1354,6 +1387,9 @@ function renderUserReport(status, roots) {
     } else if (meta.status === "blocked") {
       seen.add(meta.taskId);
       groups.decide.push(`- \`${meta.taskId}\` ${title} — Theo ${owner}: worker báo bị chặn.`);
+    } else if (needsProfileConfirmation(meta) && ["queued", "pending"].includes(meta.status)) {
+      seen.add(meta.taskId);
+      groups.profile.push(`- \`${meta.taskId}\` ${title} — đề xuất \`${meta.routingProfile}\`: chờ bạn chọn model.`);
     } else if (["dead", "missing", "unknown", "mismatch"].includes(item.state) || (item.issues || []).length) {
       seen.add(meta.taskId);
       const reason = item.issues?.[0]?.type || item.state || "bất thường";
@@ -1366,6 +1402,7 @@ function renderUserReport(status, roots) {
   const emit = (heading, items) => { if (!items.length) return; lines.push(`### ${heading}`, "", ...items, ""); };
   emit("Cần bạn duyệt", groups.approve);
   emit("Cần bạn quyết", groups.decide);
+  emit("Cần bạn chọn model", groups.profile);
   emit("Bất thường", groups.anomaly);
   if (!lines.length) lines.push("Không có gì cần bạn.", "");
   lines.push(`Đang chạy: ${running} · Chờ giao: ${queued}`);
@@ -1430,7 +1467,7 @@ function validateDispatchProfile(profile, capabilities = {}) {
 module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
-  registerProject, createTask, routeTask, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
+  registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,

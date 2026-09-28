@@ -42,6 +42,7 @@ bin/foreman init
 bin/foreman routing show
 bin/foreman project register --id app --root /path/to/app
 bin/foreman task create --project app --brief-file brief.md [--notes-file notes.md]
+bin/foreman task confirm --task T-000001 --profile claude-sonnet
 bin/foreman task dispatch --task T-000001
 bin/foreman task message --task T-000001 --text "Please add tests."
 bin/foreman task adopt --worker worker --task T-000001
@@ -50,6 +51,11 @@ bin/foreman task accept --task T-000001
 bin/foreman task discard --task T-000001
 bin/foreman status
 ```
+
+`task create` routes the task and prints `routing.profileOptions`: option 1 is the router's recommended profile, followed by every other active profile in config order.
+The recommendation is not a dispatch decision.
+`task confirm` records the human's chosen active profile, recommended or not, and `task dispatch` and `task schedule` refuse or skip a routed task until it is confirmed.
+Confirmation is allowed only while the task is unassigned; `status` lists unconfirmed tasks under `Cần bạn chọn model`.
 
 `task dispatch` names the worker `<project>-<task>` in lowercase, such as `app-t-000001`, and uses that name as the Herdr workspace label; pass `--owner` only to override it.
 `--brief` holds the user's request verbatim; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.

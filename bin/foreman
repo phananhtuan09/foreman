@@ -57,6 +57,7 @@ const usage = [
   "  project register --id ID --root PATH [--name NAME]",
   "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
+  "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
@@ -134,6 +135,7 @@ function main() {
     output(flag("--json") ? tasks.map((item) => item.meta) : core.renderUserReport({ tasks }, home));
     return;
   }
+  if (command === "task" && action === "confirm") { output(core.confirmTaskProfile({ roots: home, taskId: arg("--task"), profile: arg("--profile") })); return; }
   if (command === "task" && action === "dispatch") {
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint") });
     output(result);

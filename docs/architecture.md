@@ -15,6 +15,7 @@ The tracked `FOREMAN_ROOT/config/model-routing.json` defines one fixed router, o
 Each configured profile belongs to exactly one group; inactive profiles are removed from routing candidates, and groups with no active profiles are omitted from the prompt.
 The router may select only a configured profile; failure selects the configured default and records the error.
 Task metadata records the selected profile, source, reason, any router error, and timestamp before the task becomes `queued`.
+The routed profile is a recommendation; `task confirm` records the human's chosen active profile as the dispatch profile with `profileConfirmedAt`, and assignment refuses a routed task without it.
 Worker profiles support `codex`, `claude`, `omp`, and `opencode`; Herdr starts the selected tool with the configured command arguments and model.
 OpenCode uses its V2 interactive `mini --standalone` interface and global V2 stop plugin in a pane-local server; Herdr remains the only runtime backend.
 
