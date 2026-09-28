@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+FOREMAN_BACKEND=paseo
+export FOREMAN_BACKEND
+exec "$(dirname "$0")/foreman" "$@"

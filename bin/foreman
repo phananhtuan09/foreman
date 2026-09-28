@@ -20,7 +20,16 @@ function args(name) {
   return values;
 }
 function roots() { return core.resolveRoots({ foremanRoot: process.env.FOREMAN_ROOT || process.cwd(), foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd() }); }
-function runtimeAdapter() { return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) }); }
+function selectedBackend() {
+  const backend = String(process.env.FOREMAN_BACKEND || "herdr").trim().toLowerCase();
+  if (!["herdr", "paseo"].includes(backend)) throw new Error(`Unsupported FOREMAN_BACKEND: ${backend || "(empty)"}; expected herdr or paseo`);
+  return backend;
+}
+function runtimeAdapter() {
+  const backend = selectedBackend();
+  if (backend === "paseo") throw new Error("FOREMAN_BACKEND=paseo is selected, but the Paseo runtime adapter is not implemented yet; no worker was contacted");
+  return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) });
+}
 function readStdin() {
   if (process.stdin.isTTY) return "";
   try { return fs.readFileSync(0, "utf8"); } catch (_) { return ""; }
@@ -83,6 +92,7 @@ function main() {
   const command = process.argv[2];
   const action = process.argv[3];
   if (!command || command === "--help" || command === "-h" || command === "help") { output(usage); return; }
+  selectedBackend();
   if (command === "init") {
     // The Foreman checkout that runs init becomes the root recorded in the shell startup file.
     const root = process.cwd();
@@ -91,7 +101,7 @@ function main() {
     const initialized = core.initHome(home);
     const routing = core.initRoutingConfig({ roots: home });
     const shell = installShellEnv({ vars: { FOREMAN_ROOT: home.foremanRoot, FOREMAN_HOME: home.foremanHome } });
-    output({ ...initialized, routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed } });
+    output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed } });
     return;
   }
   if (command === "worker" && action === "hook") {
@@ -125,12 +135,17 @@ function main() {
   const home = roots();
   if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home })); return; }
   if (command === "routing" && action === "show") { output(core.loadRoutingConfig(home.foremanRoot, { required: true })); return; }
-  if (command === "routing" && action === "route") { output(core.routeTask({ roots: home, taskId: arg("--task") })); return; }
+  if (command === "routing" && action === "route") {
+    if (selectedBackend() !== "herdr") throw new Error("Paseo task routing is not available until the Paseo adapter and profile mapping are implemented");
+    output(core.routeTask({ roots: home, taskId: arg("--task") }));
+    return;
+  }
   if (command === "project" && action === "register") {
     output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));
     return;
   }
   if (command === "task" && action === "create") {
+    if (selectedBackend() !== "herdr") throw new Error("Paseo task routing is not available until the Paseo adapter and profile mapping are implemented; no task was created");
     core.initRoutingConfig({ roots: home });
     output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency") }));
     return;
