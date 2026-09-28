@@ -2,12 +2,14 @@
 
 ## Setup
 
-Run `bin/foreman init` from the Foreman checkout.
+For Herdr mode, run `bin/foreman-herdr init` from the Foreman checkout.
+For Paseo mode, run `bin/foreman-paseo init`; this initializes the shared home, but Paseo worker operations are not available until its adapter and profile mapping are implemented.
 It records the checkout as `FOREMAN_ROOT` and `FOREMAN_HOME` (or `--home PATH`) in the startup file of your login shell, creates `data/`, and validates the routing config.
 The startup file is `$ZDOTDIR/.zshrc` or `~/.zshrc` for zsh, `~/.bashrc` for bash (`~/.bash_profile` on macOS), `~/.config/fish/conf.d/foreman.fish` for fish, and `~/.profile` for `sh`, `dash`, `ksh`, or `mksh`.
 Only the block between `# >>> foreman >>>` and `# <<< foreman <<<` is written; running `init` again from another checkout replaces that block.
 For an unrecognized shell, `init` fails and prints the `export` lines to add yourself.
 Shells and worker panes opened after `init` see the variables; restart older coding agents if they should report to Foreman.
+The backend wrappers set `FOREMAN_BACKEND` only for their own CLI process and do not write it to the shell startup file.
 
 ## Hooks
 
@@ -37,19 +39,21 @@ The hook runs `hooks/foreman-session-context.sh`, which adds unread worker repor
 
 ## Commands
 
+Use the selected backend wrapper for each Foreman command:
+
 ```sh
-bin/foreman init
-bin/foreman routing show
-bin/foreman project register --id app --root /path/to/app
-bin/foreman task create --project app --brief-file brief.md [--notes-file notes.md]
-bin/foreman task confirm --task T-000001 --profile claude-sonnet
-bin/foreman task dispatch --task T-000001
-bin/foreman task message --task T-000001 --text "Please add tests."
-bin/foreman task adopt --worker worker --task T-000001
-bin/foreman task recover --task T-000001
-bin/foreman task accept --task T-000001
-bin/foreman task discard --task T-000001
-bin/foreman status
+bin/foreman-herdr init
+bin/foreman-herdr routing show
+bin/foreman-herdr project register --id app --root /path/to/app
+bin/foreman-herdr task create --project app --brief-file brief.md [--notes-file notes.md]
+bin/foreman-herdr task confirm --task T-000001 --profile claude-sonnet
+bin/foreman-herdr task dispatch --task T-000001
+bin/foreman-herdr task message --task T-000001 --text "Please add tests."
+bin/foreman-herdr task adopt --worker worker --task T-000001
+bin/foreman-herdr task recover --task T-000001
+bin/foreman-herdr task accept --task T-000001
+bin/foreman-herdr task discard --task T-000001
+bin/foreman-herdr status
 ```
 
 `task create` routes the task and prints `routing.profileOptions`: option 1 is the router's recommended profile, followed by every other active profile in config order.

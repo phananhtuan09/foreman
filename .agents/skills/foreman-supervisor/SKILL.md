@@ -5,8 +5,11 @@ description: Use within a foreman-control workflow before answering the user, an
 
 # Foreman supervisor procedure
 
+Use the active backend wrapper (`bin/foreman-herdr` or `bin/foreman-paseo`) for every Foreman CLI command below.
+Paseo runtime commands currently fail closed; follow the `foreman-paseo` skill's limitation instead of retrying through Herdr.
+
 1. Read the `[Foreman supervision context ...]` block that the session prompt hook adds to the user's message.
-   When the block is absent because the hook is not installed or failed, run `bin/foreman status --json` instead; that check lists Herdr once and never interrupts a worker.
+   When the block is absent because the hook is not installed or failed, run the active backend wrapper's `status --json` command instead; that check lists the selected runtime once and never interrupts a worker.
    No block with a working hook means nothing new.
 2. Read every new worker report from the file path the context gives.
    A `done` report makes the task review-ready: summarize the outcome, evidence, and gaps for the user without accepting it.

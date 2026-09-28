@@ -1,6 +1,6 @@
 # Foreman specification
 
-Status: Draft 0.4 — P0/P1/P2 core paths implemented and regression-covered; P3 capability-gated
+Status: Draft 0.5 — backend mode launchers added; Herdr runtime remains implemented; Paseo runtime is pending
 Scope: New standalone Foreman repository
 Language: User-facing communication is Vietnamese; identifiers, paths, commands, and runtime state values remain verbatim.
 
@@ -51,7 +51,7 @@ Workers own deep project context. They inspect, implement, reproduce, verify, an
 
 The first production release does not include:
 
-- tmux, Zellij, cmux, Orca, or other runtime backends;
+- tmux, Zellij, cmux, Orca, or runtime backends beyond the accepted Herdr and Paseo integrations;
 - remote workers or remote Foreman homes;
 - nested supervisors or secondmates;
 - Discord, X, email, voice, or other relay channels;
@@ -158,6 +158,8 @@ Definitions:
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
 - `foreman init` run in the Foreman checkout records that checkout as `FOREMAN_ROOT` and `FOREMAN_HOME` (or `--home`) in the startup file of the machine's login shell: `$ZDOTDIR/.zshrc` or `~/.zshrc` for zsh, `~/.bashrc` for bash (`~/.bash_profile` on macOS), `~/.config/fish/conf.d/foreman.fish` for fish, and `~/.profile` for `sh`, `dash`, `ksh`, or `mksh`.
+- `bin/foreman-herdr` and `bin/foreman-paseo` set `FOREMAN_BACKEND` for one Foreman CLI process; `foreman init` never writes the backend choice to a shell startup file.
+- `FOREMAN_BACKEND` accepts `herdr` or `paseo`, defaults to `herdr` for existing callers, and rejects any other value.
 - It rewrites only its own marked block, leaves the rest of the file unchanged, and refuses an unrecognized shell by printing the lines to add manually.
 - Worker panes opened after `init` inherit both variables, which the worker stop hook and `foreman report` rely on.
 
@@ -366,12 +368,23 @@ Every lifecycle action must return evidence that Foreman verifies through a subs
 Lifecycle commands are separate from normal worker messages and cannot be represented as chat instructions.
 Relaunch is a Foreman recovery workflow composed from inspected stop or missing evidence, a new assignment generation, spawn, identity verification, and durable message delivery; it is not a runtime adapter primitive.
 
-The first adapter is Herdr. Herdr identifiers are stored as opaque backend metadata and do not replace task, project, owner, or generation identity.
+The first adapter is Herdr. The accepted second adapter is Paseo and follows the same backend-neutral task identity model.
+Herdr identifiers and Paseo agent IDs are stored as opaque backend metadata and do not replace task, project, owner, or generation identity.
 
 Foreman must version-gate against the installed Herdr protocol it relies on and fail closed when required semantics cannot be verified. It must not guess CLI syntax.
 
 An adapter may expose optional dispatch capabilities such as agent harness, model, and reasoning effort.
 Foreman validates a selected dispatch profile against those capabilities before assignment and falls back only to an explicitly configured compatible profile.
+
+### 8.1 Backend entrypoints and implementation state
+
+`foreman-herdr` and `foreman-paseo` are the backend-specific skill entrypoints.
+Both use the same Foreman home and shared operational workflow.
+Their CLI wrappers set `FOREMAN_BACKEND` only for the child process, so selecting a backend does not mutate the login shell or affect another Foreman session.
+The Herdr entrypoint supports the implemented runtime.
+The Paseo entrypoint supports common setup and non-runtime project or task reads.
+Task creation and routing, worker lifecycle, runtime status, reports, and Paseo profile mapping fail closed until its adapter is implemented.
+Foreman never retries a Paseo operation through Herdr.
 
 ## 9. Worker, workspace, and resource model
 
@@ -642,7 +655,7 @@ P3 is complete only when every new task produces a durable routing record, the r
 ## 17. Deliberate initial decisions
 
 - Repository model: standalone agent distribution.
-- Runtime backend: Herdr only.
+- Runtime backend: Herdr is implemented; Paseo has an entrypoint but its adapter and profile mapping remain pending.
 - Deployment: local machine only.
 - State store: files with atomic writes and explicit locks; no database.
 - Delivery mode: `local-only` first.
@@ -664,7 +677,7 @@ A new feature belongs in Foreman core only if it passes every check:
 6. Any new state has one writer, a stable identity, and a cleanup lifecycle.
 7. It respects exact project, task, owner, generation, workspace, resource lease, and endpoint binding.
 8. It can be proven through focused state, runtime, or recovery scenarios.
-9. It does not add another backend or distribution mechanism without demonstrated need.
+9. It does not add another backend beyond the accepted Herdr and Paseo integrations without demonstrated need.
 10. It does not copy a FirstMate feature merely because FirstMate has it.
  
 ## 19. First implementation milestone (historical baseline)

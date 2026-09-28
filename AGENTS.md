@@ -13,6 +13,8 @@ Project code changes belong to assigned workers in their leased workspaces.
   Limit that request to the named instructions or skills; changing Foreman's implementation still requires `DEV`.
 - Other user messages are requests to operate Foreman for the registered projects.
   Follow the applicable operational workflow and use the production entry point; do not load development files merely to handle an operational request.
+- When the user invokes `foreman-herdr` or `foreman-paseo`, use that backend entrypoint for every Foreman CLI command in the session.
+  Do not change backend based on a worker profile or task wording.
 
 ## Foreman development (`DEV` only)
 
@@ -22,9 +24,10 @@ Project code changes belong to assigned workers in their leased workspaces.
   Keep full skill instructions in `.agents/skills/`; update the Claude skill reference when its name or description changes.
 - `SPEC.md` defines the product and architecture contract.
 - `docs/architecture.md` is a reference for Foreman's implementation and state model; consult it when the development task needs that detail.
-- `bin/foreman` is the shell entry point and must call core modules instead of duplicating lifecycle logic.
+- `bin/foreman` is the core CLI entry point and must call core modules instead of duplicating lifecycle logic.
+  `bin/foreman-herdr` and `bin/foreman-paseo` are mode launchers that set `FOREMAN_BACKEND` for one CLI process.
 - `adapters/herdr/` and `src/herdr.js` contain Herdr-specific transport code.
-- Keep deferred features out of core until they have their own accepted specification: remote homes, relay channels, extra backends, PR delivery, and merge authority.
+- Keep deferred features out of core until they have their own accepted specification: remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority.
 
 ## Supervisor invariants
 
@@ -33,6 +36,7 @@ Project code changes belong to assigned workers in their leased workspaces.
 - Every active JSON record is versioned and identity-bound.
   Acquire the home lock before canonical mutations.
 - A worker changes Foreman state only through `foreman report` from its bound Herdr pane, and writes only its leased project resources.
+- The Paseo launcher currently supports initialization only; runtime operations fail closed until its adapter and profile mapping are implemented.
 - Preserve original briefs, decisions, worker reports, and evidence.
 - Herdr accepting a prompt proves delivery only, not that the worker read it.
   A new worker report or the runtime status is the evidence that work continues.

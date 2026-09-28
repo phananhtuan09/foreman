@@ -5,8 +5,10 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
+`bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and rejects unavailable Paseo runtime operations.
 All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
 `src/herdr.js` is the narrow Herdr adapter.
+Paseo currently has a skill and CLI launcher only; its runtime adapter and profile mapping remain pending.
 `hooks/` holds the worker stop hook and the Foreman session prompt hook.
 `adapters/herdr/` is the distribution wrapper.
 
