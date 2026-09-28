@@ -384,6 +384,7 @@ An explicitly selected Git worktree is checked against the registered project an
 A project without Git uses its canonical root path and has no branch.
 
 Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
+A conflict is a warning, not a refusal, when the human requests the assignment: an explicit dispatch, adoption, or recovery proceeds and records the overlapping leases in its own lease as evidence.
 
 Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner and generation and are held until acceptance, reassignment, or a failed dispatch releases them; they do not expire, because no heartbeat renews them and a worker may run for a long time without reporting.
 
@@ -411,7 +412,7 @@ Workers never edit the project registry or task metadata.
 
 ### 9.4 Scheduling and concurrency
 
-The scheduler dispatches only tasks whose dependencies are satisfied and whose required workspace, runtime lane, and resource leases are available.
+The scheduler dispatches only tasks whose dependencies are satisfied and whose required workspace, runtime lane, and resource leases are available; it leaves a conflicting task pending because no human chose to overlap it.
 Fleet and per-project concurrency limits are explicit configuration, not hard-coded single-worker behavior.
 The scheduler respects machine capacity, project limits, dependency state, workspace availability, and resource conflicts.
 
@@ -631,7 +632,7 @@ Multi-project support is complete only when:
 7. Acceptance in one project cannot address task records, leases, or endpoints belonging to another project.
 8. A task with an unsatisfied or cyclic dependency cannot dispatch, and satisfying a valid dependency unlocks it exactly once.
 9. Fleet and per-project concurrency limits prevent excess dispatch without serializing non-conflicting work unnecessarily.
-10. Disjoint resource leases may run concurrently, while overlapping write or exclusive leases block dispatch.
+10. Disjoint resource leases may run concurrently; overlapping write or exclusive leases block scheduled dispatch and produce a recorded warning on a human-requested assignment.
 11. A reused idle endpoint cannot receive a new task until its prior assignment and resources are safely reconciled and released.
 
 ### 16.2 P3 dispatch profiles

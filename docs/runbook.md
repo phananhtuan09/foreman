@@ -58,6 +58,9 @@ The recommendation is not a dispatch decision.
 Confirmation is allowed only while the task is unassigned; `status` lists unconfirmed tasks under `Cần bạn chọn model`.
 
 `task dispatch` names the worker `<project>-<task>` in lowercase, such as `app-t-000001`, and uses that name as the Herdr workspace label; pass `--owner` only to override it.
+Without `--resources`, a ship task claims the project workspace exclusively.
+When the claim overlaps a lease another task holds, `task dispatch`, `task adopt`, and `task recover` still assign the task, print a `foreman: warning:` line per overlap, and record the overlaps under `resourceLease.conflicts`.
+`task schedule` does not make that choice for the human: it leaves an overlapping task `pending`.
 `--brief` holds the user's request verbatim; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
 Foreman adds the resources and report command to every worker prompt, so a brief does not repeat them; the prompt has no rules section.
 

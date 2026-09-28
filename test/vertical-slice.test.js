@@ -8,7 +8,7 @@ const {
   HomeLock, HomeLockError, ValidationError, CleanupRefusedError, ResourceBusyError,
   atomicWrite, resolveRoots, initHome, registerProject, createTask, assignTask,
   recordReport, reconstructTask, acceptTask,
-  listResourceLeases,
+  listResourceLeases, listTasks, dispatchReadyTasks,
   validateWorkspace,
 } = require("../src/foreman");
 const { HerdrAdapter } = require("../src/herdr");
@@ -67,6 +67,23 @@ test("resource leases allow disjoint work and block overlapping work", () => {
     assert.throws(() => assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "file/src/auth/login", mode: "read" }] }), ResourceBusyError);
     const second = assignTask({ roots: f.roots, taskId: two.id, owner: "worker-2", adapter: f.adapter, resources: [{ key: "db/users/record/2", mode: "write" }] }).resourceLease;
     assert.deepEqual(listResourceLeases({ roots: f.roots }).map((lease) => lease.leaseId).sort(), [first.leaseId, second.leaseId].sort());
+  } finally { f.cleanup(); }
+});
+
+test("a human dispatch proceeds past held leases and records the overlaps", () => {
+  const f = fixture();
+  try {
+    const one = createTask({ roots: f.roots, projectId: "fixture", brief: "first" });
+    const two = createTask({ roots: f.roots, projectId: "fixture", brief: "second" });
+    const three = createTask({ roots: f.roots, projectId: "fixture", brief: "third" });
+    const first = assignTask({ roots: f.roots, taskId: one.id, adapter: f.adapter });
+    const second = assignTask({ roots: f.roots, taskId: two.id, adapter: f.adapter, allowResourceConflicts: true });
+    assert.equal(second.status, "working");
+    assert.deepEqual(second.resourceLease.conflicts.map((conflict) => [conflict.taskId, conflict.held.key]), [[one.id, "workspace/fixture"]]);
+    assert.equal(first.resourceLease.conflicts, undefined);
+    // The scheduler has no human decision per task, so it still waits for the lease.
+    assert.deepEqual(dispatchReadyTasks({ roots: f.roots, adapter: f.adapter }), []);
+    assert.equal(listTasks({ roots: f.roots }).find((meta) => meta.taskId === three.id).status, "pending");
   } finally { f.cleanup(); }
 });
 

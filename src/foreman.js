@@ -320,10 +320,11 @@ function resourceConflicts(claims, leases, ignoreLeaseId) {
 }
 
 // Returns a new lease for the caller to persist in the task metadata.
-function claimResourcesUnlocked({ roots, taskId, generation, owner, resources, ignoreLeaseId }) {
+// A human-requested assignment may overlap held leases; the lease then records the overlaps as a warning.
+function claimResourcesUnlocked({ roots, taskId, generation, owner, resources, ignoreLeaseId, allowConflicts = false }) {
   const claims = normalizeResourceClaims(resources);
   const conflicts = resourceConflicts(claims, activeResourceLeases(roots.foremanHome), ignoreLeaseId);
-  if (conflicts.length) {
+  if (conflicts.length && !allowConflicts) {
     const error = new ResourceBusyError("Requested resources are already leased");
     error.conflicts = conflicts;
     throw error;
@@ -335,6 +336,7 @@ function claimResourcesUnlocked({ roots, taskId, generation, owner, resources, i
     owner,
     resources: claims,
     acquiredAt: now(),
+    ...(conflicts.length ? { conflicts } : {}),
   };
 }
 
@@ -749,7 +751,7 @@ function assertIdleEndpointReusable({ roots, adapter, endpoint, workspace, owner
   return { inspection, holders };
 }
 
-function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint }) {
+function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint, allowResourceConflicts = false }) {
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
@@ -773,7 +775,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
     if (taskType === "scout" && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
     let resourceLease;
     try {
-      resourceLease = claimResourcesUnlocked({ roots, taskId, generation, owner, resources: requestedResources, ignoreLeaseId: prior?.resourceLease?.leaseId });
+      resourceLease = claimResourcesUnlocked({ roots, taskId, generation, owner, resources: requestedResources, ignoreLeaseId: prior?.resourceLease?.leaseId, allowConflicts: allowResourceConflicts });
     } catch (error) {
       if (error instanceof ResourceBusyError) {
         const blocked = {
@@ -1145,7 +1147,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
     const generation = (prior.generation || 0) + 1;
     const taskType = prior.type || "ship";
     const resources = [{ key: `workspace/${bound.project.id}`, mode: taskType === "scout" ? "read" : "exclusive" }];
-    const resourceLease = claimResourcesUnlocked({ roots, taskId: id, generation, owner, resources });
+    const resourceLease = claimResourcesUnlocked({ roots, taskId: id, generation, owner, resources, allowConflicts: true });
     const adoptedAt = now();
     const assigned = {
       ...prior,
@@ -1301,7 +1303,8 @@ function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts 
   });
   let assignment;
   try {
-    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff });
+    // The replaced assignment was human-requested, so leases that overlapped it do not block its recovery.
+    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff, allowResourceConflicts: true });
   } catch (error) {
     withHomeLock(roots.foremanHome, () => {
       const current = readMeta(roots.foremanHome, taskId);

@@ -28,6 +28,11 @@ function readStdin() {
 function hookPayload() {
   try { return JSON.parse(readStdin() || "{}"); } catch (_) { return {}; }
 }
+function warnResourceConflicts(meta) {
+  for (const conflict of meta?.resourceLease?.conflicts || []) {
+    process.stderr.write(`foreman: warning: ${conflict.requested.key} (${conflict.requested.mode}) overlaps ${conflict.held.key} (${conflict.held.mode}) held by ${conflict.taskId} @${conflict.owner}\n`);
+  }
+}
 function output(value) {
   if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -137,7 +142,9 @@ function main() {
   }
   if (command === "task" && action === "confirm") { output(core.confirmTaskProfile({ roots: home, taskId: arg("--task"), profile: arg("--profile") })); return; }
   if (command === "task" && action === "dispatch") {
-    const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint") });
+    // A human dispatch proceeds past held leases; the overlaps are reported as a warning.
+    const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint"), allowResourceConflicts: true });
+    warnResourceConflicts(result);
     output(result);
     return;
   }
@@ -156,11 +163,13 @@ function main() {
   }
   if (command === "task" && action === "adopt") {
     const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
+    warnResourceConflicts(result);
     output(result);
     return;
   }
   if (command === "task" && action === "recover") {
     const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
+    warnResourceConflicts(result);
     output(result);
     return;
   }
