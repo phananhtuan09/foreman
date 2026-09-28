@@ -7,7 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport,
   listMessages, fleetStatus, recoverDeadWorker, createDecision, answerDecision,
-  deliverDecision, createTask: intake, acceptTask, discardQueuedTask,
+  deliverDecision, createTask: intake, acceptTask, discardTask,
   dispatchReadyTasks, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
@@ -120,16 +120,35 @@ test("an untouched queued test task can be explicitly discarded but assigned or 
   const f = fixture();
   try {
     const queued = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "remove test intake" });
-    assert.deepEqual(discardQueuedTask({ roots: f.roots, taskId: queued.id }), { taskId: queued.id, discarded: true, deleted: true });
+    assert.deepEqual(discardTask({ roots: f.roots, taskId: queued.id }), { taskId: queued.id, discarded: true, deleted: true });
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", queued.id)), false);
 
     const dependency = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "dependency" });
     createTask({ roots: f.roots, projectId: "one", type: "scout", dependencies: [dependency.id], brief: "dependent" });
-    assert.throws(() => discardQueuedTask({ roots: f.roots, taskId: dependency.id }), /still a dependency/);
+    assert.throws(() => discardTask({ roots: f.roots, taskId: dependency.id }), /still a dependency/);
 
     const assigned = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "assigned" });
     assignTask({ roots: f.roots, taskId: assigned.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/read", mode: "read" }] });
-    assert.throws(() => discardQueuedTask({ roots: f.roots, taskId: assigned.id }), /Only untouched, unassigned queued tasks/);
+    assert.throws(() => discardTask({ roots: f.roots, taskId: assigned.id, adapter: f.adapter }), /confirmed dead or missing/);
+  } finally { f.cleanup(); }
+});
+
+test("a task whose worker is confirmed dead can be discarded, releasing its lease and records", async () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "one", brief: "abandoned work" });
+    const first = assignTask({ roots: f.roots, taskId: task.id, owner: "dead-discard", adapter: f.adapter, resources: [{ key: "file/abandoned", mode: "exclusive" }] });
+    assert.throws(() => discardTask({ roots: f.roots, taskId: task.id }), /requires runtime evidence/);
+    await f.transport.wait(first.endpoint);
+    assert.equal(fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id).state, "dead");
+    const discarded = discardTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(discarded.deleted, true);
+    assert.equal(discarded.workerState, "dead");
+    assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "tasks", task.id)), false);
+    assert.equal(fs.readdirSync(path.join(f.roots.foremanHome, "data", "messages")).some((name) => name.includes(task.id)), false);
+    const next = createTask({ roots: f.roots, projectId: "one", brief: "reuse the resource" });
+    const second = assignTask({ roots: f.roots, taskId: next.id, owner: "next-worker", adapter: f.adapter, resources: [{ key: "file/abandoned", mode: "exclusive" }] });
+    await f.transport.wait(second.endpoint);
   } finally { f.cleanup(); }
 });
 

@@ -75,7 +75,9 @@ Every report is kept under `data/tasks/<id>/reports/`.
 It stops the worker endpoint, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk, and accepted tasks are not archived.
 
-`task discard` is only for a queued task that was never assigned: it refuses if the task has an owner, endpoint, workspace, lease, report, handoff, or dependent tasks. Use it to remove an unassigned intake that should not be dispatched; it cannot stop or remove a worker pane.
+`task discard` removes a queued task that was never assigned, or an assigned task whose worker `status` confirms `dead` or `missing`; it refuses live or `unknown` workers and tasks that others depend on.
+For a confirmed worker it stops a dead pane, releases the lease, and deletes the task's records, reports, and decisions; the project workspace stays on disk.
+Use it to drop work that should not continue; use `task recover` instead to hand it to a new worker.
 
 ## Routing
 

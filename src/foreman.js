@@ -1015,23 +1015,39 @@ function acceptTask({ roots, taskId, adapter }) {
   });
 }
 
-function discardQueuedTask({ roots, taskId }) {
+function isUntouchedQueuedTask(meta) {
+  return meta.status === "queued"
+    && !meta.owner && !meta.endpoint && !meta.paneId && !meta.workspace && !meta.resourceLease
+    && !((meta.resources?.length || 0) > 0) && !meta.lastReport && !meta.completionReport && !meta.handoff;
+}
+
+// Discard removes an untouched queued task, or an assigned task whose worker is confirmed dead or missing.
+function discardTask({ roots, taskId, adapter }) {
+  if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
+  const observed = readMeta(roots.foremanHome, taskId);
+  let workerState = null;
+  if (!isUntouchedQueuedTask(observed)) {
+    if (!adapter) throw new ValidationError("Discarding an assigned task requires runtime evidence");
+    const item = coordination.reconcileFleet({ roots, adapter }).tasks.find((entry) => entry.taskId === taskId);
+    if (!item || !["dead", "missing"].includes(item.state)) {
+      throw new ValidationError("Only untouched queued tasks or tasks whose worker is confirmed dead or missing can be discarded");
+    }
+    workerState = item.state;
+  }
   return withHomeLock(roots.foremanHome, () => {
-    if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
     const meta = readMeta(roots.foremanHome, taskId);
-    if (meta.status !== "queued"
-      || meta.owner || meta.endpoint || meta.paneId || meta.workspace || meta.resourceLease
-      || (meta.resources?.length || 0) > 0 || meta.lastReport || meta.completionReport || meta.handoff) {
-      throw new ValidationError("Only untouched, unassigned queued tasks can be discarded");
+    if (workerState ? Number(meta.generation) !== Number(observed.generation) || meta.endpoint !== observed.endpoint : !isUntouchedQueuedTask(meta)) {
+      throw new ValidationError("Task assignment changed during discard; check status and retry");
     }
     for (const id of taskIds(roots.foremanHome)) {
       if (id === taskId) continue;
       const dependent = readMeta(roots.foremanHome, id);
       if ((dependent.dependencies || []).includes(taskId)) throw new ValidationError(`Task is still a dependency of ${id}`);
     }
+    const workerStopped = workerState === "dead" ? stopEndpointForAcceptance({ roots, meta, adapter }) : false;
     coordination.purgeTaskRecordsUnlocked({ roots, taskId });
     fs.rmSync(taskDir(roots.foremanHome, taskId), { recursive: true, force: true });
-    return { taskId, discarded: true, deleted: true };
+    return { taskId, discarded: true, deleted: true, ...(workerState ? { workerState, workerStopped } : {}) };
   });
 }
 
@@ -1415,7 +1431,7 @@ module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, createTask, routeTask, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
-  assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardQueuedTask,
+  assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, buildHandoff,

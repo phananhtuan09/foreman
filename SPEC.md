@@ -209,7 +209,7 @@ No separate priority field is introduced initially.
 
 ### 7.3 Task records
 
-Task records live under `data/tasks/<id>/` until user acceptance or explicit discard of an untouched queued task:
+Task records live under `data/tasks/<id>/` until user acceptance or explicit discard:
 
 ```text
 data/tasks/T-000123/
@@ -234,7 +234,9 @@ data/
 
 Acceptance removes the task directory and its task messages.
 The project workspace stays on disk.
-`foreman task discard --task ID` removes only a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, and refuses while another task depends on it. Discard also removes its task-scoped messages and runs under the home lock; it never stops a worker because no worker may be bound.
+`foreman task discard --task ID` removes a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, or an assigned task whose worker a runtime status check confirms `dead` or `missing`; it refuses `unknown` or live workers and any task another task depends on.
+Discard runs under the home lock, refuses if the assignment generation or endpoint changed since the status check, stops a `dead` worker's endpoint, releases the resource lease, and removes the task directory and its task-scoped messages, decisions, and reports without archiving them.
+The project workspace stays on disk.
 
 ### 7.4 Assignment generation
 

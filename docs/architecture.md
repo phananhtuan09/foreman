@@ -38,4 +38,4 @@ A confirmed dead or missing worker is replaced only through a durable handoff co
 Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, and deletes task-specific Foreman records and coordination state.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
-An explicit discard may remove only an untouched, unassigned queued task with no dependants, under the home lock.
+An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, or assigned to a worker a status check confirms dead or missing.
