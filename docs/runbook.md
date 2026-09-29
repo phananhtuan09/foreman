@@ -50,6 +50,7 @@ bin/foreman-herdr task confirm --task T-000001 --profile claude-sonnet
 bin/foreman-herdr task dispatch --task T-000001
 bin/foreman-herdr task message --task T-000001 --text "Please add tests."
 bin/foreman-herdr task adopt --worker worker --task T-000001
+bin/foreman-herdr task promote --task T-000001
 bin/foreman-herdr task recover --task T-000001
 bin/foreman-herdr task accept --task T-000001
 bin/foreman-herdr task discard --task T-000001
@@ -67,6 +68,7 @@ bin/foreman-paseo task confirm --task T-000001 --profile foreman-codex-luna
 bin/foreman-paseo task dispatch --task T-000001
 bin/foreman-paseo task collect
 bin/foreman-paseo status --json
+bin/foreman-paseo task promote --task T-000001
 bin/foreman-paseo task accept --task T-000001
 ```
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createPaseoClient } = require("@getpaseo/client");
 
@@ -19,6 +21,14 @@ function paseoCommand(args, env = process.env) {
   return execFileSync(command, [...args, ...paseoArgs(env)], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+function selectedPaseoHome(env = process.env) {
+  return path.resolve(env.FOREMAN_PASEO_HOME || env.PASEO_HOME || path.join(os.homedir(), ".paseo"));
+}
+
+function comparableHome(home) {
+  try { return fs.realpathSync(home); } catch (_) { return path.resolve(home); }
+}
+
 function canonicalDirectory(directory) {
   return fs.realpathSync(directory);
 }
@@ -26,7 +36,12 @@ function canonicalDirectory(directory) {
 function daemonUrl(env = process.env) {
   const status = JSON.parse(paseoCommand(["daemon", "status", "--json"], env));
   if (status.connectedDaemon !== "reachable" || !status.listen) throw new Error("Selected Paseo daemon is not reachable");
-  if (status.daemonVersion && !/^0\.10\./.test(status.daemonVersion)) throw new Error(`Paseo SDK adapter requires daemon 0.10.x; found ${status.daemonVersion}`);
+  if (!status.home || comparableHome(status.home) !== comparableHome(selectedPaseoHome(env))) {
+    throw new Error(`Paseo daemon home mismatch: expected ${selectedPaseoHome(env)}, found ${status.home || "unknown"}`);
+  }
+  if (typeof status.daemonVersion !== "string" || !/^0\.10\./.test(status.daemonVersion)) {
+    throw new Error(`Paseo SDK adapter requires daemon 0.10.x; found ${status.daemonVersion || "unknown"}`);
+  }
   const listen = String(status.listen);
   if (/^wss?:\/\//.test(listen)) return listen.endsWith("/ws") ? listen : `${listen.replace(/\/$/, "")}/ws`;
   return `ws://${listen.replace(/\/$/, "")}/ws`;
@@ -59,10 +74,11 @@ function statusView(agent) {
 
 async function withClient(input, action) {
   if (Number(process.versions.node.split(".")[0]) < 22) throw new Error("Paseo SDK requires Node.js 22 or newer");
+  const env = input.env || process.env;
   const client = createPaseoClient({
-    url: daemonUrl(),
-    password: process.env.FOREMAN_PASEO_PASSWORD || process.env.PASEO_PASSWORD,
-    connectTimeoutMs: Number(process.env.FOREMAN_PASEO_TIMEOUT_MS || 10000),
+    url: daemonUrl(env),
+    password: env.FOREMAN_PASEO_PASSWORD || env.PASEO_PASSWORD,
+    connectTimeoutMs: Number(env.FOREMAN_PASEO_TIMEOUT_MS || 10000),
     reconnect: { enabled: false },
   });
   try {
@@ -111,7 +127,17 @@ async function listAgents(client) {
 async function main(action, input) {
   if (action === "interrupt") {
     const output = paseoCommand(["stop", "--json", input.endpoint], input.env || process.env);
-    return { interrupted: true, endpoint: input.endpoint, output };
+    return withClient(input, async (client) => {
+      const agent = client.agents.ref(input.endpoint);
+      const refreshed = await agent.refresh();
+      if (!refreshed) throw new Error(`Paseo agent no longer exists after interrupt: ${input.endpoint}`);
+      const inspection = statusView(refreshed.agent);
+      const status = String(inspection.status || "unknown").toLowerCase();
+      if (inspection.activeTurn || ["working", "running", "busy"].includes(status)) {
+        throw new Error("Paseo interrupt outcome is not verified; the agent is still running");
+      }
+      return { interrupted: true, verified: true, endpoint: input.endpoint, output, inspection };
+    });
   }
   return withClient(input, async (client) => {
     if (action === "verify") {
@@ -140,7 +166,9 @@ async function main(action, input) {
       });
       await agent.refresh();
       const snapshot = agent.current();
-      if (!snapshot || snapshot.id !== agent.id || snapshot.workspaceId !== workspace.id || !snapshot.cwd || canonicalDirectory(snapshot.cwd) !== canonicalDirectory(input.cwd)) {
+      const view = snapshot && statusView(snapshot);
+      if (!snapshot || snapshot.id !== agent.id || snapshot.workspaceId !== workspace.id || !snapshot.cwd || canonicalDirectory(snapshot.cwd) !== canonicalDirectory(input.cwd)
+        || view.owner !== input.owner || view.taskId !== input.taskId || view.projectId !== input.projectId || Number(view.generation) !== Number(input.generation)) {
         await agent.archive().catch(() => {});
         throw new Error("Paseo agent identity or workspace verification failed");
       }

@@ -890,6 +890,11 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       if (!inspected || inspected.endpoint !== endpoint || inspected.cwd !== workspace.path || inspected.owner !== owner) throw new DeliveryError(`${backend} endpoint identity verification failed`);
       const assignedWorkspaceId = spawned?.workspaceId || inspected?.workspaceId || prior.workspaceId || null;
       if (backend === "paseo" && (!assignedWorkspaceId || inspected.workspaceId !== assignedWorkspaceId)) throw new DeliveryError("Paseo workspace identity verification failed");
+      if (backend === "paseo") {
+        if (inspected.taskId !== taskId) throw new DeliveryError("Paseo task identity verification failed");
+        if (inspected.projectId !== project.id) throw new DeliveryError("Paseo project identity verification failed");
+        if (inspected.generation == null || Number(inspected.generation) !== Number(generation)) throw new DeliveryError("Paseo assignment generation verification failed");
+      }
       deliveryEndpoint = endpoint;
       paneId = spawned?.paneId || inspected.paneId || null;
       let paseoCursor = null;
@@ -1076,12 +1081,21 @@ function collectPaseoReports({ roots, adapter }) {
       collected.push({ taskId: meta.taskId, state: "unavailable", error: error.message });
       continue;
     }
+    if (!snapshot || typeof snapshot !== "object") {
+      collected.push({ taskId: meta.taskId, state: "mismatch", issue: "Paseo report read returned no identity snapshot" });
+      continue;
+    }
+    const hasAssignmentIdentity = snapshot.taskId != null || snapshot.projectId != null || snapshot.generation != null;
+    const assignmentIdentityMatches = hasAssignmentIdentity
+      ? snapshot.taskId === meta.taskId
+        && snapshot.projectId === meta.projectId
+        && snapshot.generation != null
+        && Number(snapshot.generation) === Number(meta.generation)
+      : meta.adopted === true;
     const identityMatches = snapshot.endpoint === meta.endpoint
       && snapshot.cwd && canonical(snapshot.cwd) === canonical(meta.workspace)
       && snapshot.workspaceId === meta.workspaceId
-      && (!snapshot.taskId || snapshot.taskId === meta.taskId)
-      && (!snapshot.projectId || snapshot.projectId === meta.projectId)
-      && (snapshot.generation == null || Number(snapshot.generation) === Number(meta.generation));
+      && assignmentIdentityMatches;
     if (!identityMatches) {
       collected.push({ taskId: meta.taskId, state: "mismatch", issue: "Paseo report identity or workspace does not match assignment" });
       continue;
@@ -1491,12 +1505,10 @@ function promoteScout({ roots, taskId, brief, dependencies = [], routingRunner }
     const id = allocateTaskId(roots.foremanHome);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), text);
     const backend = scout.backend || "herdr";
-    const status = backend === "paseo" ? "routing" : "queued";
-    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status });
+    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
     return { id, projectId: scout.projectId, type: "ship", promotedFrom: taskId, dependencies: normalized, brief: text, backend };
   });
-  if (promoted.backend === "paseo") return { ...promoted, routing: routeTask({ roots, taskId: promoted.id, routingRunner }) };
-  return promoted;
+  return { ...promoted, routing: routeTask({ roots, taskId: promoted.id, routingRunner }) };
 }
 
 function buildHandoff({ roots, taskId, reason }) { return coordination.buildHandoffPackage({ roots, taskId, reason }); }
@@ -1641,7 +1653,7 @@ function renderUserReport(status, roots) {
 
 /**
  * Context for the Foreman session's prompt hook: unread worker reports and the
- * anomalies of one runtime check. Returns null when there is nothing to add.
+ * anomalies of one runtime check and any Paseo collection failures. Returns null when there is nothing to add.
  * Reports listed here are marked read because they reached the Foreman session.
  * A session whose cwd is outside the Foreman checkout is not a Foreman session.
  */
@@ -1653,12 +1665,25 @@ function sessionContext({ roots, adapter, prompt = "", cwd }) {
   if (!fs.existsSync(path.join(roots.foremanHome, "data", "tasks"))) return null;
   let status = null;
   let runtimeError = null;
-  if (adapter) {
-    try { status = fleetStatus({ roots, adapter }); } catch (error) { runtimeError = error.message; }
+  let paseoCollection = null;
+  if (adapter?.backend === "paseo") {
+    try { paseoCollection = collectPaseoReports({ roots, adapter }); }
+    catch (error) { runtimeError = `Paseo report collection unavailable: ${error.message}`; }
   }
-  const unread = listTasks({ roots }).filter((meta) => meta.lastReport && !meta.lastReport.readAt);
-  const reportIssues = listTasks({ roots }).filter((meta) => meta.paseoReportError).map((meta) => ({ taskId: meta.taskId, projectId: meta.projectId, owner: meta.owner, type: meta.paseoReportError.type, reason: meta.paseoReportError.reason, reportFile: meta.paseoReportError.file }));
-  const anomalies = [...(status?.anomalies || []), ...reportIssues];
+  if (adapter) {
+    try { status = fleetStatus({ roots, adapter }); } catch (error) { runtimeError = runtimeError || error.message; }
+  }
+  const taskRecords = listTasks({ roots });
+  const unread = taskRecords.filter((meta) => meta.lastReport && !meta.lastReport.readAt);
+  const reportIssues = taskRecords.filter((meta) => meta.paseoReportError).map((meta) => ({ taskId: meta.taskId, projectId: meta.projectId, owner: meta.owner, type: meta.paseoReportError.type, reason: meta.paseoReportError.reason, reportFile: meta.paseoReportError.file }));
+  const paseoCollectionIssues = (paseoCollection?.tasks || [])
+    .filter((item) => ["unavailable", "mismatch", "gap", "report-missing"].includes(item.state))
+    .map((item) => {
+      const meta = taskRecords.find((record) => record.taskId === item.taskId);
+      const detail = item.error || item.issue?.reason || item.issue || "Paseo report collection did not validate the assigned turn";
+      return { taskId: item.taskId, projectId: meta?.projectId || "unknown", owner: meta?.owner || null, type: `worker.paseo-${item.state}`, reason: typeof detail === "string" ? detail : JSON.stringify(detail) };
+    });
+  const anomalies = [...(status?.anomalies || []), ...reportIssues, ...paseoCollectionIssues];
   if (!unread.length && !anomalies.length && !runtimeError) return null;
   const lines = ["[Foreman supervision context from bin/foreman session context]"];
   if (unread.length) {

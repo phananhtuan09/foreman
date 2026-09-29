@@ -25,6 +25,7 @@ function isBelow(actual, required) {
 class HerdrAdapter {
   constructor({ transport, requiredProtocol, requiredEndpointGeneration, interruptTimeoutMs = 2000, interruptPollMs = 50 } = {}) {
     this.transport = transport;
+    this.backend = "herdr";
     this.requiredProtocol = requiredProtocol;
     this.requiredEndpointGeneration = requiredEndpointGeneration;
     this.interruptTimeoutMs = interruptTimeoutMs;

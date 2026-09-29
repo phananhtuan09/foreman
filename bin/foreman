@@ -27,10 +27,22 @@ function selectedBackend() {
   if (!["herdr", "paseo"].includes(backend)) throw new Error(`Unsupported FOREMAN_BACKEND: ${backend || "(empty)"}; expected herdr or paseo`);
   return backend;
 }
-function runtimeAdapter() {
-  const backend = selectedBackend();
+function runtimeAdapter(backend = selectedBackend()) {
   if (backend === "paseo") return new PaseoAdapter();
   return new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) });
+}
+function sessionBackend() {
+  if (process.env.FOREMAN_BACKEND) return selectedBackend();
+  if (process.env.HERDR_ENV === "1") return "herdr";
+  try {
+    const taskRoot = path.join(roots().foremanHome, "data", "tasks");
+    if (!fs.existsSync(taskRoot)) return null;
+    const active = core.listTasks({ roots: roots() }).filter((meta) => !["accepted", "cleaned", "review-ready"].includes(meta.status));
+    const backends = new Set(active.map((meta) => meta.backend || "herdr"));
+    return backends.size === 1 ? [...backends][0] : null;
+  } catch (_) {
+    return null;
+  }
 }
 function assertSelectedTaskBackend(taskId) {
   const meta = core.reconstructTask({ roots: roots(), taskId }).meta;
@@ -84,6 +96,7 @@ const usage = [
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task collect   (Paseo: collect finished-turn reports from assigned agents)",
+  "  task promote --task ID [--brief TEXT|--brief-file FILE] [--dependency ID]",
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
@@ -127,7 +140,8 @@ function main() {
   if (command === "session" && action === "context") {
     try {
       const payload = hookPayload();
-      const adapter = process.env.FOREMAN_BACKEND || process.env.HERDR_ENV === "1" ? runtimeAdapter() : null;
+      const backend = sessionBackend();
+      const adapter = backend ? runtimeAdapter(backend) : null;
       const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
@@ -174,6 +188,11 @@ function main() {
   if (command === "task" && action === "collect") {
     if (selectedBackend() !== "paseo") throw new Error("Paseo report collection is available only through bin/foreman-paseo");
     output(core.collectPaseoReports({ roots: home, adapter: runtimeAdapter() }));
+    return;
+  }
+  if (command === "task" && action === "promote") {
+    assertSelectedTaskBackend(arg("--task"));
+    output(core.promoteScout({ roots: home, taskId: arg("--task"), brief: briefText(), dependencies: args("--dependency") }));
     return;
   }
   if (command === "task" && action === "dispatch") {

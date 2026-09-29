@@ -300,14 +300,28 @@ function reconcileFleet({ roots, adapter }) {
   const tasks = [];
   for (const { taskId, meta } of activeTaskMetas(roots)) {
     if (["accepted", "review-ready", "cleaned"].includes(meta.status)) continue;
-    if (adapter?.backend && (meta.backend || "herdr") !== adapter.backend) {
+    const adapterBackend = adapter?.backend || "herdr";
+    if ((meta.backend || "herdr") !== adapterBackend) {
       tasks.push({ taskId, meta, worker: null, state: "unobserved", issues: [] });
       continue;
     }
     const worker = runtimeWorkerFor(meta, workers);
     const issues = taskConsistencyIssues({ roots, meta });
-    if (worker?.projectId && worker.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker.projectId });
+    const paseoTask = (meta.backend || "herdr") === "paseo";
+    if (!paseoTask && worker?.projectId && worker.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker.projectId });
     if (worker?.cwd && meta.workspace && path.resolve(worker.cwd) !== path.resolve(meta.workspace)) issues.push({ type: "task.runtime-workspace-mismatch", expected: meta.workspace, actual: worker.cwd });
+    if (paseoTask) {
+      if (!worker?.workspaceId || worker.workspaceId !== meta.workspaceId) issues.push({ type: "task.runtime-workspace-id-mismatch", expected: meta.workspaceId, actual: worker?.workspaceId || null });
+      if (!meta.adopted) {
+        if (worker?.taskId !== meta.taskId) issues.push({ type: "task.runtime-task-mismatch", expected: meta.taskId, actual: worker?.taskId || null });
+        if (worker?.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker?.projectId || null });
+        if (worker?.generation == null || Number(worker.generation) !== Number(meta.generation)) issues.push({ type: "task.runtime-generation-mismatch", expected: meta.generation, actual: worker?.generation ?? null });
+      }
+    } else {
+      if (worker?.workspaceId && meta.workspaceId && worker.workspaceId !== meta.workspaceId) issues.push({ type: "task.runtime-workspace-id-mismatch", expected: meta.workspaceId, actual: worker.workspaceId });
+      if (worker?.taskId && worker.taskId !== meta.taskId) issues.push({ type: "task.runtime-task-mismatch", expected: meta.taskId, actual: worker.taskId });
+      if (worker?.generation != null && Number(worker.generation) !== Number(meta.generation)) issues.push({ type: "task.runtime-generation-mismatch", expected: meta.generation, actual: worker.generation });
+    }
     if (worker?.pane_id && meta.paneId && worker.pane_id !== meta.paneId) issues.push({ type: "task.runtime-pane-mismatch", expected: meta.paneId, actual: worker.pane_id });
     let state = classifyRuntime(meta, worker);
     if (issues.length && state !== "dead" && state !== "missing") state = "unknown";

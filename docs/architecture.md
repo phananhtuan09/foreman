@@ -32,6 +32,7 @@ Both backends store original report text under the task report directory and bin
 Supervision is pull-based and runs only in Foreman turns.
 A Herdr worker's stop hook asks it to run `foreman report` when it ends a turn without having reported since Foreman last prompted it.
 Paseo workers return a JSON report object at the end of each turn; Foreman collects new turns through an explicit command and re-reads timeline state during Paseo supervision turns.
+The session prompt hook runs that Paseo collection before its single status check when the active backend is Paseo.
 The report records `lastReport` in task metadata and moves a `done` task to `review-ready` or a `blocked` task to `blocked`.
 The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
 The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
