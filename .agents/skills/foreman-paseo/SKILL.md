@@ -8,7 +8,7 @@ description: Use the Foreman entrypoint configured for Paseo. Select this skill 
 Use this skill as the backend entrypoint for operating Foreman through Paseo.
 Read and follow `.agents/skills/foreman-control/SKILL.md` for the shared workflow.
 
-On the first operational request of a session, run `bin/foreman-paseo init` from the Foreman checkout.
+On the first operational request of a session, run `npm install` from the Foreman checkout to install the dependencies in `package.json`, including `@getpaseo/client`, then run `bin/foreman-paseo init`.
 For every Foreman CLI command in this workflow, use `bin/foreman-paseo`; it sets `FOREMAN_BACKEND=paseo` for that process.
 Do not set a backend value in a shell startup file.
 
