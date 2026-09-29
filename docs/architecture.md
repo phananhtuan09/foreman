@@ -9,7 +9,8 @@ An explicitly selected Git worktree is checked against that registered project.
 All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
 `src/herdr.js` is the narrow Herdr adapter.
 `src/paseo.js` invokes the SDK bridge in `bin/foreman-paseo-bridge.js`; each command opens a short-lived Paseo client and does not add a Foreman observer process.
-`config/paseo-agent-profiles.json` is the source for Foreman-owned Paseo profiles, and `bin/foreman-paseo profiles sync` replaces only those IDs while preserving app-owned profiles.
+`config/model-routing.json` is the shared routing source for Herdr and Paseo, while `config/paseo-agent-profiles.json` maps every model profile to Paseo's provider, model, mode, thinking, feature, and notes fields.
+`bin/foreman-paseo profiles sync` replaces only Foreman-owned Paseo profile IDs while preserving app-owned profiles.
 `hooks/` holds the worker stop hook and the Foreman session prompt hook.
 `adapters/herdr/` is the distribution wrapper.
 
@@ -21,6 +22,9 @@ Task metadata records the selected profile, source, reason, any router error, an
 The routed profile is a recommendation; `task confirm` records the human's chosen active profile as the dispatch profile with `profileConfirmedAt`, and assignment refuses a routed task without it.
 Herdr profiles support `codex`, `claude`, `omp`, and `opencode` and start the selected tool with its configured command arguments and model.
 Paseo profiles materialize a provider, model, mode, thinking option, and features into the SDK agent creation call.
+Before spawn, the bridge reads the selected daemon's `agentProfiles`, resolves the exact persisted Paseo profile ID, and compares its launch fields with the confirmed task snapshot.
+Missing or mismatched profiles fail dispatch with a sync instruction; Foreman never syncs the daemon implicitly.
+After creation, the bridge verifies the agent's provider, model, mode, thinking option, and selected feature values, and archives an agent whose settings do not match.
 Paseo stores an `agentId` and `workspaceId`; Herdr stores a pane-bound endpoint.
 
 Canonical writes use the home lock and atomic replacement.

@@ -11,8 +11,8 @@ On the first operational request of a session, run the active backend entrypoint
 `init` does not persist `FOREMAN_BACKEND` in the shell startup file; each backend wrapper sets it only for its own Foreman process.
 Before every answer to the user, follow `.agents/skills/foreman-supervisor/SKILL.md` to check new worker reports and worker health.
 Read `docs/runbook.md` when the request needs exact CLI syntax, local setup, hook setup, routing configuration, or recovery steps.
-For Herdr routing or profile selection, inspect `config/model-routing.json` in the Foreman source checkout.
-For Paseo routing or profile selection, inspect `config/paseo-routing.json` and `config/paseo-agent-profiles.json`; run the Paseo profile sync command after changing those profiles.
+For Herdr or Paseo routing and profile selection, inspect `config/model-routing.json` in the Foreman source checkout.
+For Paseo dispatch fields, inspect the matching `foreman-<profile>` entry in `config/paseo-agent-profiles.json`; every model-routing profile needs a matching Paseo entry, and `isActive` only controls Foreman's selection; run the Paseo profile sync command after changing those profiles.
 For handoff after confirmed worker death or absence, read `.agents/skills/foreman-recovery/SKILL.md`.
 Do not invoke the global `foreman-agent` skill or the historical copy under `legacy/` while working in this repository.
 

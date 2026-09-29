@@ -64,7 +64,7 @@ bin/foreman-paseo profiles sync
 bin/foreman-paseo routing show
 bin/foreman-paseo project register --id app --root /path/to/app
 bin/foreman-paseo task create --project app --type scout --brief "Inspect the API and report risks."
-bin/foreman-paseo task confirm --task T-000001 --profile foreman-codex-luna
+bin/foreman-paseo task confirm --task T-000001 --profile codex-luna
 bin/foreman-paseo task dispatch --task T-000001
 bin/foreman-paseo task collect
 bin/foreman-paseo status --json
@@ -142,11 +142,15 @@ Foreman passes Codex effort through `--config model_reasoning_effort=...`, Claud
 `init`, `routing init`, and `routing show` validate and read that file; they do not create or modify it.
 An older `FOREMAN_HOME/config/model-routing.json` is ignored, so copy any custom settings into the tracked file before using them.
 
-For Paseo, edit `FOREMAN_ROOT/config/paseo-agent-profiles.json` and `FOREMAN_ROOT/config/paseo-routing.json`.
-Profiles use stable IDs and Paseo provider, model, mode, thinking, feature, and notes fields; OpenCode profiles keep their model ID and omit Herdr's unsupported effort setting.
+Both backends use `FOREMAN_ROOT/config/model-routing.json` for the router, groups, profile names, models, tools, and usage policy.
+For Paseo, add or edit the matching `foreman-<profile>` entry in `FOREMAN_ROOT/config/paseo-agent-profiles.json` for its provider, model, mode, thinking, feature, and notes fields.
+Every model-routing profile must have a matching Paseo entry, including profiles with `isActive: false`; inactive profiles remain installed but cannot be recommended or selected by Foreman.
+OpenCode profiles keep their model ID and omit Herdr's unsupported effort setting.
 The router recommends a profile, but the user still confirms the profile before dispatch.
 After profile edits, run `bin/foreman-paseo profiles sync`; task creation and `init` never change Paseo's installed profiles.
 The selected profile settings are copied into the task when the user confirms, so later profile edits do not alter the stored assignment.
+Before Paseo spawn, Foreman resolves the exact `paseoProfileId` from the selected daemon and compares its launch settings with that stored snapshot.
+If the profile is missing or differs, dispatch remains queued with a reviewable error; run `bin/foreman-paseo profiles sync` and retry after confirming the profile again when necessary.
 
 `command` accepts either an argument array or a shell-like string, but Foreman always executes it without a shell.
 The command executable must match `tool`, and model flags belong in `model` rather than `command`.

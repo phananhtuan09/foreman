@@ -12,7 +12,7 @@ On the first operational request of a session, run `npm install` from the Forema
 For every Foreman CLI command in this workflow, use `bin/foreman-paseo`; it sets `FOREMAN_BACKEND=paseo` for that process.
 Do not set a backend value in a shell startup file.
 
-Paseo profiles and routing live in `config/paseo-agent-profiles.json` and `config/paseo-routing.json`.
+Paseo routing lives in `config/model-routing.json`; Paseo-specific provider, model, mode, thinking, feature, and notes fields live in the matching `foreman-<profile>` entries in `config/paseo-agent-profiles.json`.
 After changing profiles, run `bin/foreman-paseo profiles sync` to update the selected Paseo home; this preserves profiles created in Paseo and does not run automatically during `init` or task creation.
 Use `bin/foreman-paseo task collect` at each supervision turn before `status` so finished-turn reports are read from the agent timeline.
 Paseo workers report exactly one JSON object with `status: done|blocked|progress` and a non-empty `summary`; they do not run `foreman report` or use the Herdr stop hook.

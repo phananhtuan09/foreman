@@ -27,7 +27,7 @@ const {
   ValidationError,
   StaleGenerationError,
 } = require("../src/foreman");
-const { syncPaseoProfiles, planPaseoProfileSync } = require("../src/paseo-routing");
+const { syncPaseoProfiles, planPaseoProfileSync, loadPaseoRoutingConfig } = require("../src/paseo-routing");
 
 function fixture() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-"));
@@ -40,9 +40,14 @@ function fixture() {
   execFileSync("git", ["-C", projectRoot, "add", "README.md"]);
   execFileSync("git", ["-C", projectRoot, "commit", "-m", "fixture"], { stdio: "ignore" });
   fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
-  for (const file of ["paseo-agent-profiles.json", "paseo-routing.json"]) {
+  for (const file of ["model-routing.json", "paseo-agent-profiles.json"]) {
     fs.copyFileSync(path.join(__dirname, "../config", file), path.join(projectRoot, "config", file));
   }
+  const routingFile = path.join(projectRoot, "config", "model-routing.json");
+  const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
+  routing.default = "codex-luna";
+  for (const profile of Object.values(routing.profiles)) profile.isActive = true;
+  fs.writeFileSync(routingFile, `${JSON.stringify(routing, null, 2)}\n`);
   const roots = resolveRoots({ foremanRoot: projectRoot, foremanHome: path.join(base, "foreman-home") });
   initHome(roots);
   registerProject({ roots, id: "fixture", root: projectRoot });
@@ -105,9 +110,9 @@ class FakePaseoAdapter {
 }
 
 function routeAndAssign(f, brief = "Inspect this fixture and report what it contains; do not edit files.", type = "scout") {
-  const task = createTask({ roots: f.roots, projectId: "fixture", brief, type, backend: "paseo", routingRunner: () => ({ profile: "foreman-codex-luna", reason: "Codex is the configured default." }) });
-  assert.equal(task.routing.profile, "foreman-codex-luna");
-  const selected = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "foreman-codex-luna" });
+  const task = createTask({ roots: f.roots, projectId: "fixture", brief, type, backend: "paseo", routingRunner: () => ({ profile: "codex-luna", reason: "Codex is the configured default." }) });
+  assert.equal(task.routing.profile, "codex-luna");
+  const selected = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "codex-luna" });
   assert.equal(selected.dispatchProfile.provider, "codex");
   const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
   return { task, assignment };
@@ -154,6 +159,48 @@ test("Paseo profile sync replaces only repo-owned profiles and verifies the sele
   } finally { f.cleanup(); }
 });
 
+test("Paseo maps inactive model profiles without making them selectable", () => {
+  const f = fixture();
+  try {
+    const routingFile = path.join(f.projectRoot, "config/model-routing.json");
+    const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
+    routing.profiles["codex-sol"].isActive = false;
+    fs.writeFileSync(routingFile, `${JSON.stringify(routing, null, 2)}\n`);
+    const loaded = loadPaseoRoutingConfig(f.projectRoot, { required: true }).config;
+    assert.equal(loaded.profiles["codex-sol"], undefined);
+    assert.equal(loaded.allProfiles["codex-sol"].paseoProfileId, "foreman-codex-sol");
+    assert.equal(loaded.allProfiles["codex-sol"].isActive, false);
+    assert.deepEqual(Object.keys(loaded.allProfiles).sort(), Object.keys(routing.profiles).sort());
+  } finally { f.cleanup(); }
+});
+
+test("Paseo Claude profile carries the permission mode into dispatch", () => {
+  const f = fixture();
+  try {
+    const profiles = loadPaseoRoutingConfig(f.projectRoot, { required: true }).config.profiles;
+    assert.equal(profiles["claude-opus"].modeId, "bypassPermissions");
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Inspect README.md.", type: "scout", backend: "paseo", routingRunner: () => ({ profile: "claude-sonnet", reason: "Use Claude." }) });
+    const selected = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "claude-sonnet" });
+    assert.equal(selected.dispatchProfile.modeId, "bypassPermissions");
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(f.adapter.agents.get(assignment.endpoint).dispatchProfile.modeId, "bypassPermissions");
+  } finally { f.cleanup(); }
+});
+
+test("Paseo profile mismatch keeps the task queued with a reviewable dispatch error", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Inspect README.md.", type: "scout", backend: "paseo", routingRunner: () => ({ profile: "codex-luna", reason: "Use Codex." }) });
+    confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "codex-luna" });
+    const adapter = Object.create(f.adapter);
+    adapter.spawn = () => { throw new Error("Paseo profile is out of sync: foreman-codex-luna; run bin/foreman-paseo profiles sync"); };
+    assert.throws(() => assignTask({ roots: f.roots, taskId: task.id, adapter }), /profile is out of sync/);
+    const meta = reconstructTask({ roots: f.roots, taskId: task.id }).meta;
+    assert.equal(meta.status, "queued");
+    assert.match(meta.dispatchError, /profiles sync/);
+  } finally { f.cleanup(); }
+});
+
 test("Paseo routes through repo profiles, dispatches a durable brief, collects a valid report, and accepts after archive", () => {
   const f = fixture();
   try {
@@ -161,7 +208,8 @@ test("Paseo routes through repo profiles, dispatches a durable brief, collects a
     assert.equal(assignment.backend, "paseo");
     assert.equal(assignment.workspaceId, "workspace-1");
     assert.equal(assignment.paneId, null);
-    assert.equal(assignment.dispatchProfile.name, "foreman-codex-luna");
+    assert.equal(assignment.dispatchProfile.name, "codex-luna");
+    assert.equal(assignment.dispatchProfile.paseoProfileId, "foreman-codex-luna");
     const sent = f.adapter.sent[0];
     assert.equal(sent.options.messageId, assignment.briefMessageId);
     assert.match(sent.prompt, /return exactly one JSON object/i);
@@ -213,7 +261,7 @@ test("Paseo progress, blocked, follow-up, and decision delivery use the correct 
 test("adopting a Paseo agent sends the persisted brief and binds later reports to its workspace", () => {
   const f = fixture();
   try {
-    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Adopt this already running agent and inspect README.md.", backend: "paseo", routingRunner: () => ({ profile: "foreman-codex-luna", reason: "test" }) });
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Adopt this already running agent and inspect README.md.", backend: "paseo", routingRunner: () => ({ profile: "codex-luna", reason: "test" }) });
     const endpoint = "agent-existing";
     f.adapter.agents.set(endpoint, {
       endpoint,

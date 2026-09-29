@@ -11,7 +11,7 @@ const { syncPaseoProfiles } = require("../src/paseo-routing");
 
 const enabled = process.env.RUN_PASEO_LIVE === "1";
 const paseoCommand = process.env.FOREMAN_PASEO_COMMAND || "paseo";
-const foremanRoot = path.resolve(__dirname, "..");
+const sourceRoot = path.resolve(__dirname, "..");
 
 function paseo(args, env) {
   return execFileSync(paseoCommand, args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout: 30000 }).trim();
@@ -30,6 +30,7 @@ test("isolated Paseo daemon runs a scout through report collection, status, and 
   const paseoHome = path.join(base, "paseo-home");
   const foremanHome = path.join(base, "foreman-home");
   const projectRoot = path.join(base, "project");
+  const foremanRoot = path.join(base, "foreman-root");
   fs.mkdirSync(projectRoot, { recursive: true });
   execFileSync("git", ["init", "-b", "main", projectRoot], { stdio: "ignore" });
   execFileSync("git", ["-C", projectRoot, "config", "user.email", "paseo-live@example.invalid"]);
@@ -37,6 +38,13 @@ test("isolated Paseo daemon runs a scout through report collection, status, and 
   fs.writeFileSync(path.join(projectRoot, "README.md"), "Paseo live integration fixture.\n");
   execFileSync("git", ["-C", projectRoot, "add", "README.md"]);
   execFileSync("git", ["-C", projectRoot, "commit", "-m", "fixture"], { stdio: "ignore" });
+  fs.mkdirSync(path.join(foremanRoot, "config"), { recursive: true });
+  for (const file of ["model-routing.json", "paseo-agent-profiles.json"]) fs.copyFileSync(path.join(sourceRoot, "config", file), path.join(foremanRoot, "config", file));
+  const routingFile = path.join(foremanRoot, "config", "model-routing.json");
+  const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
+  routing.default = "codex-luna";
+  for (const profile of Object.values(routing.profiles)) profile.isActive = true;
+  fs.writeFileSync(routingFile, `${JSON.stringify(routing, null, 2)}\n`);
 
   const env = { ...process.env, FOREMAN_PASEO_HOME: paseoHome, FOREMAN_PASEO_COMMAND: paseoCommand };
   const priorPaseoHome = process.env.FOREMAN_PASEO_HOME;
@@ -67,9 +75,9 @@ test("isolated Paseo daemon runs a scout through report collection, status, and 
       type: "scout",
       backend: "paseo",
       brief: "Read only README.md in this temporary project, do not edit any file, and report a short observation using Foreman's required JSON report format.",
-      routingRunner: () => ({ profile: "foreman-codex-luna", reason: "Use the configured test profile." }),
+      routingRunner: () => ({ profile: "codex-luna", reason: "Use the configured test profile." }),
     });
-    core.confirmTaskProfile({ roots, taskId: task.id, profile: "foreman-codex-luna" });
+    core.confirmTaskProfile({ roots, taskId: task.id, profile: "codex-luna" });
     assigned = core.assignTask({ roots, taskId: task.id, adapter });
     assert.equal(assigned.backend, "paseo");
     assert.ok(assigned.workspaceId);

@@ -446,17 +446,19 @@ function normalizeRoutingProfile(profile, name) {
   return { tool, command, model, effort, whenToUse: profile.whenToUse.trim() };
 }
 
-function validateRoutingConfig(config) {
+function validateRoutingConfig(config, { includeAllProfiles = false } = {}) {
   validateVersionedRecord(config, "Model routing config");
   const router = normalizeRoutingProfile(config.router, "router");
   if (!config.profiles || typeof config.profiles !== "object" || Array.isArray(config.profiles)) throw new ValidationError("Routing profiles must be an object");
   const profiles = {};
+  const allProfiles = {};
   const inactiveProfiles = [];
   for (const [name, profile] of Object.entries(config.profiles)) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new ValidationError(`Invalid routing profile name: ${name}`);
     const normalized = normalizeRoutingProfile(profile, name);
     const isActive = profile.isActive ?? true;
     if (typeof isActive !== "boolean") throw new ValidationError(`Routing profile isActive must be a boolean: ${name}`);
+    allProfiles[name] = { ...normalized, isActive };
     if (isActive) profiles[name] = normalized;
     else inactiveProfiles.push(name);
   }
@@ -485,16 +487,16 @@ function validateRoutingConfig(config) {
   for (const name of Object.keys(config.profiles)) {
     if (!groupedProfiles.has(name)) throw new ValidationError(`Routing profile has no group: ${name}`);
   }
-  return { schemaVersion: 1, router, default: config.default, groups, profiles, inactiveProfiles };
+  return { schemaVersion: 1, router, default: config.default, groups, profiles, ...(includeAllProfiles ? { allProfiles } : {}), inactiveProfiles };
 }
 
-function loadRoutingConfig(root, { required = false } = {}) {
+function loadRoutingConfig(root, { required = false, includeAllProfiles = false } = {}) {
   const file = routingConfigFile(root);
   if (!fs.existsSync(file)) {
     if (required) throw new ValidationError(`Model routing config does not exist: ${file}`);
     return null;
   }
-  return validateRoutingConfig(readJson(file));
+  return validateRoutingConfig(readJson(file), { includeAllProfiles });
 }
 
 function initRoutingConfig({ roots, backend = "herdr" }) {
@@ -514,13 +516,25 @@ function modelArgs(profile) {
   return ["--model", profile.model];
 }
 
+function materializeDispatchProfile(backend, selected, name) {
+  if (!selected) return null;
+  if (backend !== "paseo") return { ...selected, name, ...(selected.name ? { profileLabel: selected.name } : {}) };
+  const dispatch = Object.fromEntries(["provider", "model", "modeId", "thinkingOptionId", "featureValues"].filter((key) => selected[key] !== undefined).map((key) => [key, selected[key]]));
+  return {
+    ...dispatch,
+    name,
+    ...(selected.name ? { profileLabel: selected.name } : {}),
+    ...(selected.paseoProfileId ? { paseoProfileId: selected.paseoProfileId } : {}),
+  };
+}
+
 function routingPrompt(config, task) {
   const groups = Object.entries(config.groups).map(([name, group]) => ({
     group: name,
     whenToUse: group.whenToUse,
     profiles: group.profiles.map((profileName) => {
       const profile = config.profiles[profileName];
-      return { profile: profileName, tool: profile.tool, model: profile.model, effort: profile.effort, whenToUse: profile.whenToUse };
+      return { profile: profileName, tool: profile.tool || profile.provider, model: profile.model, effort: profile.effort, whenToUse: profile.whenToUse };
     }),
   }));
   return [
@@ -587,7 +601,7 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
   if (config) {
     configDigest = crypto.createHash("sha256").update(JSON.stringify(config)).digest("hex");
     try {
-      const prompt = meta.backend === "paseo" ? paseoRouting.paseoroutingPrompt(config, { type: meta.type, brief }) : routingPrompt(config, { type: meta.type, brief });
+      const prompt = routingPrompt(config, { type: meta.type, brief });
       const output = routingRunner({ profile: config.router, prompt, cwd: findProject(roots.foremanHome, meta.projectId).root, taskId, config });
       const choice = parseRoutingSelection(output);
       if (config.inactiveProfiles.includes(choice.profile)) throw new ValidationError(`Model router selected an inactive profile: ${choice.profile}`);
@@ -621,7 +635,7 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
   return withHomeLock(roots.foremanHome, () => {
     const current = readMeta(roots.foremanHome, taskId);
     if (current.status !== "routing") throw new ValidationError(`Task routing state changed while evaluating: ${taskId}`);
-    const dispatchProfile = selected ? { ...selected, name: selectedName, ...(selected.name ? { profileLabel: selected.name } : {}) } : null;
+    const dispatchProfile = materializeDispatchProfile(current.backend || "herdr", selected, selectedName);
     atomicJson(metaFile(roots.foremanHome, taskId), { ...current, status: "queued", routingProfile: selectedName, routingSource: source, routingReason: reason, ...(error ? { routingError: error } : {}), dispatchProfile, routedAt });
     return { ...record, profileOptions: config ? profileOptions(config, selectedName) : [] };
   });
@@ -656,7 +670,7 @@ function confirmTaskProfile({ roots, taskId, profile }) {
     const meta = readMeta(roots.foremanHome, taskId);
     if (!["queued", "pending"].includes(meta.status) || meta.endpoint) throw new ValidationError(`Only an unassigned queued task can have its worker profile confirmed: ${taskId}`);
     const selected = config.profiles[profile];
-    const dispatchProfile = { ...selected, name: profile, ...(selected.name ? { profileLabel: selected.name } : {}) };
+    const dispatchProfile = materializeDispatchProfile(meta.backend || "herdr", selected, profile);
     const confirmed = { ...meta, dispatchProfile, profileConfirmedAt: now() };
     atomicJson(metaFile(roots.foremanHome, taskId), confirmed);
     return { taskId, profile, recommended: meta.routingProfile || null, dispatchProfile, profileConfirmedAt: confirmed.profileConfirmedAt };
@@ -959,7 +973,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
           dispatchError: error.message,
         };
         atomicJson(metaFile(roots.foremanHome, taskId), retryable);
-      } else if (prior) atomicJson(metaFile(roots.foremanHome, taskId), prior);
+      } else if (prior) atomicJson(metaFile(roots.foremanHome, taskId), { ...prior, dispatchError: error.message });
       else {
         atomicJson(metaFile(roots.foremanHome, taskId), { schemaVersion: 1, taskId, projectId: project.id, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "queued", dispatchError: error.message });
       }

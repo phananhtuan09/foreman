@@ -137,9 +137,8 @@ foreman/
 ├── SPEC.md                    product and architecture authority
 ├── docs/                      detailed durable architecture and runbooks
 ├── .agents/skills/            conditionally loaded Foreman workflows for Codex
-├── config/model-routing.json  Herdr routing and worker profiles
-├── config/paseo-routing.json  Paseo routing groups and router
-├── config/paseo-agent-profiles.json  repo-owned Paseo agent profiles
+├── config/model-routing.json  routing groups, router, and worker profiles for both backends
+├── config/paseo-agent-profiles.json  repo-owned Paseo agent runtime profile mappings
 ├── bin/                       deterministic helpers and runtime adapters
 ├── hooks/                     coding-agent hook scripts for worker reports and the Foreman session
 ├── adapters/
@@ -156,8 +155,8 @@ Definitions:
 
 - `FOREMAN_ROOT`: tracked source checkout containing instructions, scripts, adapters, tests, and this specification.
 - `FOREMAN_HOME`: private operational root containing `data/`; client-owned workspaces live outside Foreman home.
-- Herdr routing reads `FOREMAN_ROOT/config/model-routing.json`.
-- Paseo routing and profiles read `FOREMAN_ROOT/config/paseo-routing.json` and `FOREMAN_ROOT/config/paseo-agent-profiles.json`.
+- Both backends route from `FOREMAN_ROOT/config/model-routing.json`.
+- Paseo maps every model-routing profile to the corresponding `foreman-<profile>` entry in `FOREMAN_ROOT/config/paseo-agent-profiles.json`; `isActive` only controls whether Foreman may recommend or select that profile.
 - Paseo's installed profile list changes only through explicit profile sync; sync preserves profiles that Foreman does not own.
 - If `FOREMAN_HOME` is unset, it defaults to `FOREMAN_ROOT`.
 - Every helper resolves and validates both roots before mutation.
@@ -391,7 +390,7 @@ Both use the same Foreman home and shared operational workflow.
 Their CLI wrappers set `FOREMAN_BACKEND` only for the child process, so selecting a backend does not mutate the login shell or affect another Foreman session.
 The Herdr entrypoint supports Herdr-backed task routing, dispatch, reports, supervision, recovery, and acceptance.
 The Paseo entrypoint supports Paseo-backed task routing, dispatch, report collection, supervision, recovery, and acceptance.
-Paseo profile source files are `config/paseo-agent-profiles.json` and `config/paseo-routing.json`.
+Paseo routing uses `config/model-routing.json`; `config/paseo-agent-profiles.json` supplies the provider, model, mode, thinking, feature, and notes fields that the Paseo daemon needs.
 `bin/foreman-paseo profiles sync` replaces repo-owned `foreman-*` profiles in the selected Paseo home, preserves other profiles and their order, and verifies the readback.
 Profile sync is explicit and never runs during `init` or task creation.
 Paseo agents use the `@getpaseo/client` SDK bridge, and their provider/model/mode/thinking/features are materialized from the profile selected and confirmed by the human.
@@ -743,9 +742,12 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Foreman does not scan or fingerprint project files to verify scout behavior; Herdr does not sandbox the worker.
 - P2 multi-project binding, ship/scout task types, dependency validation and gating, resource-aware scheduling, per-project limits, fleet/per-project status views, and concurrent non-conflicting dispatch are implemented.
 - P3 static dispatch-profile validation is implemented against runtime capabilities.
-- Herdr task routing is implemented through `FOREMAN_ROOT/config/model-routing.json`; Paseo routing uses the separate `config/paseo-routing.json` and `config/paseo-agent-profiles.json` sources.
+- Both Herdr and Paseo task routing are implemented through `FOREMAN_ROOT/config/model-routing.json`; Paseo dispatch maps its selected profile to `config/paseo-agent-profiles.json`.
 - `bin/foreman-paseo profiles sync [--dry-run]` updates only Foreman-owned Paseo profile IDs, preserves Paseo-created profiles and their order, checks the selected daemon home, and verifies the written profile list.
 - Paseo routing persists the selected profile snapshot on each task; profile edits do not alter existing assignments.
+- Before Paseo spawn, the SDK bridge reads the selected daemon's installed agent profiles and requires the exact `paseoProfileId` and launch fields to match the confirmed task snapshot.
+- A missing or mismatched daemon profile fails dispatch without implicit sync, records a reviewable dispatch error, and leaves the task queued for human remediation.
+- After creation, the bridge verifies the returned agent launch settings and archives the endpoint if they differ from the confirmed snapshot.
 - Routing supports the `codex`, `claude`, `omp`, and `opencode` tools, persists the brief and config digests with its selection, and forwards configured command arguments and model through Herdr.
 - Invalid router output or a router process failure selects only the configured default profile and preserves the error in the routing record.
 - A compatible Herdr dispatch fallback is accepted only when explicitly configured and is forwarded unchanged.
@@ -781,7 +783,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - The router's selection is a recommendation shown as option 1 before every other active profile; `foreman task confirm --task ID --profile NAME` records the human's choice, and dispatch and scheduling refuse a routed, unassigned task until it is confirmed. Recovery keeps the confirmed profile of the assignment it replaces.
 - Herdr profiles with `isActive: false` are excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
-- Paseo uses its own provider profiles and routing groups; profile synchronization is explicit and is never triggered by initialization or task creation.
+- Paseo maps every shared routing profile to a repo-owned provider profile; `isActive` only controls Foreman's selection; profile synchronization is explicit and is never triggered by initialization or task creation.
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 

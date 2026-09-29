@@ -4,7 +4,6 @@
 /config/*
 !/config/model-routing.json
 !/config/paseo-agent-profiles.json
-!/config/paseo-routing.json
 /data/
 /state/
 /projects/

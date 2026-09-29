@@ -6,7 +6,10 @@
     "model": "gpt-6-luna",
     "modeId": "full-access",
     "thinkingOptionId": "high",
-    "notes": "Preferred for ordinary implementation, bug fixes, tests, and review unless another configured profile better matches the request."
+    "featureValues": {
+      "fast_mode": true
+    },
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Preferred for ordinary implementation, bug fixes, tests, and review unless another configured profile better matches the request."
   },
   {
     "id": "foreman-codex-sol",
@@ -15,7 +18,7 @@
     "model": "gpt-6-sol",
     "modeId": "full-access",
     "thinkingOptionId": "medium",
-    "notes": "Use for tooling-heavy builds, dependencies, CI, or scripted batch edits when this profile is explicitly requested."
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for tooling-heavy builds, dependencies, CI, or scripted batch edits when this profile is explicitly requested."
   },
   {
     "id": "foreman-opencode-sol",
@@ -23,7 +26,11 @@
     "provider": "opencode",
     "model": "openai/gpt-6-sol",
     "modeId": "build",
-    "notes": "Use when OpenCode is explicitly requested. Paseo currently has no matching thinking option for the prior Herdr effort setting."
+    "thinkingOptionId": "medium",
+    "featureValues": {
+      "auto_accept": true
+    },
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use when OpenCode is explicitly requested. Auto-accept is enabled for unattended work."
   },
   {
     "id": "foreman-opencode-luna",
@@ -31,6 +38,28 @@
     "provider": "opencode",
     "model": "openai/gpt-6-luna",
     "modeId": "build",
-    "notes": "Use for OpenCode tasks when the Luna model is requested. Paseo currently has no matching thinking option for the prior Herdr effort setting."
+    "thinkingOptionId": "high",
+    "featureValues": {
+      "auto_accept": true
+    },
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for OpenCode tasks when the Luna model is requested. Auto-accept is enabled for unattended work; OpenCode exposes no Fast feature."
+  },
+  {
+    "id": "foreman-claude-sonnet",
+    "name": "Foreman Claude Sonnet 5.5",
+    "provider": "claude",
+    "model": "claude-sonnet-5-5",
+    "modeId": "bypassPermissions",
+    "thinkingOptionId": "high",
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use when Claude is explicitly requested or the preferred Codex profile is inactive."
+  },
+  {
+    "id": "foreman-claude-opus",
+    "name": "Foreman Claude Opus",
+    "provider": "claude",
+    "model": "claude-opus-5-5",
+    "modeId": "bypassPermissions",
+    "thinkingOptionId": "high",
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for architecture, migration, concurrency, or security work."
   }
 ]

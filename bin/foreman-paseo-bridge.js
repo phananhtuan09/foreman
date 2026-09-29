@@ -57,6 +57,15 @@ function statusView(agent) {
     taskId: labels["foreman.taskId"] || null,
     projectId: labels["foreman.projectId"] || null,
     generation: labels["foreman.generation"] ? Number(labels["foreman.generation"]) : null,
+    routingProfile: labels["foreman.routingProfile"] || null,
+    paseoProfileId: labels["foreman.paseoProfileId"] || null,
+    paseoProfileName: labels["foreman.paseoProfileName"] || null,
+    provider: agent.provider || null,
+    model: agent.model || null,
+    currentModeId: agent.currentModeId || null,
+    thinkingOptionId: agent.thinkingOptionId || null,
+    effectiveThinkingOptionId: agent.effectiveThinkingOptionId || null,
+    features: agent.features || [],
     cwd: agent.cwd || null,
     workspace: agent.workspaceId || null,
     workspaceId: agent.workspaceId || null,
@@ -70,6 +79,68 @@ function statusView(agent) {
     lastUsage: agent.lastUsage || null,
     archivedAt: agent.archivedAt || null,
   };
+}
+
+const PROFILE_LAUNCH_FIELDS = ["provider", "model", "modeId", "thinkingOptionId", "featureValues"];
+
+function comparableProfileValue(value) {
+  return value === undefined ? null : value;
+}
+
+function profileLaunchSnapshot(profile) {
+  return Object.fromEntries(PROFILE_LAUNCH_FIELDS.map((field) => [field, comparableProfileValue(profile?.[field])]));
+}
+
+function profileDifferences(expected, actual) {
+  const expectedSnapshot = profileLaunchSnapshot(expected);
+  const actualSnapshot = profileLaunchSnapshot(actual);
+  return PROFILE_LAUNCH_FIELDS.filter((field) => JSON.stringify(expectedSnapshot[field]) !== JSON.stringify(actualSnapshot[field]))
+    .map((field) => ({ field, expected: expectedSnapshot[field], actual: actualSnapshot[field] }));
+}
+
+async function readDaemonProfiles(client) {
+  const result = await client.config.get();
+  const profiles = result?.config?.agentProfiles;
+  if (!Array.isArray(profiles)) throw new Error("Selected Paseo daemon has no readable agent profiles; run bin/foreman-paseo profiles sync");
+  return profiles;
+}
+
+async function resolveDaemonProfile(client, dispatchProfile) {
+  const id = dispatchProfile?.paseoProfileId;
+  if (typeof id !== "string" || !id.trim()) throw new Error("Paseo dispatch profile is missing paseoProfileId; confirm the task profile again");
+  const installed = (await readDaemonProfiles(client)).filter((profile) => profile && profile.id === id);
+  if (installed.length !== 1) {
+    if (!installed.length) throw new Error(`Paseo profile is not installed on the selected daemon: ${id}; run bin/foreman-paseo profiles sync`);
+    throw new Error(`Paseo profile ID is duplicated on the selected daemon: ${id}; run bin/foreman-paseo profiles sync`);
+  }
+  const differences = profileDifferences(dispatchProfile, installed[0]);
+  if (differences.length) {
+    const detail = differences.map(({ field, expected, actual }) => `${field} expected ${JSON.stringify(expected)}, daemon has ${JSON.stringify(actual)}`).join("; ");
+    throw new Error(`Paseo profile is out of sync: ${id}; ${detail}; run bin/foreman-paseo profiles sync`);
+  }
+  return installed[0];
+}
+
+function actualFeatureValues(snapshot) {
+  return Object.fromEntries((snapshot?.features || []).filter((feature) => feature && typeof feature.id === "string").map((feature) => [feature.id, feature.value]));
+}
+
+function verifyAgentLaunchSettings(snapshot, dispatchProfile) {
+  const expectedFeatures = dispatchProfile?.featureValues || {};
+  const actualFeatures = actualFeatureValues(snapshot);
+  const actual = {
+    provider: snapshot?.provider,
+    model: snapshot?.model,
+    modeId: snapshot?.currentModeId,
+    thinkingOptionId: snapshot?.thinkingOptionId ?? snapshot?.effectiveThinkingOptionId,
+    featureValues: Object.fromEntries(Object.keys(expectedFeatures).map((id) => [id, actualFeatures[id]])),
+  };
+  const expected = { ...dispatchProfile, featureValues: expectedFeatures };
+  const differences = profileDifferences(expected, actual);
+  if (differences.length) {
+    const detail = differences.map(({ field, expected: wanted, actual: received }) => `${field} expected ${JSON.stringify(wanted)}, agent has ${JSON.stringify(received)}`).join("; ");
+    throw new Error(`Paseo agent launch settings verification failed: ${detail}`);
+  }
 }
 
 async function withClient(input, action) {
@@ -146,11 +217,17 @@ async function main(action, input) {
     }
     if (action === "list") return listAgents(client);
     if (action === "spawn") {
+      await resolveDaemonProfile(client, input.dispatchProfile);
       const profile = await validateProfile(client, input.dispatchProfile, input.cwd);
+      const routingProfile = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : null;
+      const paseoProfileId = profile.paseoProfileId;
+      const paseoProfileName = typeof profile.profileLabel === "string" && profile.profileLabel.trim()
+        ? profile.profileLabel.trim()
+        : routingProfile;
       const workspace = await client.workspaces.open({ cwd: input.cwd });
       if (workspace.directory && canonicalDirectory(workspace.directory) !== canonicalDirectory(input.cwd)) throw new Error("Paseo workspace directory does not match the Foreman workspace");
       const agent = await workspace.agents.create({
-        title: input.owner,
+        title: paseoProfileName || input.owner,
         config: {
           provider: `${profile.provider}/${profile.model}`,
           ...(profile.modeId ? { modeId: profile.modeId } : {}),
@@ -162,6 +239,9 @@ async function main(action, input) {
           "foreman.taskId": input.taskId,
           "foreman.projectId": input.projectId,
           "foreman.generation": String(input.generation),
+          ...(routingProfile ? { "foreman.routingProfile": routingProfile } : {}),
+          ...(paseoProfileId ? { "foreman.paseoProfileId": paseoProfileId } : {}),
+          ...(paseoProfileName ? { "foreman.paseoProfileName": paseoProfileName } : {}),
         },
       });
       await agent.refresh();
@@ -171,6 +251,11 @@ async function main(action, input) {
         || view.owner !== input.owner || view.taskId !== input.taskId || view.projectId !== input.projectId || Number(view.generation) !== Number(input.generation)) {
         await agent.archive().catch(() => {});
         throw new Error("Paseo agent identity or workspace verification failed");
+      }
+      try { verifyAgentLaunchSettings(snapshot, profile); }
+      catch (error) {
+        await agent.archive().catch(() => {});
+        throw error;
       }
       return { ...statusView(snapshot), status: "idle", provider: profile.provider, model: profile.model };
     }
@@ -220,7 +305,17 @@ async function entrypoint() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-entrypoint().catch((error) => {
-  process.stderr.write(`foreman Paseo bridge: ${error.message}\n`);
-  process.exitCode = 2;
-});
+if (require.main === module) {
+  entrypoint().catch((error) => {
+    process.stderr.write(`foreman Paseo bridge: ${error.message}\n`);
+    process.exitCode = 2;
+  });
+}
+
+module.exports = {
+  actualFeatureValues,
+  profileDifferences,
+  profileLaunchSnapshot,
+  resolveDaemonProfile,
+  verifyAgentLaunchSettings,
+};
