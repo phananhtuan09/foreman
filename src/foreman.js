@@ -1039,12 +1039,24 @@ function parsePaseoReport(raw) {
   return { status: value.status, summary: value.summary, raw };
 }
 
+const PASEO_QUIESCENT_STATUSES = new Set(["idle", "waiting", "done", "completed", "complete", "exited"]);
+
+function paseoRuntimeState(snapshot) {
+  if (snapshot.attentionReason === "permission" || (snapshot.pendingPermissions || []).length) return "waiting-input";
+  const status = String(snapshot.status || "unknown").toLowerCase();
+  if (snapshot.attentionReason === "error" || status === "error") return "error";
+  if (snapshot.requiresAttention === true && snapshot.attentionReason === "finished" && !snapshot.activeTurn) return "finished";
+  if (!snapshot.activeTurn && PASEO_QUIESCENT_STATUSES.has(status)) return "finished";
+  return status;
+}
+
 function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor, raw }) {
   const report = parsePaseoReport(raw);
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     if ((meta.backend || "herdr") !== "paseo" || meta.endpoint !== endpoint || Number(meta.generation) !== Number(generation)) throw new StaleGenerationError("Paseo report does not match the current task assignment");
     if (turnId && meta.lastPaseoTurnId === turnId) return { taskId, generation, endpoint, duplicate: true, taskStatus: meta.status };
+    if (!["working", "blocked"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; cannot record another Paseo report`);
     if (!report) {
       const at = now();
       const file = path.join(taskDir(roots.foremanHome, taskId), "reports", `paseo-invalid-g${generation}-${crypto.createHash("sha256").update(`${turnId || "unknown"}:${raw}`).digest("hex").slice(0, 12)}.txt`);
@@ -1053,7 +1065,6 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
       atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, paseoCursor: cursor || meta.paseoCursor || null, lastPaseoTurnId: turnId || null, paseoReportError: issue, paseoReportAt: at });
       return { taskId, generation, endpoint, report: null, issue, file };
     }
-    if (!["working", "blocked", "waiting-decision"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; cannot record another Paseo report`);
     const at = now();
     const file = nextReportFile(roots.foremanHome, meta, report.status);
     atomicWrite(file, [
@@ -1087,7 +1098,7 @@ function collectPaseoReports({ roots, adapter }) {
   if (!adapter || adapter.backend !== "paseo" || typeof adapter.read !== "function") throw new ValidationError("Paseo report collection requires the Paseo adapter");
   initHome(roots);
   const collected = [];
-  const active = listTasks({ roots }).filter((meta) => meta.backend === "paseo" && meta.endpoint && ["working", "blocked", "waiting-decision"].includes(meta.status));
+  const active = listTasks({ roots }).filter((meta) => meta.backend === "paseo" && meta.endpoint && ["working", "blocked"].includes(meta.status));
   for (const meta of active) {
     let snapshot;
     try { snapshot = adapter.read(meta.endpoint, meta.paseoCursor || null); }
@@ -1123,6 +1134,12 @@ function collectPaseoReports({ roots, adapter }) {
       collected.push({ taskId: meta.taskId, state: "gap", issue });
       continue;
     }
+    if (snapshot.hasNewer) {
+      const issue = { type: "worker.timeline-incomplete", reason: "Paseo timeline still has unread entries after the collection page limit" };
+      collected.push({ taskId: meta.taskId, state: "gap", issue });
+      continue;
+    }
+    const runtimeState = paseoRuntimeState(snapshot);
     const entries = (snapshot.entries || []).filter((entry) => entry.item?.type === "assistant_message" && typeof entry.item.text === "string");
     if (!entries.length && meta.paseoCursor && JSON.stringify(snapshot.cursor) === JSON.stringify(meta.paseoCursor)) {
       collected.push({ taskId: meta.taskId, state: meta.paseoReportError?.type === "worker.report-invalid" ? "report-invalid" : "current", issue: meta.paseoReportError || null });
@@ -1132,14 +1149,8 @@ function collectPaseoReports({ roots, adapter }) {
     const turnId = turnIds.at(-1) || null;
     const turnEntries = turnId ? entries.filter((entry) => entry.turnId === turnId) : entries;
     const raw = turnEntries.at(-1)?.item.text || "";
-    const finishedAt = Date.parse(snapshot.attentionTimestamp || 0);
-    const completionEvidence = snapshot.requiresAttention === true
-      && snapshot.attentionReason === "finished"
-      && Number.isFinite(finishedAt)
-      && finishedAt >= Date.parse(meta.lastPromptAt || meta.assignedAt || 0)
-      && !snapshot.activeTurn;
-    if (!completionEvidence) {
-      if (snapshot.attentionReason === "permission" || (snapshot.pendingPermissions || []).length) {
+    if (runtimeState !== "finished") {
+      if (runtimeState === "waiting-input") {
         collected.push({ taskId: meta.taskId, state: "waiting-input", permissions: snapshot.pendingPermissions || [] });
       } else collected.push({ taskId: meta.taskId, state: snapshot.status || "unknown", pending: true });
       continue;

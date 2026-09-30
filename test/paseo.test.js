@@ -89,17 +89,17 @@ class FakePaseoAdapter {
     const agent = this.agents.get(endpoint);
     if (!agent) throw new Error(`missing ${endpoint}`);
     const after = cursor?.seq ?? -1;
-    return { ...this.inspect(endpoint), entries: agent.entries.filter((entry) => entry.seq > after).map(({ seq, ...entry }) => entry), cursor: { ...agent.cursor }, gap: Boolean(agent.gap), staleCursor: Boolean(agent.staleCursor) };
+    return { ...this.inspect(endpoint), entries: agent.entries.filter((entry) => entry.seq > after).map(({ seq, ...entry }) => entry), cursor: { ...agent.cursor }, gap: Boolean(agent.gap), staleCursor: Boolean(agent.staleCursor), hasNewer: Boolean(agent.hasNewer) };
   }
-  finish(endpoint, text, { status = "idle", reason = "finished", turnId } = {}) {
+  finish(endpoint, text, { status = "idle", reason = "finished", turnId, requiresAttention = true } = {}) {
     const agent = this.agents.get(endpoint);
     const id = turnId || `turn-${agent.cursor.seq + 1}`;
     agent.cursor = { ...agent.cursor, seq: agent.cursor.seq + 1 };
     agent.entries.push({ seq: agent.cursor.seq, turnId: id, item: { type: "assistant_message", text } });
     agent.status = status;
-    agent.requiresAttention = true;
+    agent.requiresAttention = requiresAttention;
     agent.attentionReason = reason;
-    agent.attentionTimestamp = new Date().toISOString();
+    agent.attentionTimestamp = requiresAttention ? new Date().toISOString() : null;
     agent.activeTurn = null;
   }
   stop(endpoint) {
@@ -230,6 +230,43 @@ test("Paseo routes through repo profiles, dispatches a durable brief, collects a
   } finally { f.cleanup(); }
 });
 
+test("Paseo collects reports from idle providers without finished attention state", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Read README.md through an idle provider; no files changed." }), { requiresAttention: false, reason: null });
+    const result = collectPaseoReports({ roots: f.roots, adapter: f.adapter });
+    assert.equal(result.tasks[0].status, "done");
+    const completed = reconstructTask({ roots: f.roots, taskId: task.id });
+    assert.equal(completed.meta.status, "review-ready");
+    assert.match(completed.report, /idle provider/);
+  } finally { f.cleanup(); }
+});
+
+test("Paseo waits while active and records invalid reports when idle providers stop", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    const agent = f.adapter.agents.get(assignment.endpoint);
+    agent.cursor = { ...agent.cursor, seq: agent.cursor.seq + 1 };
+    agent.entries.push({ seq: agent.cursor.seq, turnId: "turn-active", item: { type: "assistant_message", text: JSON.stringify({ status: "done", summary: "too early" }) } });
+    assert.equal(collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks[0].pending, true);
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.status, "working");
+
+    agent.status = "idle";
+    agent.activeTurn = null;
+    agent.requiresAttention = false;
+    agent.attentionReason = null;
+    agent.cursor = { ...agent.cursor, seq: agent.cursor.seq + 1 };
+    agent.entries.push({ seq: agent.cursor.seq, turnId: "turn-idle", item: { type: "assistant_message", text: "not json" } });
+    const invalid = collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks[0];
+    assert.equal(invalid.state, "report-invalid");
+    const meta = reconstructTask({ roots: f.roots, taskId: task.id }).meta;
+    assert.equal(meta.status, "working");
+    assert.equal(meta.paseoReportError.type, "worker.report-invalid");
+  } finally { f.cleanup(); }
+});
+
 test("Paseo progress, blocked, follow-up, and decision delivery use the correct timeline cursor", () => {
   const f = fixture();
   try {
@@ -316,6 +353,10 @@ test("Paseo rejects invalid, duplicate, stale-generation, and timeline-gap repor
     const gap = collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === second.task.id);
     assert.equal(gap.state, "gap");
     assert.equal(reconstructTask({ roots: f.roots, taskId: second.task.id }).meta.status, "working");
+
+    const waiting = routeAndAssign(f, "Decision waiting case.");
+    createDecision({ roots: f.roots, taskId: waiting.task.id, finding: "Needs choice.", why: "Only user can choose.", options: ["A", "B"] });
+    assert.throws(() => recordPaseoReport({ roots: f.roots, taskId: waiting.task.id, endpoint: waiting.assignment.endpoint, generation: waiting.assignment.generation, turnId: "waiting", raw: JSON.stringify({ status: "done", summary: "too late" }) }), /is waiting-decision/);
   } finally { f.cleanup(); }
 });
 

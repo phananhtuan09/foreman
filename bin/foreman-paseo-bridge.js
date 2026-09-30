@@ -273,16 +273,31 @@ async function main(action, input) {
         return { cursor: page.endCursor || null };
       }
       if (action === "read") {
-        const options = { direction: input.cursor ? "after" : "tail", limit: 200, projection: "projected", ...(input.cursor ? { cursor: input.cursor } : {}) };
-        const page = await agent.timeline.refetch(options);
+        const entries = [];
+        let cursor = input.cursor || null;
+        let page;
+        let hasNewer = false;
+        let gap = false;
+        let staleCursor = false;
+        const maxPages = 20;
+        for (let pageCount = 0; pageCount < maxPages; pageCount += 1) {
+          const options = { direction: cursor ? "after" : "tail", limit: 200, projection: "projected", ...(cursor ? { cursor } : {}) };
+          page = await agent.timeline.refetch(options);
+          entries.push(...(page.entries || []));
+          cursor = page.endCursor || cursor;
+          hasNewer = Boolean(page.hasNewer);
+          gap = gap || Boolean(page.gap);
+          staleCursor = staleCursor || Boolean(page.staleCursor);
+          if (!hasNewer || !cursor) break;
+        }
         return {
           ...statusView(agent.current() || snapshot),
-          entries: page.entries || [],
-          cursor: page.endCursor || input.cursor || null,
-          startCursor: page.startCursor || null,
-          hasNewer: Boolean(page.hasNewer),
-          gap: Boolean(page.gap),
-          staleCursor: Boolean(page.staleCursor),
+          entries,
+          cursor: cursor || input.cursor || null,
+          startCursor: page?.startCursor || null,
+          hasNewer,
+          gap,
+          staleCursor,
         };
       }
       if (action === "send") {
