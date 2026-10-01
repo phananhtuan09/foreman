@@ -24,3 +24,9 @@ Use the active backend wrapper (`bin/foreman-herdr` or `bin/foreman-paseo`) for 
 5. Keep acceptance and cleanup explicit and project-bound; only the user accepts a task.
 
 There is no observer, heartbeat, or event queue: supervision happens only in Foreman turns, from the prompt-hook context or one status check.
+
+The current runtime supports one worker assignment per task; do not report SLP dispatch as available before its task model is implemented.
+When SLP support is available, inspect Peer reports under their child assignments and the Lead's integrated report under the parent.
+A Peer `done` report is not parent completion; review-ready status requires the Lead's evidence-backed review, and acceptance still requires the user.
+If the Lead is confirmed dead or missing after two status checks, keep living Peer assignments intact and use the bounded handoff procedure to replace only the Lead.
+Do not recover on `unknown` evidence or let an old Lead generation steer current child assignments.
