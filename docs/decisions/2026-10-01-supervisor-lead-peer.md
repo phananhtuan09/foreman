@@ -1,8 +1,9 @@
 # Supervisor–Lead–Peer task architecture
 
-Status: Accepted
+Status: Superseded
 Date: 2026-10-01
 Scope: Task-scoped Lead and Peer assignments, coordination, project workflow, and lifecycle boundaries
+Superseded by: [Project-scoped Supervisor–Lead–Peer architecture](2026-10-02-project-scoped-supervisor-lead-peer.md)
 
 ## Context
 

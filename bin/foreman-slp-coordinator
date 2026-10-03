@@ -1,0 +1,36 @@
+#!/usr/bin/env node
+
+const core = require("../src/foreman");
+const slp = require("../src/slp");
+const { PaseoAdapter } = require("../src/paseo");
+const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
+
+function roots() {
+  return core.resolveRoots({
+    foremanRoot: process.env.FOREMAN_ROOT || process.cwd(),
+    foremanHome: process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd(),
+  });
+}
+
+if (process.argv[2] !== "run") {
+  process.stderr.write("usage: foreman-slp-coordinator run\n");
+  process.exit(2);
+}
+
+// One coordinator per home serves both backends; each adapter is built only when a project bound to it needs it.
+const adapters = {};
+function adapterFor(backend) {
+  if (!adapters[backend]) {
+    if (backend === "paseo") adapters[backend] = new PaseoAdapter();
+    else if (backend === "herdr") adapters[backend] = new HerdrAdapter({ transport: new HerdrCliTransport({ command: process.env.FOREMAN_HERDR_COMMAND || "herdr" }) });
+    else return null;
+  }
+  return adapters[backend];
+}
+
+try {
+  slp.runCoordinator({ roots: roots(), adapterFor });
+} catch (error) {
+  process.stderr.write(`foreman SLP coordinator: ${error.message}\n`);
+  process.exitCode = 1;
+}

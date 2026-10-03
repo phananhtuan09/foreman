@@ -6,9 +6,9 @@ This index replaces the monolithic specification entry point.
 | Namespace | Contract | Topic owner |
 | --- | --- | --- |
 | Product behavior | [product/README.md](product/README.md) | [Foreman contract](product/foreman-contract.md): purpose, boundaries, invariants, supervision, lifecycle, safety, and feature admission |
-| Architecture and state | [decisions/README.md](decisions/README.md) | [State and runtime contract](decisions/state-runtime-contract.md): home layout, records, reports, adapters, workspaces, and concurrency; [accepted SLP decision](decisions/2026-10-01-supervisor-lead-peer.md) |
+| Architecture and state | [decisions/README.md](decisions/README.md) | [State and runtime contract](decisions/state-runtime-contract.md): home layout, records, reports, adapters, workspaces, and concurrency; [current SLP decision](decisions/2026-10-02-project-scoped-supervisor-lead-peer.md) |
 | Work memory and history | [plans/README.md](plans/README.md) | [Roadmap](plans/active/core-roadmap.md); [historical implementation baseline](plans/completed/implementation-baseline.md) |
-| Operational procedures | [runbooks/README.md](runbooks/README.md) | [Local operations](runbooks/local-operations.md) |
+| Operational procedures | [runbooks/README.md](runbooks/README.md) | [Local operations](runbooks/local-operations.md); [SLP rollout, measurement, and rollback](runbooks/slp-rollout-and-rollback.md) |
 
 `product/`, `decisions/`, and `runbooks/` are durable repository knowledge managed through the project-knowledge skill.
 `plans/` explicitly opts into that skill for preservation and human-requested maintenance of work memory, not as accepted intent.
@@ -41,5 +41,7 @@ Resolve these through a separately authorized investigation or contract revision
 
 ## Accepted changes since migration
 
-The Active product contract and accepted SLP architecture decision revise the Baseline contract only for task-scoped Lead-to-Peer delegation and overall task ownership.
-The runtime and CLI still implement the prior Supervisor–Worker task model; SLP dispatch must not be treated as available until that implementation and the project-local Lead skill exist.
+The Active product contract and accepted SLP decision revise the Baseline contract for one project-scoped Lead, task-scoped Peer assignments, core-mediated coordination, and task-level human acceptance.
+The 2026-10-01 task-scoped Lead decision is superseded by the 2026-10-02 project-scoped decision.
+The optional `foreman-lead` skill and its existing-installer distribution are owned by the accepted workflow-base decision in the adjacent `ai-agent-workflow` repository.
+The runtime and CLI still implement the prior Supervisor–Worker task model; SLP dispatch must not be treated as available until its implementation gates and the project-local Lead skill prerequisite pass.

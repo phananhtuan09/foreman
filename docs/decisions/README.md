@@ -5,7 +5,8 @@
 Store durable architecture, state, security, compatibility, and operational choices that future work must respect.
 Do not use this namespace for source walkthroughs, execution logs, or unapproved design proposals.
 The migrated `state-runtime-contract.md` is a baseline contract, not a newly approved ADR.
-The accepted [Supervisor–Lead–Peer task architecture](2026-10-01-supervisor-lead-peer.md) adds the SLP task model and supersedes the baseline only where its initial-release wording excludes that model.
+The accepted [project-scoped Supervisor–Lead–Peer architecture](2026-10-02-project-scoped-supervisor-lead-peer.md) governs SLP work and supersedes the earlier [task-scoped SLP decision](2026-10-01-supervisor-lead-peer.md).
+It also supersedes the Baseline state/runtime contract only where its initial-release wording excludes this accepted model.
 Future accepted decisions use `YYYY-MM-DD-<lowercase-kebab-topic>.md`; the date must be the supported decision date, not an invented historical date.
 Update the existing topic before creating a competing record.
 

@@ -9,6 +9,7 @@ Source status: Draft 0.6
 
 Foreman maintains restartable local fleet coordination separately from managed-project code.
 This baseline preserves the existing architecture contract without inventing a new approval date.
+Where this Supervisor–Worker baseline conflicts with the accepted [project-scoped SLP decision](2026-10-02-project-scoped-supervisor-lead-peer.md), the accepted decision governs new SLP work; this file remains the operating baseline for compatible legacy assignments.
 
 ## Decision
 
@@ -92,7 +93,12 @@ Task IDs are globally unique across projects:
 - `T-` identifies requested change or investigation work.
 - `B-` identifies an observed defect.
 
+Under SLP, one registered project also has one logical project Lead identity with its own runtime generation.
+Each human task remains a separate top-level task coordinated by that Lead, with direct Peer work items stored and reported as independent assignments.
+Task and assignment records in this home are canonical; `.foreman/project-state.json` inside the project is a rebuildable, read-only current-state view.
+
 Task lifecycle is the `status` field of task metadata.
+SLP tasks also record `purpose: delivery|validation`; only validation tasks may use the terminal `proof-complete` state, which retains a proof record without entering delivery acceptance.
 Acceptance deletes the task directory instead of archiving it.
 No separate priority field is introduced initially.
 
@@ -133,6 +139,8 @@ Each ownership change increments `generation` in task metadata and records the r
 Herdr assignments bind `paneId`; Paseo assignments bind `agentId` as the endpoint and also persist `workspaceId`.
 Every prompt and steering message carries task ID, project ID, owner, and generation.
 A worker report is bound to the current endpoint and generation, so a stale pane or Paseo agent cannot update task lifecycle or reports.
+For SLP, the project Lead has a separate generation from every task and Peer assignment generation.
+A Lead rollover fences only the prior Lead generation; it does not increment or replace living Peer generations.
 
 #### 7.5 Worker reports
 
@@ -150,6 +158,10 @@ A report is accepted only while the task is `working` or `blocked`.
 Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
 A scout's `done` report follows the same report lifecycle as other tasks.
 Foreman does not scan or fingerprint project files; scout read-only scope is communicated only through the read-only resource lease shown in its brief.
+For SLP, each Peer report remains bound to its child assignment and is delivered to the current project Lead, not interpreted as top-level task completion.
+The normalized report includes status, concise summary, changed surfaces, checks with their evidence source, and open items; the original backend output remains verbatim evidence.
+The Lead records child review milestones and separately reports whether the top-level task is ready, blocked, or in progress.
+Only a Lead readiness report followed by human acceptance closes the top-level task.
 
 #### 7.6 State schemas and migration
 
@@ -159,6 +171,7 @@ Schema migrations are deterministic, atomic, restart-safe, and preserve the orig
 Invalid external input is refused and cannot mutate canonical state.
 
 Message, decision, and report records carry correlation fields sufficient to trace the full flow without relying on conversation history.
+Core also regenerates the project-local current-state view from those canonical records; edits to the view never change task state.
 
 #### 7.7 Durable message outbox
 
@@ -171,6 +184,8 @@ The prompt carries no rules section; Git and resource limits are not restated to
 A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
 The `Report` section uses the Herdr report command and stop-hook guidance for Herdr assignments, and the required JSON response shape for Paseo assignments.
 The outbox retains the full message identity, payload, and delivery evidence privately.
+For SLP, the outbox carries core-validated Lead-to-Peer instructions and routes normalized Peer reports and Foreman decisions to the current generation.
+Lead requests have a separate durable identity and outcome so uncertain retries cannot create duplicate child work.
 
 Each message records at least:
 
@@ -224,6 +239,8 @@ An accepted dependency is satisfied for any task type.
 Acceptance removes that dependency ID from remaining tasks before deleting the completed task record.
 Dependency cycles and cross-project dependency references to missing tasks are rejected.
 When a dependency reaches its required terminal state, the scheduler reevaluates each dependent task and unlocks it exactly once when every dependency is satisfied.
+For SLP child work, a prerequisite is satisfied only after the current Lead records review of the Peer completion evidence; this technical milestone is separate from human acceptance of the top-level task.
+Reports and review evidence remain available until the top-level task closes even after a completed Peer releases its execution lease.
 
 #### 7.11 Runtime classification
 
@@ -295,10 +312,13 @@ A project without Git uses its canonical root path and has no branch.
 Multiple workers may share a workspace when their declared resource leases do not conflict.
 An undeclared mutation defaults to an exclusive project workspace lease.
 A conflict is a warning, not a refusal, when the human requests the assignment: an explicit dispatch, adoption, or recovery proceeds and records the overlapping leases in its own lease as evidence.
+This override applies to a legacy explicit human dispatch only; a Lead's automated SLP request never overrides a conflicting resource claim.
 
 Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`.
 Read/read claims may coexist; write or exclusive claims conflict on overlapping keys.
 Leases have an owner and generation and are held until acceptance, reassignment, or a failed dispatch releases them; they do not expire, because no heartbeat renews them and a worker may run for a long time without reporting.
+For SLP, a verified-stopped Peer may release its execution lease before human acceptance so a separate review Peer or non-conflicting task can proceed.
+Its report and review evidence remain under the parent task until that task is accepted.
 
 A preflight worker may return the structured resource claims and dependency hints.
 Foreman treats that result as scheduling input, normalizes the claims, and defaults to an exclusive project-workspace lease when no plan is supplied.
@@ -324,6 +344,8 @@ Paseo workers return the required `status` and non-empty `summary` JSON object a
 Foreman collects Paseo reports using the persisted timeline cursor and current endpoint, workspace, generation, and turn evidence.
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form request, and a request to a `blocked` or `review-ready` task returns it to `working`.
 Workers never edit the project registry or task metadata.
+For SLP, the current project Lead submits an identity-bound structured request through the same core; Herdr commands and Paseo finished-turn output map to one normalized request and report contract.
+Lead request outcomes and Peer reports are routed back to the current Lead generation without requiring a conversational Foreman turn.
 
 #### 9.4 Scheduling and concurrency
 
@@ -336,6 +358,8 @@ They are not serialized only because they share a repository.
 When isolated workspaces are required, the client must prepare and identify them before dispatch because Foreman does not create or switch worktrees.
 
 An idle endpoint may receive another task only after its prior assignment is terminal, no message to it is pending, its resource lease is released safely, and a new assignment generation is bound and verified.
+For SLP delivery tasks, accepting a task reconciles and removes only that task's Peer assignments and task-scoped records; the project Lead and other active or waiting tasks remain bound and supervised.
+An SLP validation task that reaches `proof-complete` remains recorded as validation evidence and is not accepted or removed by the delivery acceptance command.
 
 ### 17. Deliberate initial decisions
 
@@ -346,7 +370,7 @@ An idle endpoint may receive another task only after its prior assignment is ter
 - Delivery mode: `local-only` first.
 - Acceptance: user only.
 - Merge authority: none in the initial release.
-- Supervision: Herdr stop-hook reports and Paseo turn-report collection during Foreman turns; no background observer.
+- Baseline supervision: Herdr stop-hook reports and Paseo turn-report collection during Foreman turns; no background observer.
 - Project mutation: workers only, in client-prepared shared workspaces; resource leases guard concurrent mutation.
 - Legacy code: preserved under `legacy/` until parity and cutover are proven.
 
@@ -354,6 +378,10 @@ An idle endpoint may receive another task only after its prior assignment is ter
 
 The numbered sections above own the state, identity, transport, and concurrency boundaries.
 Product behavior and safety invariants remain owned by the linked product contract.
+The accepted project-scoped SLP decision amends this baseline only for project Lead identity and lifetime, core-mediated Lead requests, report routing, generated project state views, SLP resource and dependency milestones, event-driven observation, and per-task human acceptance.
+Its coordinator lifecycle is one local process per `FOREMAN_HOME`, started by an SLP command, reconciled from canonical records after restart, and stopped only after active project Lead and Peer endpoints and durable messages drain.
+The coordinator polls both existing adapters by assignment identity, retries read/inspect failures within a bounded cycle, and never blindly repeats an uncertain mutating operation.
+All other compatible schema, identity, home-lock, backend, workspace, and safety constraints remain in force.
 
 ## Consequences
 
@@ -363,6 +391,6 @@ Product behavior and safety invariants remain owned by the linked product contra
 ## References
 
 - [Product contract](../product/foreman-contract.md)
-- [Accepted Supervisor–Lead–Peer architecture decision](2026-10-01-supervisor-lead-peer.md)
+- [Accepted project-scoped Supervisor–Lead–Peer architecture decision](2026-10-02-project-scoped-supervisor-lead-peer.md)
 - [Historical implementation baseline](../plans/completed/implementation-baseline.md)
 - [Local operations](../runbooks/local-operations.md)

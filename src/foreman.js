@@ -302,16 +302,30 @@ function resourceModesConflict(left, right) {
 // Each task's resource lease lives in its metadata; expired leases no longer block other claims.
 // A lease is held until acceptance, reassignment, or a failed dispatch clears it; it never expires on its own.
 function activeResourceLeases(home) {
-  return taskIds(home).map((id) => readMeta(home, id).resourceLease).filter(Boolean);
+  return taskIds(home).map((id) => { const meta = readMeta(home, id); return meta.resourceLease ? { ...meta.resourceLease, projectId: meta.projectId } : null; }).filter(Boolean);
 }
 
-function resourceConflicts(claims, leases, ignoreLeaseId) {
+// Resource keys are fleet-wide identities except for project-relative code paths.
+// `file/` paths belong to one project, and `workspace/<project>` stands for every code path of that project.
+// `db/`, `service/`, `mcp/`, and `test/` keys name a shared service or environment, so equal keys conflict across projects.
+function claimsOverlap(requested, requestedProject, held, heldProject) {
+  const fileOf = (key) => key.startsWith("file/");
+  const workspaceOf = (key) => (key.startsWith("workspace/") ? key.slice("workspace/".length).split("/")[0] : null);
+  if (fileOf(requested.key) && fileOf(held.key)) return Boolean(requestedProject) && requestedProject === heldProject && resourceOverlaps(requested.key, held.key);
+  const requestedWorkspace = workspaceOf(requested.key);
+  const heldWorkspace = workspaceOf(held.key);
+  if (requestedWorkspace && fileOf(held.key)) return requestedWorkspace === heldProject;
+  if (heldWorkspace && fileOf(requested.key)) return heldWorkspace === requestedProject;
+  return resourceOverlaps(requested.key, held.key);
+}
+
+function resourceConflicts(claims, leases, ignoreLeaseId, projectId) {
   const conflicts = [];
   for (const lease of leases) {
     if (ignoreLeaseId && lease.leaseId === ignoreLeaseId) continue;
     for (const requested of claims) {
       for (const held of lease.resources || []) {
-        if (resourceOverlaps(requested.key, held.key) && resourceModesConflict(requested.mode, held.mode)) {
+        if (claimsOverlap(requested, projectId, held, lease.projectId) && resourceModesConflict(requested.mode, held.mode)) {
           conflicts.push({ leaseId: lease.leaseId, taskId: lease.taskId, owner: lease.owner, requested, held });
         }
       }
@@ -324,7 +338,8 @@ function resourceConflicts(claims, leases, ignoreLeaseId) {
 // A human-requested assignment may overlap held leases; the lease then records the overlaps as a warning.
 function claimResourcesUnlocked({ roots, taskId, generation, owner, resources, ignoreLeaseId, allowConflicts = false }) {
   const claims = normalizeResourceClaims(resources);
-  const conflicts = resourceConflicts(claims, activeResourceLeases(roots.foremanHome), ignoreLeaseId);
+  const projectId = readMeta(roots.foremanHome, taskId).projectId;
+  const conflicts = resourceConflicts(claims, activeResourceLeases(roots.foremanHome), ignoreLeaseId, projectId);
   if (conflicts.length && !allowConflicts) {
     const error = new ResourceBusyError("Requested resources are already leased");
     error.conflicts = conflicts;
@@ -723,26 +738,133 @@ function validateDependenciesUnlocked({ home, projectId, dependencies }) {
   for (const dependency of dependencies) visit(dependency);
 }
 
-function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
+function taskModel(meta) { return meta?.taskModel || "supervisor-worker"; }
+
+function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], backend = "herdr", taskModel: model = "supervisor-worker", purpose, parentTaskId, peerRole, dispatchProfile, profileConfirmedAt, peerMetadata }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
   if (notes != null && (typeof notes !== "string" || !notes)) throw new ValidationError("Foreman notes must be non-empty text when given");
   if (!new Set(["herdr", "paseo"]).has(backend)) throw new ValidationError(`Unsupported task backend: ${backend}`);
+  if (!["supervisor-worker", "slp", "slp-peer"].includes(model)) throw new ValidationError(`Unsupported task model: ${model}`);
   const normalizedType = normalizeTaskType(taskType || type);
   const normalizedDependencies = normalizeDependencies(dependencies);
+  if (model === "slp" && (normalizedType !== "ship" || normalizedDependencies.length)) {
+    throw new ValidationError("SLP tasks currently support ship work without top-level dependencies");
+  }
+  if (purpose !== undefined && (model !== "slp" || !["delivery", "validation"].includes(purpose))) throw new ValidationError("Task purpose is supported only for SLP delivery or validation tasks");
   initHome(roots);
   const project = findProject(roots.foremanHome, projectId);
   validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
+  let parent = null;
+  if (model === "slp-peer") {
+    if (!/^T-\d{6,}$/.test(String(parentTaskId || "")) || !["exploration", "audit", "implementation", "review", "correction"].includes(peerRole)) {
+      throw new ValidationError("SLP Peer tasks require a parent task and supported role");
+    }
+    if (!peerMetadata || typeof peerMetadata.owner !== "string" || !peerMetadata.owner || typeof peerMetadata.slpRequestId !== "string" || !peerMetadata.slpRequestId || typeof peerMetadata.slpRequestDigest !== "string" || !peerMetadata.slpRequestDigest || typeof peerMetadata.delegatedScope !== "string" || !peerMetadata.delegatedScope || !Array.isArray(peerMetadata.resources)) {
+      throw new ValidationError("SLP Peer tasks require their durable request identity, scope, and resource claims at creation");
+    }
+    parent = readMeta(roots.foremanHome, parentTaskId);
+    if (taskModel(parent) !== "slp" || parent.projectId !== project.id || parent.backend !== backend || !parent.dispatchProfile || !parent.profileConfirmedAt) {
+      throw new ValidationError("SLP Peer task does not match a confirmed parent task");
+    }
+    dispatchProfile = parent.dispatchProfile;
+    profileConfirmedAt = parent.profileConfirmedAt;
+  } else if (parentTaskId || peerRole || peerMetadata) {
+    throw new ValidationError("Only SLP Peer tasks may bind to a parent task or Peer role");
+  }
   const id = allocateTaskId(roots.foremanHome);
   atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), brief);
   if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
-  atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
-  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, notes: notes || null };
+  atomicJson(metaFile(roots.foremanHome, id), {
+    schemaVersion: 1, taskId: id, projectId: project.id, taskModel: model,
+    ...(model === "slp" ? { purpose: purpose || "delivery" } : {}),
+    ...(parent ? { parentTaskId, peerRole, dispatchProfile, profileConfirmedAt, ...peerMetadata } : {}),
+    type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0,
+    workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null,
+    backend, endpoint: null, status: parent ? "queued" : "routing",
+  });
+  return { id, projectId: project.id, type: normalizedType, taskModel: model, ...(parent ? { parentTaskId, peerRole } : {}), dependencies: normalizedDependencies, brief, notes: notes || null };
 }
 
-function createTask({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
-  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, notes, type, taskType, dependencies, backend }));
+function createTask({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr", taskModel: model = "supervisor-worker", purpose, parentTaskId, peerRole }) {
+  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, notes, type, taskType, dependencies, backend, taskModel: model, purpose, parentTaskId, peerRole }));
+  if (model === "slp-peer") return { ...task, routing: null };
   const routing = routeTask({ roots, taskId: task.id, routingRunner });
   return { ...task, routing };
+}
+
+// Create a Peer together with its idempotency key before any runtime side effect can occur.
+function createSlpPeerTask({ roots, projectId, brief, parentTaskId, peerRole, owner, requestId, requestDigest, delegatedScope, resources, peerDependencies = [], resolvesBlockers = [] }) {
+  return withHomeLock(roots.foremanHome, () => {
+    initHome(roots);
+    const parent = readMeta(roots.foremanHome, parentTaskId);
+    if (taskModel(parent) !== "slp" || parent.projectId !== projectId || !["paseo", "herdr"].includes(parent.backend) || parent.status !== "working") {
+      throw new ValidationError("SLP Peer parent is not the current working project task");
+    }
+    const existing = taskIds(roots.foremanHome).map((id) => readMeta(roots.foremanHome, id)).find((meta) => meta.taskModel === "slp-peer" && meta.parentTaskId === parentTaskId && meta.slpRequestId === requestId);
+    if (existing) {
+      if (existing.slpRequestDigest !== requestDigest) throw new ValidationError("SLP request ID was reused with a different Peer assignment payload");
+      return { id: existing.taskId, projectId: existing.projectId, taskModel: "slp-peer", parentTaskId, peerRole: existing.peerRole, dependencies: existing.dependencies || [], existing: true };
+    }
+    const task = createTaskUnlocked({
+      roots,
+      projectId,
+      brief,
+      type: "ship",
+      backend: parent.backend,
+      taskModel: "slp-peer",
+      parentTaskId,
+      peerRole,
+      peerMetadata: {
+        owner,
+        slpRequestId: requestId,
+        slpRequestDigest: requestDigest,
+        delegatedScope,
+        slpPeerDependencies: peerDependencies,
+        resolvesBlockers,
+        dispatchProfile: parent.dispatchProfile,
+        profileConfirmedAt: parent.profileConfirmedAt,
+        resources,
+      },
+    });
+    if (["implementation", "correction"].includes(peerRole)) {
+      for (const id of taskIds(roots.foremanHome)) {
+        if (id === task.id) continue;
+        const prior = readMeta(roots.foremanHome, id);
+        if (prior.parentTaskId !== parentTaskId || !["implementation", "correction"].includes(prior.peerRole) || !prior.reviewMilestoneId) continue;
+        const { reviewMilestoneId, ...unreviewed } = prior;
+        atomicJson(metaFile(roots.foremanHome, id), unreviewed);
+      }
+      const currentParent = readMeta(roots.foremanHome, parentTaskId);
+      atomicJson(metaFile(roots.foremanHome, parentTaskId), { ...currentParent, latestReviewId: null, reviewStatus: null });
+    }
+    return task;
+  });
+}
+
+// Classify legacy v1 task records before SLP uses the task store. Each source byte sequence is
+// backed up before the additive model discriminator is written, so an interrupted migration
+// resumes without discarding either the original or the migrated record.
+function migrateSlpTaskModels({ roots } = {}) {
+  return withHomeLock(roots.foremanHome, () => {
+    initHome(roots);
+    const migrated = [];
+    for (const id of taskIds(roots.foremanHome)) {
+      const file = metaFile(roots.foremanHome, id);
+      const raw = fs.readFileSync(file);
+      const meta = coordination.validateTaskMetaRecord(JSON.parse(raw.toString("utf8")), id);
+      if (taskModel(meta) !== "supervisor-worker") continue;
+      if (meta.taskModel === "supervisor-worker") continue;
+      const backup = `${file}.pre-slp-task-model-v1`;
+      if (!fs.existsSync(backup)) atomicWrite(backup, raw);
+      atomicJson(file, { ...meta, taskModel: "supervisor-worker" });
+      migrated.push(id);
+    }
+    const migrationFile = path.join(roots.foremanHome, "data", "migrations", "slp-task-model-v1.json");
+    const previous = fs.existsSync(migrationFile) ? JSON.parse(fs.readFileSync(migrationFile, "utf8")) : null;
+    const migratedTaskIds = [...new Set([...(previous?.migratedTaskIds || []), ...migrated])].sort();
+    atomicJson(migrationFile, { schemaVersion: 1, migrationId: "slp-task-model-v1", status: "complete", migratedTaskIds, completedAt: now() });
+    return { migrationId: "slp-task-model-v1", migratedTaskIds };
+  });
 }
 
 function dependencySatisfied(meta) {
@@ -752,7 +874,7 @@ function dependencySatisfied(meta) {
 
 function assertTaskDispatchable(home, taskId, { allowWaitingDecision = false } = {}) {
   const meta = readMeta(home, taskId);
-  if (["accepted", "review-ready", "cleaned"].includes(meta.status)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
+  if (["accepted", "review-ready", "proof-complete", "cleaned"].includes(meta.status)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
   if (meta.status === "waiting-decision" && !allowWaitingDecision) throw new ValidationError(`Task is waiting for a human decision: ${taskId}`);
   for (const dependency of meta.dependencies || []) {
     if (!fs.existsSync(metaFile(home, dependency)) || !dependencySatisfied(readMeta(home, dependency))) throw new ValidationError(`Task is blocked by dependency: ${dependency}`);
@@ -831,6 +953,10 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       schemaVersion: 1,
       taskId,
       projectId: project.id,
+      taskModel: taskModel(prior),
+      ...(prior.parentTaskId ? { parentTaskId: prior.parentTaskId, peerRole: prior.peerRole } : {}),
+      ...Object.fromEntries(["slpRequestId", "slpRequestDigest", "delegatedScope", "slpPeerDependencies", "resolvesBlockers"]
+        .filter((key) => prior[key] !== undefined).map((key) => [key, prior[key]])),
       type: taskType,
       dependencies: prior.dependencies || [],
       owner,
@@ -919,7 +1045,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       }
       const notesFile = path.join(taskDir(roots.foremanHome, taskId), "notes.md");
       const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : null;
-      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, backend, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, notes, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, backend, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, notes, taskType, taskModel: taskModel(prior), parentTaskId: prior.parentTaskId || null, peerRole: prior.peerRole || null, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
       const promptAt = now();
@@ -1007,6 +1133,20 @@ function nextReportFile(home, meta, status) {
   return path.join(dir, `${prefix}${String(count + 1).padStart(3, "0")}-${status}.md`);
 }
 
+const REPORT_CHECK_RESULTS = ["passed", "failed", "error", "skipped", "not-run"];
+
+// The normalized Peer report shared by both backends; identity comes from the canonical assignment, never from this object.
+function parseSlpPeerReport(text, meta) {
+  let value;
+  try { value = JSON.parse(String(text).trim()); } catch (_) { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1 || value.assignmentId !== meta.taskId || Number(value.generation) !== Number(meta.generation)
+    || !REPORT_STATUSES.includes(value.status) || typeof value.summary !== "string"
+    || !Array.isArray(value.changedSurfaces) || value.changedSurfaces.some((item) => typeof item !== "string")
+    || !Array.isArray(value.checks) || value.checks.some((check) => !check || typeof check.name !== "string" || !check.name.trim() || !REPORT_CHECK_RESULTS.includes(check.result) || typeof check.source !== "string" || !check.source.trim() || typeof check.evidence !== "string" || !check.evidence.trim())
+    || !Array.isArray(value.openItems) || value.openItems.some((item) => typeof item !== "string")) return null;
+  return value;
+}
+
 function recordReport({ roots, paneId, status, summary }) {
   if (!REPORT_STATUSES.includes(status)) throw new ValidationError(`Report status must be one of: ${REPORT_STATUSES.join(", ")}`);
   if (typeof summary !== "string" || !summary.trim()) throw new ValidationError("Report summary must not be empty");
@@ -1014,6 +1154,11 @@ function recordReport({ roots, paneId, status, summary }) {
     const meta = findTaskForPane(roots.foremanHome, paneId);
     if (!meta) throw new ValidationError("This pane is not bound to an active Foreman task");
     if (!["working", "blocked"].includes(meta.status)) throw new ValidationError(`Task ${meta.taskId} is ${meta.status}; wait for Foreman before reporting again`);
+    if (meta.taskModel === "slp-peer") {
+      const normalized = parseSlpPeerReport(summary, meta);
+      if (!normalized) throw new ValidationError(`SLP Peer reports must be the normalized JSON report object for assignment ${meta.taskId} generation ${meta.generation}`);
+      if (normalized.status !== status) throw new ValidationError("SLP Peer report JSON status must equal --status");
+    }
     const at = now();
     const file = nextReportFile(roots.foremanHome, meta, status);
     // Every report is kept verbatim under its own name.
@@ -1057,11 +1202,14 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
     if ((meta.backend || "herdr") !== "paseo" || meta.endpoint !== endpoint || Number(meta.generation) !== Number(generation)) throw new StaleGenerationError("Paseo report does not match the current task assignment");
     if (turnId && meta.lastPaseoTurnId === turnId) return { taskId, generation, endpoint, duplicate: true, taskStatus: meta.status };
     if (!["working", "blocked"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; cannot record another Paseo report`);
-    if (!report) {
+    // An SLP Peer's report must already be the normalized object the Lead's delivery will parse; a near miss
+    // (such as a string schemaVersion) is rejected here instead of stranding a stopped Peer at delivery.
+    const peerReportInvalid = report && meta.taskModel === "slp-peer" && !parseSlpPeerReport(report.raw, meta);
+    if (!report || peerReportInvalid) {
       const at = now();
       const file = path.join(taskDir(roots.foremanHome, taskId), "reports", `paseo-invalid-g${generation}-${crypto.createHash("sha256").update(`${turnId || "unknown"}:${raw}`).digest("hex").slice(0, 12)}.txt`);
       atomicWrite(file, String(raw));
-      const issue = { type: "worker.report-invalid", reason: "Paseo final response did not match the required report object", file };
+      const issue = { type: "worker.report-invalid", reason: peerReportInvalid ? `SLP Peer report is not the normalized JSON object for assignment ${taskId} generation ${meta.generation} (schemaVersion must be the number 1)` : "Paseo final response did not match the required report object", file };
       atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, paseoCursor: cursor || meta.paseoCursor || null, lastPaseoTurnId: turnId || null, paseoReportError: issue, paseoReportAt: at });
       return { taskId, generation, endpoint, report: null, issue, file };
     }
@@ -1094,11 +1242,14 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
   });
 }
 
-function collectPaseoReports({ roots, adapter }) {
+function collectPaseoReports({ roots, adapter, taskIds: selectedTaskIds }) {
   if (!adapter || adapter.backend !== "paseo" || typeof adapter.read !== "function") throw new ValidationError("Paseo report collection requires the Paseo adapter");
   initHome(roots);
   const collected = [];
-  const active = listTasks({ roots }).filter((meta) => meta.backend === "paseo" && meta.endpoint && ["working", "blocked"].includes(meta.status));
+  const selected = selectedTaskIds ? new Set(selectedTaskIds) : null;
+  const active = listTasks({ roots }).filter((meta) => meta.backend === "paseo" && meta.endpoint && ["working", "blocked"].includes(meta.status)
+    && !(meta.taskModel === "slp-peer" && meta.peerRuntimeStopped)
+    && (!selected || selected.has(meta.taskId)));
   for (const meta of active) {
     let snapshot;
     try { snapshot = adapter.read(meta.endpoint, meta.paseoCursor || null); }
@@ -1184,7 +1335,7 @@ function workerStopHook({ roots, paneId, payload = {} }) {
     `You are Foreman worker @${meta.owner} on task ${meta.taskId} (project ${meta.projectId}, generation ${meta.generation}).`,
     "Before ending this turn, report to Foreman with exactly one command:",
     "",
-    ...coordination.REPORT_COMMAND,
+    ...(meta.taskModel === "slp-peer" ? coordination.SLP_PEER_REPORT_COMMAND : coordination.REPORT_COMMAND),
   ].join("\n");
   return { decision: "block", reason };
 }
@@ -1230,6 +1381,7 @@ function acceptTask({ roots, taskId, adapter }) {
   return withHomeLock(roots.foremanHome, () => {
     if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
     let meta = readMeta(roots.foremanHome, taskId);
+    if (taskModel(meta) !== "supervisor-worker") throw new ValidationError("SLP tasks require their task-scoped Peer acceptance lifecycle");
     assertAdapterBackend(meta, adapter, "accepting it");
     const alreadyAccepted = ["accepted", "cleaned"].includes(meta.status);
     if (!alreadyAccepted && meta.status !== "review-ready") throw new ValidationError("Only review-ready tasks can be accepted");
@@ -1262,6 +1414,7 @@ function isUntouchedQueuedTask(meta) {
 function discardTask({ roots, taskId, adapter }) {
   if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
   const observed = readMeta(roots.foremanHome, taskId);
+  if (taskModel(observed) !== "supervisor-worker") throw new ValidationError("SLP tasks and Peers can be removed only through their task-scoped lifecycle");
   if (adapter) assertAdapterBackend(observed, adapter, "discarding it");
   let workerState = null;
   if (!isUntouchedQueuedTask(observed)) {
@@ -1323,7 +1476,11 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
   if (!worker) throw new ValidationError("Adoption requires an explicit worker");
   if (!taskId && !brief) throw new ValidationError("Adoption requires an existing queued task or a requirement");
   if (!adapter || typeof adapter.inspect !== "function" || typeof adapter.list !== "function") throw new ValidationError("Adoption requires runtime inspection");
-  if (taskId) assertAdapterBackend(readMeta(roots.foremanHome, taskId), adapter, "adopting it");
+  if (taskId) {
+    const target = readMeta(roots.foremanHome, taskId);
+    if (taskModel(target) !== "supervisor-worker") throw new ValidationError("Only Supervisor–Worker tasks can adopt a runtime endpoint");
+    assertAdapterBackend(target, adapter, "adopting it");
+  }
     const owner = String(worker).replace(/^@/, "");
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
@@ -1435,7 +1592,7 @@ function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, a
     const backend = assertAdapterBackend(meta, adapter, "messaging its worker");
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
     if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
-    const messagePayload = { ...payload, backend };
+    const messagePayload = { ...payload, backend, taskModel: taskModel(meta), parentTaskId: meta.parentTaskId || null, peerRole: meta.peerRole || null };
     const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: messagePayload });
     const promptAt = now();
     if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
@@ -1551,6 +1708,7 @@ function recoveryOwnerName(meta) {
 function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts = 3 }) {
   initHome(roots);
   const initial = readMeta(roots.foremanHome, taskId);
+  if (taskModel(initial) !== "supervisor-worker") throw new ValidationError("SLP recovery is not part of the serial pilot; preserve its assignment and reports for explicit review");
   assertAdapterBackend(initial, adapter, "recovering it");
   const fleet = coordination.reconcileFleet({ roots, adapter });
   const item = fleet.tasks.find((entry) => entry.taskId === taskId);
@@ -1589,7 +1747,7 @@ function fleetStatus({ roots, adapter, projectId } = {}) {
   const reconciliation = coordination.reconcileFleet({ roots, adapter });
   const reconciledById = new Map(reconciliation.tasks.map((item) => [item.taskId, item]));
   const tasks = listTasks({ roots, projectId }).map((meta) => reconciledById.get(meta.taskId) || ({ taskId: meta.taskId, meta, worker: null, state: meta.status, issues: [] }));
-  const workers = projectId ? reconciliation.workers.filter((worker) => tasks.some((item) => item.worker === worker)) : reconciliation.workers;
+  const workers = projectId ? reconciliation.workers.filter((worker) => worker.projectId === projectId || tasks.some((item) => item.worker === worker)) : reconciliation.workers;
   const byStatus = {};
   for (const item of tasks) byStatus[item.state] = (byStatus[item.state] || 0) + 1;
   return {
@@ -1609,12 +1767,12 @@ function projectStatus({ roots, adapter, projectId } = {}) {
 }
 
 function dispatchReadyTasks({ roots, adapter, ownerForTask, maxConcurrency = Infinity, projectLimits = {}, assignmentOptions = {} }) {
-  const active = listTasks({ roots }).filter((meta) => ["working", "blocked", "waiting-decision"].includes(meta.status));
+  const active = listTasks({ roots }).filter((meta) => taskModel(meta) === "supervisor-worker" && ["working", "blocked", "waiting-decision"].includes(meta.status));
   const results = [];
   const fleetLimit = Number.isFinite(Number(maxConcurrency)) ? Number(maxConcurrency) : Infinity;
   const counts = new Map();
   for (const meta of active) counts.set(meta.projectId, (counts.get(meta.projectId) || 0) + 1);
-  for (const task of listTasks({ roots, statuses: ["queued", "pending"] })) {
+  for (const task of listTasks({ roots, statuses: ["queued", "pending"] }).filter((meta) => taskModel(meta) === "supervisor-worker")) {
     if ((task.backend || "herdr") !== (adapter?.backend || "herdr")) continue;
     if (results.length + active.length >= fleetLimit) break;
     const limit = Object.prototype.hasOwnProperty.call(projectLimits, task.projectId) ? Number(projectLimits[task.projectId]) : Infinity;
@@ -1751,13 +1909,15 @@ module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
+  taskModel, migrateSlpTaskModels, createSlpPeerTask, materializeDispatchProfile,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
-  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
+  recordReport, parseSlpPeerReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,
+  loadProjects,
   canonical, gitBranch, gitTop, gitCommonDir, projectVcs, workspaceBelongsToProject,
   listMessages: coordination.listMessages,
   coordinationDirs: coordination.coordinationDirs,
