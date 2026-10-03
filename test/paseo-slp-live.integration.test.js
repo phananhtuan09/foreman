@@ -37,9 +37,11 @@ function makeProject(base, name) {
   execFileSync("git", ["-C", root, "config", "user.name", "Foreman SLP live"]);
   fs.writeFileSync(path.join(root, "README.md"), `${name}: Foreman SLP live fixture.\n`);
   fs.writeFileSync(path.join(root, "AGENTS.md"), "# Project instructions\nThis is a disposable test project. Change only what the assignment names.\n");
-  const skill = path.join(root, ".claude", "skills", "foreman-lead", "SKILL.md");
-  fs.mkdirSync(path.dirname(skill), { recursive: true });
-  fs.copyFileSync(path.join(sourceRoot, ".claude", "skills", "foreman-lead", "SKILL.md"), skill);
+  for (const directory of [".claude", ".agents"]) {
+    const skill = path.join(root, directory, "skills", "foreman-lead", "SKILL.md");
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, ".claude", "skills", "foreman-lead", "SKILL.md"), skill);
+  }
   execFileSync("git", ["-C", root, "add", "-A"]);
   execFileSync("git", ["-C", root, "commit", "-m", "fixture"], { stdio: "ignore" });
   return root;
@@ -50,6 +52,7 @@ function makeProject(base, name) {
 const LEAD_RULES = [
   "Follow the installed foreman-lead skill and use exactly the Lead requests listed here, each with its exact requestId, one request per turn.",
   "Do not add other Peers.",
+  "Every report-task payload requires a non-empty summary. Every review milestone uses reviewAssignmentId, relatedAssignmentIds, outcome, evidence, changedSurfaces, checks, integrationResult, unresolvedRisks, and summary exactly as the installed skill specifies.",
   "If a Foreman message needs none of the listed actions (for example an outcome that only confirms a dispatch or a wait), end the turn without any JSON envelope and with at most the plain word \"waiting\".",
 ];
 
@@ -70,6 +73,7 @@ async function withLiveEnv({ projects, capacity = { maxActiveTasksPerProject: 2,
   const foremanHome = path.join(base, "foreman-home");
   const foremanRoot = path.join(base, "foreman-root");
   fs.mkdirSync(path.join(foremanRoot, "config"), { recursive: true });
+  for (const directory of ["src", "bin", "node_modules"]) fs.symlinkSync(path.join(sourceRoot, directory), path.join(foremanRoot, directory), "dir");
   for (const file of ["model-routing.json", "paseo-agent-profiles.json"]) fs.copyFileSync(path.join(sourceRoot, "config", file), path.join(foremanRoot, "config", file));
   const routingFile = path.join(foremanRoot, "config", "model-routing.json");
   const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
@@ -104,8 +108,8 @@ async function withLiveEnv({ projects, capacity = { maxActiveTasksPerProject: 2,
       requests: (projectId) => readRequests(foremanHome, projectId),
       request: (projectId, requestId) => readRequests(foremanHome, projectId).find((item) => item.requestId === requestId),
       anomalies: (projectId) => slp.projectStatus({ roots, projectId }).anomalies,
-      newTask(projectId, text) {
-        const task = core.createTask({ roots, projectId, backend: "paseo", taskModel: "slp", brief: text, routingRunner: () => ({ profile: profileName, reason: "Live SLP check profile." }) });
+      newTask(projectId, text, purpose = "delivery") {
+        const task = core.createTask({ roots, projectId, backend: "paseo", taskModel: "slp", purpose, brief: text, routingRunner: () => ({ profile: profileName, reason: "Live SLP check profile." }) });
         core.confirmTaskProfile({ roots, taskId: task.id, profile: profileName });
         if (!slp.readLead(foremanHome, projectId)) slp.confirmProjectLeadProfile({ roots, projectId, profileName, backend: "paseo", adapter });
         return task.id;
@@ -120,12 +124,12 @@ async function withLiveEnv({ projects, capacity = { maxActiveTasksPerProject: 2,
         })), null, 1);
       },
       // Tick the coordinator until the condition holds; the request ceiling bounds token spend if a Lead loops.
-      async until(label, condition, { timeoutMs = 2400000, maxRequestsPerProject = 45, onTick } = {}) {
+      async until(label, condition, { timeoutMs = 2400000, maxRequestsPerProject = 45, onTick, background = false } = {}) {
         const deadline = Date.now() + timeoutMs;
         let lastLog = 0;
         const logged = new Set();
         while (Date.now() < deadline) {
-          slp.coordinatorTick({ roots, adapter });
+          if (!background) slp.coordinatorTick({ roots, adapter });
           if (onTick) onTick();
           for (const id of projects) {
             for (const item of readRequests(foremanHome, id)) {
@@ -143,6 +147,13 @@ async function withLiveEnv({ projects, capacity = { maxActiveTasksPerProject: 2,
     };
     await body(ctx);
   } finally {
+    const coordinatorFile = path.join(foremanHome, "data", "slp", "coordinator.json");
+    if (fs.existsSync(coordinatorFile)) {
+      const coordinator = JSON.parse(fs.readFileSync(coordinatorFile, "utf8"));
+      if (coordinator.script === path.join(roots.foremanRoot, "bin", "foreman-slp-coordinator")) {
+        try { process.kill(coordinator.pid, "SIGTERM"); } catch (_) {}
+      }
+    }
     if (adapter) {
       for (const id of projects) {
         try { const lead = slp.readLead(foremanHome, id); if (lead?.endpoint) adapter.stop(lead.endpoint); } catch (_) {}
@@ -168,7 +179,7 @@ function simpleBrief(projectName) {
     `1. requestId "S-impl": create-peer, role implementation, scope "docs/live.txt", resources [${resourceJson("file/docs/live.txt", "write")}], dependsOn []. The Peer brief must say: first run \`sleep 60\`, then create docs/live.txt with the exact line, and report changedSurfaces ["docs/live.txt"] with a check that shows the file content.`,
     `2. After the implementation report arrives: requestId "S-review", create-peer role review, scope "docs/live.txt", resources [${resourceJson("file/docs/live.txt", "read")}], dependsOn [the implementation assignment ID]. The review Peer only reads the file and reports whether it matches.`,
     "3. After the review report arrives and it passes: requestId \"S-record\", record-review with the review assignment, changedSurfaces [\"docs/live.txt\"], and the evidence you received.",
-    "4. Then requestId \"S-ready\": report-task with status ready.",
+    "4. Then requestId \"S-ready\": report-task with status ready and a non-empty summary of the reviewed outcome.",
   ].join("\n");
 }
 
@@ -207,13 +218,17 @@ test("live Paseo SLP: two projects run the same project-relative path together, 
     const evidence = slp.taskEvidence({ roots, taskId: taskIds[ids[0]] });
     assert.ok(evidence.peers.every((peer) => peer.reportFile && fs.existsSync(peer.reportFile)));
     slp.pauseProjectLead({ roots, projectId: ids[0], paused: true });
-    const third = env.newTask(ids[0], "Must not start while intake is paused.");
+    const third = env.newTask(ids[0], "Validate resumed intake only. Create no Peers. Once this task is dispatched, return requestId S-resume-progress: report-task with status progress and summary Resumed intake. Otherwise return exactly waiting.", "validation");
     assert.throws(() => env.dispatch(third), /intake is paused/);
     slp.coordinatorTick({ roots, adapter });
     assert.equal(env.readTask(third).status, "queued");
 
     // The test home's human closes both tasks; measurements are frozen and the Leads survive.
     const leadEndpoints = ids.map((id) => slp.readLead(foremanHome, id).endpoint);
+    const otherPeerIds = env.peers(taskIds[ids[1]]).map((peer) => peer.taskId);
+    assert.throws(() => slp.acceptSlpTask({ roots, taskId: taskIds[ids[0]], adapter, afterPeerCleanup: () => { throw new Error("injected interruption after one Peer cleanup"); } }), /injected interruption/);
+    assert.equal(slp.fleetMetrics({ roots }).tasks.find((item) => item.taskId === taskIds[ids[0]]).status, "closing");
+    for (const peerId of otherPeerIds) assert.ok(env.readTask(peerId), "partial closure never touches the other project");
     for (const id of ids) assert.equal(slp.acceptSlpTask({ roots, taskId: taskIds[id], adapter }).closed, true);
     const fleet = slp.fleetMetrics({ roots });
     for (const id of ids) {
@@ -223,7 +238,76 @@ test("live Paseo SLP: two projects run the same project-relative path together, 
       assert.equal(closed.peerCount, metrics[id].peerCount);
     }
     for (const endpoint of leadEndpoints) assert.notEqual(adapter.inspect(endpoint).status, "missing");
+    assert.equal(env.readTask(third).status, "queued", "paused intake stays queued after closure frees capacity");
+    slp.pauseProjectLead({ roots, projectId: ids[0], paused: false });
+    await env.until("resumed intake starts the queued validation automatically", () => env.readTask(third).status === "working" && env.request(ids[0], "S-resume-progress")?.status === "completed");
     process.stderr.write(`[live] metrics ${JSON.stringify(fleet.totals)}\n`);
+  });
+});
+
+test("live Paseo SLP: coordinator restart replays a downtime report once, reconciles uncertain delivery, and resumes interrupted closure", { skip: !enabled, timeout: 3000000 }, async () => {
+  await withLiveEnv({ projects: ["live-restart"] }, async (env) => {
+    const { roots, adapter, foremanHome } = env;
+    const coordination = require("../src/coordination");
+    const taskId = env.newTask("live-restart", simpleBrief("live-restart"));
+    env.dispatch(taskId);
+    await env.until("implementation Peer active before coordinator outage", () => env.peers(taskId).some((peer) => peer.endpoint && adapter.inspect(peer.endpoint).activeTurn));
+    const peer = env.peers(taskId)[0];
+    const first = slp.startCoordinatorProcess({ roots, backend: "paseo" });
+    const same = slp.startCoordinatorProcess({ roots, backend: "paseo" });
+    assert.equal(same.alreadyRunning, true);
+    assert.equal(same.pid, first.pid);
+    const coordinatorFile = path.join(foremanHome, "data", "slp", "coordinator.json");
+    await env.until("coordinator running", () => JSON.parse(fs.readFileSync(coordinatorFile, "utf8")).status === "running", { background: true });
+    process.kill(first.pid, "SIGKILL");
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try { process.kill(first.pid, 0); } catch (_) { break; }
+      await sleep(100);
+    }
+    assert.throws(() => process.kill(first.pid, 0), /ESRCH/);
+    await env.until("Peer finished while coordinator is down", () => !adapter.inspect(peer.endpoint).activeTurn, { background: true });
+    assert.equal(env.readTask(peer.taskId).lastReport, undefined, "the report has not yet been collected");
+    assert.equal(env.readTask(peer.taskId).resourceLease.leaseId, peer.resourceLease.leaseId);
+    const resumed = slp.ensureCoordinatorRunning({ roots, backend: "paseo" });
+    assert.equal(resumed.started, true);
+    assert.notEqual(resumed.pid, first.pid);
+    await env.until("downtime report collected and delivered", () => Boolean(env.readTask(peer.taskId).peerReportDeliveredAt), { background: true });
+    assert.equal(env.peers(taskId).filter((item) => item.slpRequestId === "S-impl").length, 1);
+    const reports = () => coordination.listMessages({ roots }).filter((message) => message.kind === "slp-peer-report" && message.payload.assignmentId === peer.taskId);
+    assert.equal(reports().length, 1);
+    assert.equal(reports()[0].status, "delivered");
+    await env.until("task ready after restart", () => env.readTask(taskId).status === "review-ready", { background: true });
+
+    // Use a second active validation task to lose a send acknowledgement after a real accepted send.
+    const validation = env.newTask("live-restart", "No Peer work is required. Return exactly waiting until Foreman supplies a follow-up.", "validation");
+    env.dispatch(validation);
+    const lead = slp.readLead(foremanHome, "live-restart");
+    await env.until("Lead idle before uncertain send", () => !adapter.inspect(lead.endpoint).activeTurn, { background: true });
+    const send = adapter.send.bind(adapter);
+    let sends = 0;
+    adapter.send = (...args) => { sends += 1; send(...args); throw new Error("injected lost acknowledgement after accepted send"); };
+    let followup;
+    try { followup = slp.followupProjectLead({ roots, taskId: validation, text: "No additional work. Return exactly waiting.", adapter, startCoordinator: false }); }
+    finally { adapter.send = send; }
+    assert.equal(followup.delivery.uncertain, true);
+    assert.equal(sends, 1);
+    await env.until("uncertain send reconciled without resending", () => coordination.listMessages({ roots }).find((message) => message.messageId === followup.delivery.messageId)?.status === "delivered", { background: true });
+    const message = coordination.listMessages({ roots }).find((item) => item.messageId === followup.delivery.messageId);
+    const timeline = adapter.read(lead.endpoint, message.cursorBefore);
+    assert.equal(timeline.entries.filter((entry) => entry.messageId === message.messageId || entry.item?.messageId === message.messageId || entry.item?.id === message.messageId).length, 1);
+
+    slp.pauseProjectLead({ roots, projectId: "live-restart", paused: true });
+    assert.throws(() => slp.acceptSlpTask({ roots, taskId, adapter, afterPeerCleanup: () => { throw new Error("injected partial closure"); } }), /injected partial closure/);
+    assert.equal(slp.fleetMetrics({ roots }).tasks.find((item) => item.taskId === taskId).status, "closing");
+    const firstAccept = slp.acceptSlpTask({ roots, taskId, adapter });
+    const secondAccept = slp.acceptSlpTask({ roots, taskId, adapter });
+    assert.equal(firstAccept.acceptedAt, secondAccept.acceptedAt);
+    assert.equal(slp.fleetMetrics({ roots }).tasks.find((item) => item.taskId === taskId).acceptances, 1);
+    assert.equal(env.readTask(validation).leadEndpoint, lead.endpoint);
+    assert.equal(slp.readLead(foremanHome, "live-restart").endpoint, lead.endpoint);
+    assert.equal(slp.coordinatorHasWork(roots), true);
+    printMetrics("restart:closed", slp.fleetMetrics({ roots }).tasks.find((item) => item.taskId === taskId));
   });
 });
 
@@ -236,7 +320,7 @@ function claimBrief(projectName) {
     "3. When both implementation reports have arrived, Foreman marks C-impl-ab as exceeding its claim (claimExceeded lists docs/b.txt) and blocks it. Do not request a review yet. Send requestId \"C-fix\": create-peer, role correction, scope \"docs/a.txt docs/b.txt\", resources [" + [resourceJson("file/docs/a.txt", "write"), resourceJson("file/docs/b.txt", "write")].join(",") + "], dependsOn [], resolves [the C-impl-ab assignment ID]. The Peer brief must say: verify docs/a.txt and docs/b.txt contain exactly their lines, change nothing if they are correct, and report changedSurfaces [\"docs/a.txt\",\"docs/b.txt\"] with a check that shows both contents.",
     `4. After the correction report arrives: requestId "C-review", create-peer role review, scope "docs/a.txt docs/b.txt docs/c.txt", resources [${["a", "b", "c"].map((name) => resourceJson(`file/docs/${name}.txt`, "read")).join(",")}], dependsOn [the C-impl-c assignment ID, the C-fix assignment ID]. The review Peer only reads the three files and reports whether each matches its required line.`,
     "5. After the review report arrives and it passes: requestId \"C-record\", record-review with the review assignment as reviewAssignmentId, relatedAssignmentIds listing the C-impl-ab, C-impl-c, and C-fix assignment IDs, outcome accepted, changedSurfaces [\"docs/a.txt\",\"docs/b.txt\",\"docs/c.txt\"], and the evidence you received.",
-    "6. Then requestId \"C-ready\": report-task with status ready.",
+    "6. Then requestId \"C-ready\": report-task with status ready and a non-empty summary of the reviewed outcome.",
   ].join("\n");
 }
 
@@ -285,7 +369,8 @@ test("live Paseo SLP: a Peer outside its claims is blocked until a correction Pe
 
     const metrics = slp.taskMetrics({ roots, taskId });
     assert.deepEqual(metrics.peersByRole, { implementation: 2, correction: 1, review: 1 });
-    assert.equal(metrics.runtimeFailures, 0);
+    assert.equal(metrics.runtimeFailures, 1, "the deliberately exceeded claim is retained in the measurements");
+    assert.deepEqual(metrics.runtimeFailureTypes, ["peer.claim-exceeded"]);
     assert.equal(metrics.humanInterventions, 0);
     printMetrics("larger:claim", metrics);
   });
@@ -300,8 +385,8 @@ function waitBriefs() {
     `1. requestId "W1-impl": create-peer, role implementation, scope "docs/shared.txt", resources [${sharedWrite}], dependsOn []. The Peer brief must say: first run \`sleep 150\`, then create docs/shared.txt with the line "task one", and report changedSurfaces ["docs/shared.txt"] with a check that shows the file content.`,
     `2. After the implementation report arrives: requestId "W1-review", create-peer role review, scope "docs/shared.txt", resources [${sharedRead}], dependsOn [the W1-impl assignment ID]. The review Peer only reads the file and reports whether it contains the line "task one" (other lines from other tasks may also be present).`,
     "3. After the review report arrives and it passes: requestId \"W1-record\", record-review with the review assignment as reviewAssignmentId, relatedAssignmentIds [the W1-impl assignment ID], outcome accepted, changedSurfaces [\"docs/shared.txt\"], and the evidence you received.",
-    "4. Then requestId \"W1-ready\": report-task with status ready.",
-    "5. Only if Foreman later says this task's readiness was invalidated: requestId \"W1-review-2\", create-peer role review with the same scope, read claim, and dependsOn as step 2; after it passes, requestId \"W1-record-2\", record-review again with the same fields, then requestId \"W1-ready-2\": report-task ready.",
+    "4. Then requestId \"W1-ready\": report-task with status ready and a non-empty summary of the reviewed outcome.",
+    "5. Only if Foreman later says this task's readiness was invalidated: requestId \"W1-review-2\", create-peer role review with the same scope, read claim, and dependsOn as step 2; after it passes, requestId \"W1-record-2\", record-review again with the same fields, then requestId \"W1-ready-2\": report-task with status ready and a non-empty summary of the reviewed outcome.",
   ].join("\n");
   const two = [
     "Task two in project live-wait: append the line \"task two\" to docs/shared.txt. Change nothing else.",
@@ -387,6 +472,115 @@ function coordinationOutcomes(roots, requestId) {
     .map((message) => message.payload.outcome.status);
 }
 
+test("live Paseo SLP: runtime health, bounded read retries, and explicit recovery exhaustion preserve identity and leases", { skip: !enabled, timeout: 3000000 }, async () => {
+  await withLiveEnv({ projects: ["live-health"] }, async (env) => {
+    const { roots, adapter, foremanHome } = env;
+    const taskId = env.newTask("live-health", [
+      "Validate runtime supervision without changing project files.",
+      ...LEAD_RULES,
+      `Request H-peer exactly once: create-peer role exploration, scope README.md, resources [${resourceJson("file/README.md", "read")}], dependsOn []. The Peer brief must say: run sleep 600 (also after recovery), then read README.md and report done with changedSurfaces [] and a check of its content.`,
+      "While the Peer has not reported, return exactly waiting. Do not request additional Peers or task readiness.",
+    ].join("\n"));
+    env.dispatch(taskId);
+    await env.until("a real exploration Peer running", () => env.peers(taskId).some((peer) => peer.endpoint && adapter.inspect(peer.endpoint).activeTurn));
+    const peer = env.peers(taskId)[0];
+    const inspect = adapter.inspect.bind(adapter);
+    const metaFile = path.join(foremanHome, "data", "tasks", peer.taskId, "meta.json");
+    const leaseId = peer.resourceLease.leaseId;
+    const intact = () => {
+      const current = env.readTask(peer.taskId);
+      assert.equal(current.endpoint, peer.endpoint);
+      assert.equal(current.generation, peer.generation);
+      assert.equal(current.resourceLease.leaseId, leaseId);
+      assert.equal(Boolean(current.peerRuntimeStopped), false);
+    };
+    const observed = (type) => env.anomalies("live-health").some((item) => item.assignmentId === peer.taskId && item.type === type);
+    const real = inspect(peer.endpoint);
+
+    // Fault injection changes only one observation on a real bound runtime; it never fabricates an endpoint or report.
+    for (const [label, overrides, type] of [
+      ["permission wait", { status: "waiting", activeTurn: null, pendingPermissions: [{ id: "test-permission" }], attentionReason: "permission" }, "peer.permission-wait"],
+      ["unknown", { status: "unrecognized", activeTurn: null, pendingPermissions: [] }, "peer.runtime-unknown"],
+      ["missing", { status: "missing", activeTurn: null }, "peer.missing"],
+    ]) {
+      adapter.inspect = (endpoint) => endpoint === peer.endpoint ? { ...real, ...overrides } : inspect(endpoint);
+      slp.coordinatorTick({ roots, adapter });
+      assert.ok(observed(type), label);
+      intact();
+      const unknownAdapter = Object.create(adapter);
+      unknownAdapter.inspect = (endpoint) => ({ ...inspect(endpoint), status: "unknown" });
+      assert.throws(() => slp.recoverSlpPeer({ roots, taskId: peer.taskId, adapter: unknownAdapter, startCoordinator: false }), /first check was unknown/);
+    }
+
+    let attempts = 0;
+    adapter.inspect = (endpoint) => {
+      if (endpoint === peer.endpoint && ++attempts <= 2) throw new Error("injected transient observation failure");
+      return inspect(endpoint);
+    };
+    slp.coordinatorTick({ roots, adapter });
+    assert.ok(attempts >= 3, "a transient read succeeds on its third attempt");
+    attempts = 0;
+    adapter.inspect = (endpoint) => {
+      if (endpoint === peer.endpoint) { attempts += 1; throw new Error("injected exhausted health observation"); }
+      return inspect(endpoint);
+    };
+    const read = adapter.read.bind(adapter);
+    let readAttempts = 0;
+    adapter.read = (endpoint, cursor) => {
+      if (endpoint === peer.endpoint) { readAttempts += 1; throw new Error("injected exhausted report read"); }
+      return read(endpoint, cursor);
+    };
+    slp.coordinatorTick({ roots, adapter });
+    assert.equal(attempts, 3, "health inspection stops after three attempts");
+    assert.equal(readAttempts, 3, "report collection read stops after three attempts");
+    assert.ok(observed("peer.runtime-unknown"));
+    intact();
+    adapter.inspect = inspect;
+    adapter.read = read;
+
+    // Interrupt is a verified idle observation, not death: no automatic recovery or lease release.
+    assert.equal(adapter.interrupt(peer.endpoint).verified, true);
+    const idle = inspect(peer.endpoint);
+    assert.equal(idle.activeTurn, null);
+    const staleAt = new Date(Date.now() - 16 * 60000).toISOString();
+    const usage = idle.lastUsage;
+    core.withHomeLock(foremanHome, () => core.atomicJson(metaFile, {
+      ...env.readTask(peer.taskId), lastPromptAt: staleAt, lastProgressAt: staleAt,
+      ...(usage ? { runtimeContextSignal: { usedTokens: usage.contextWindowUsedTokens, maxTokens: usage.contextWindowMaxTokens, observedAt: staleAt } } : {}),
+    }));
+    slp.coordinatorTick({ roots, adapter });
+    assert.ok(observed("peer.no-report"));
+    intact();
+    adapter.inspect = (endpoint) => endpoint === peer.endpoint ? { ...idle, status: "running", activeTurn: { turnId: "injected-stale-turn", startedAt: staleAt } } : inspect(endpoint);
+    slp.coordinatorTick({ roots, adapter });
+    assert.ok(observed("peer.stuck-turn"));
+    intact();
+    adapter.inspect = inspect;
+
+    // Each recovery is a real archive and a real spawn, bounded to three attempts.
+    let current = env.readTask(peer.taskId);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      adapter.stop(current.endpoint);
+      const recovered = slp.recoverSlpPeer({ roots, taskId: peer.taskId, adapter, startCoordinator: false });
+      assert.equal(recovered.recoveryAttempts, attempt);
+      assert.equal(recovered.generation, peer.generation + attempt);
+      assert.notEqual(recovered.endpoint, current.endpoint);
+      assert.equal(recovered.workspace, peer.workspace);
+      assert.deepEqual(recovered.resources, peer.resources);
+      assert.deepEqual(recovered.dispatchProfile, peer.dispatchProfile);
+      current = env.readTask(peer.taskId);
+    }
+    adapter.stop(current.endpoint);
+    assert.throws(() => slp.recoverSlpPeer({ roots, taskId: peer.taskId, adapter, startCoordinator: false }), /attempt limit is exhausted/);
+    const exhausted = env.readTask(peer.taskId);
+    assert.equal(exhausted.endpoint, current.endpoint);
+    assert.equal(exhausted.generation, current.generation);
+    assert.deepEqual(exhausted.resourceLease, current.resourceLease);
+    assert.equal(exhausted.previousGenerations.length, 3);
+    printMetrics("health-fault-injection", slp.taskMetrics({ roots, taskId }));
+  });
+});
+
 function blockedBriefs() {
   const blocked = [
     "Task A in project live-blocked needs a human product decision before any work: the brief does not say whether the greeting text is formal or casual.",
@@ -400,7 +594,7 @@ function blockedBriefs() {
     `1. requestId "BB-impl": create-peer, role implementation, scope "docs/b.txt", resources [${resourceJson("file/docs/b.txt", "write")}], dependsOn []. The Peer brief must say: first run \`sleep 90\`, then create docs/b.txt with the line "blocked-b", and report changedSurfaces ["docs/b.txt"] with a check that shows the file content.`,
     `2. After the implementation report arrives: requestId "BB-review", create-peer role review, scope "docs/b.txt", resources [${resourceJson("file/docs/b.txt", "read")}], dependsOn [the implementation assignment ID]. The review Peer only reads the file and reports whether it matches.`,
     "3. After the review report arrives and it passes: requestId \"BB-record\", record-review with the review assignment, changedSurfaces [\"docs/b.txt\"], and the evidence you received.",
-    "4. Then requestId \"BB-ready\": report-task with status ready.",
+    "4. Then requestId \"BB-ready\": report-task with status ready and a non-empty summary of the reviewed outcome.",
   ].join("\n");
   return { blocked, running };
 }
@@ -450,7 +644,7 @@ function rolloverBrief() {
     "b. Whenever a Peer report arrives but the reports of both implementation Peers (docs/r1.txt and docs/r2.txt) have not both arrived, end the turn without any JSON envelope.",
     `c. When both implementation reports have arrived: requestId "L2-review", create-peer role review, scope "docs/r1.txt docs/r2.txt", resources [${resourceJson("file/docs/r1.txt", "read")},${resourceJson("file/docs/r2.txt", "read")}], dependsOn [both implementation assignment IDs]. The review Peer only reads both files and reports whether each matches its line.`,
     "d. After the review report arrives and it passes: requestId \"L2-record\", record-review with the review assignment as reviewAssignmentId, relatedAssignmentIds listing both implementation assignment IDs, outcome accepted, changedSurfaces [\"docs/r1.txt\",\"docs/r2.txt\"], and the evidence you received.",
-    "e. Then requestId \"L2-ready\": report-task with status ready.",
+    "e. Then requestId \"L2-ready\": report-task with status ready and a non-empty summary of the reviewed outcome.",
   ].join("\n");
 }
 

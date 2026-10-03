@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const core = require("./foreman");
 const coordination = require("./coordination");
 
@@ -25,6 +25,10 @@ function digest(value) { return crypto.createHash("sha256").update(JSON.stringif
 function boundedSummary(value, limit = 1200) {
   const text = String(value || "").trim();
   return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
+}
+function runtimeAttentionReason(inspection, fallback) {
+  const detail = typeof inspection.lastError === "string" ? inspection.lastError : inspection.lastError?.message;
+  return boundedSummary([inspection.attentionReason || fallback, detail].filter(Boolean).join(": "));
 }
 function slpData(home) { return path.join(home, "data", "slp"); }
 function leadsDir(home) { return path.join(slpData(home), "leads"); }
@@ -151,6 +155,7 @@ function listPeerTasks(roots, parentTaskId) {
 function buildProjectState({ roots, projectId }) {
   const project = core.findProject(roots.foremanHome, projectId);
   const lead = readLead(roots.foremanHome, projectId);
+  const closing = new Set(closedTaskMetrics(roots, projectId).filter((item) => item.status === "closing").map((item) => item.taskId));
   const tasks = listSlpTasks(roots, projectId).filter((meta) => !["accepted", "cleaned"].includes(meta.status)).map((meta) => {
     const briefFile = path.join(taskDir(roots.foremanHome, meta.taskId), "brief.md");
     const reviewFile = meta.latestReviewId ? path.join(taskDir(roots.foremanHome, meta.taskId), "reviews", `${meta.latestReviewId}.json`) : null;
@@ -159,7 +164,7 @@ function buildProjectState({ roots, projectId }) {
       .map((request) => ({ requestId: request.requestId, kind: request.outcome.waitKind, reason: request.outcome.reason }));
     return {
       taskId: meta.taskId,
-      status: meta.status,
+      status: closing.has(meta.taskId) ? "closing" : meta.status,
       brief: fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8") : null,
       leadGeneration: meta.leadGeneration ?? null,
       waitingReason: meta.waitingReason || null,
@@ -179,7 +184,7 @@ function buildProjectState({ roots, projectId }) {
       latestReviewId: meta.latestReviewId || null,
       latestReview: latestReview ? { outcome: latestReview.outcome, summary: latestReview.summary, evidence: latestReview.evidence, changedSurfaces: latestReview.changedSurfaces, checks: latestReview.checks, unresolvedRisks: latestReview.unresolvedRisks } : null,
       purpose: meta.purpose || "delivery",
-      nextAction: meta.status === "review-ready" ? "human-acceptance" : (meta.status === "proof-complete" ? "proof-recorded" : (meta.status === "waiting-decision" ? "human-decision" : ((meta.waitingReason || waits.length) ? "wait-for-resource-or-prerequisite" : "project-lead"))),
+      nextAction: closing.has(meta.taskId) ? "resume-acceptance" : (meta.status === "review-ready" ? "human-acceptance" : (meta.status === "proof-complete" ? "proof-recorded" : (meta.status === "waiting-decision" ? "human-decision" : ((meta.waitingReason || waits.length) ? "wait-for-resource-or-prerequisite" : "project-lead")))),
     };
   });
   const pendingDecisions = tasks.flatMap((task) => {
@@ -354,6 +359,7 @@ function leadInstruction({ roots, project, lead, reason }) {
     ...(workflow ? [`Read project workflow: ${workflow}`] : []),
     `Read the generated current project overview: ${viewFile}`,
     "The generated .foreman directory is read-only. Use Foreman's request protocol for every Peer operation.",
+    ...(usesTimeline({ backend: lead.backend }) ? ["When no action is needed, return exactly waiting; do not invent a request or repeat a prior action."] : []),
     ...(Number(lead.reconstructionRequiredGeneration) === Number(lead.generation)
       ? ["Before any other request in this Lead generation, submit one report-task progress request with a concise summary and reconstruction object containing non-empty projectState, knowledge, and coreState summaries. The projectState summary must cover the generated overview; knowledge must cite relevant project knowledge or explicitly say none applies; coreState must summarize active tasks, decisions, and preserved Peer reports. Core will refuse other requests until this checkpoint is recorded."]
       : []),
@@ -700,6 +706,15 @@ function deliverLeadOutboxMessage({ roots, lead, message, adapter }) {
   try { verifyRuntimeIdentity({ adapter, expected: lead, actual: inspection, operation: "Lead message" }); }
   catch (error) { recordAnomaly({ roots, projectId: message.projectId, taskId: message.taskId, type: "lead.identity-mismatch", endpoint: lead.endpoint, reason: error.message }); return { delivered: false, waiting: true, messageId: message.messageId, reason: error.message }; }
   if (inspection.activeTurn || !["idle", "finished", "done"].includes(String(inspection.status).toLowerCase())) return { delivered: false, waiting: true, messageId: message.messageId, reason: "project Lead is still processing another turn" };
+  if (usesTimeline(adapter)) {
+    let pending;
+    try { pending = adapter.read(lead.endpoint, lead.timelineCursor || null); }
+    catch (error) { return { delivered: false, waiting: true, messageId: message.messageId, reason: `project Lead timeline could not be checked before delivery: ${error.message}` }; }
+    try { verifyRuntimeIdentity({ adapter, expected: lead, actual: pending, operation: "Lead message pre-delivery check" }); }
+    catch (error) { recordAnomaly({ roots, projectId: message.projectId, taskId: message.taskId, type: "lead.timeline-identity-mismatch", endpoint: lead.endpoint, reason: error.message }); return { delivered: false, waiting: true, messageId: message.messageId, reason: error.message }; }
+    if (pending.gap || pending.staleCursor) return { delivered: false, waiting: true, messageId: message.messageId, reason: "project Lead timeline continuity is uncertain" };
+    if (assistantTexts(pending.entries).length) return { delivered: false, waiting: true, messageId: message.messageId, reason: "project Lead has an uncollected response" };
+  }
   let cursor = null;
   try { if (usesTimeline(adapter)) cursor = adapter.cursor(lead.endpoint); }
   catch (error) { recordAnomaly({ roots, projectId: message.projectId, taskId: message.taskId, type: "lead.cursor-failed", endpoint: lead.endpoint, reason: error.message }); return { delivered: false, waiting: true, messageId: message.messageId, reason: error.message }; }
@@ -711,13 +726,15 @@ function deliverLeadOutboxMessage({ roots, lead, message, adapter }) {
   });
   let result;
   try { result = adapter.send(lead.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
-  catch (error) { result = { delivered: false, error: error.message }; }
+  catch (error) { result = { delivered: false, uncertain: true, error: error.message }; }
   const delivered = result !== false && result?.delivered !== false;
   core.withHomeLock(roots.foremanHome, () => {
-    coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
+    if (result?.uncertain) coordination.updateMessageUnlocked({ roots, messageId: message.messageId, mutate: (current) => ({ ...current, transportEvidence: result }) });
+    else coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
     const current = readLead(roots.foremanHome, message.projectId);
     if (current?.endpoint === lead.endpoint && Number(current.generation) === Number(lead.generation)) core.atomicJson(leadFile(roots.foremanHome, message.projectId), { ...current, timelineCursor: cursor || current.timelineCursor || null, lastPromptAt: attemptedAt });
   });
+  if (result?.uncertain) return { delivered: false, waiting: true, uncertain: true, messageId: message.messageId, reason: result.error };
   if (!delivered) {
     recordAnomaly({ roots, projectId: message.projectId, taskId: message.taskId, type: "lead.delivery-failed", endpoint: lead.endpoint, reason: result?.error || `message ${message.messageId} was not delivered` });
     return { delivered: false, failed: true, messageId: message.messageId, reason: result?.error || "delivery was not confirmed" };
@@ -1211,7 +1228,8 @@ function processCreatePeer({ roots, request, adapter }) {
   const resolves = [...new Set(payload.resolves || [])];
   if (resolves.some((id) => !peers.some((peer) => peer.taskId === id && peer.status === "blocked" && !peer.slpResolvedBy))) return { status: "refused", reason: "resolves may reference only unresolved blocked Peers on this task" };
   if (payload.role === "correction" && !resolves.length) return { status: "refused", reason: "correction Peers must identify the blocked assignment they resolve" };
-  if (payload.role === "correction" && Number(parent.reviewCycles || 0) >= MAX_CORRECTION_CYCLES) return { status: "refused", reason: `correction/review limit of ${MAX_CORRECTION_CYCLES} cycles is exhausted; escalate through Foreman` };
+  const priorCorrections = peers.filter((peer) => peer.peerRole === "correction" && peer.endpoint && peer.slpRequestId !== request.requestId).length;
+  if (payload.role === "correction" && Math.max(Number(parent.reviewCycles || 0), priorCorrections) >= MAX_CORRECTION_CYCLES) return { status: "refused", reason: `correction/review limit of ${MAX_CORRECTION_CYCLES} cycles is exhausted; escalate through Foreman` };
   const readOnly = ["exploration", "audit", "review"].includes(payload.role);
   const resources = normalizeResources(payload.resources, project.id, readOnly);
   if (["exploration", "audit"].includes(payload.role) && resources.some((claim) => claim.mode !== "read")) {
@@ -1323,7 +1341,14 @@ function processMessagePeer({ roots, request, adapter }) {
   const peer = listPeerTasks(roots, parent.taskId).find((item) => item.taskId === assignmentId);
   if (!peer || !peer.endpoint || peer.peerRuntimeStopped || !["working", "blocked"].includes(peer.status)) return { status: "refused", reason: "message-peer must target a live direct Peer on this task" };
   if (typeof request.payload.request !== "string" || !request.payload.request.trim()) return { status: "refused", reason: "message-peer requires a non-empty request" };
-  const result = core.sendWorkerMessage({ roots, taskId: peer.taskId, payload: { request: request.payload.request }, adapter });
+  const explicitMessageId = `M-SLP-${digest({ projectId: parent.projectId, taskId: parent.taskId, assignmentId, generation: peer.generation, requestId: request.requestId }).slice(0, 28)}`;
+  const result = core.sendWorkerMessage({ roots, taskId: peer.taskId, payload: { request: request.payload.request }, adapter, explicitMessageId });
+  if (result.delivery?.uncertain) {
+    const reason = result.delivery.error || "Peer steering delivery is uncertain; it will be reconciled without resending";
+    recordAnomaly({ roots, projectId: parent.projectId, taskId: parent.taskId, assignmentId, type: "peer.message-delivery-uncertain", endpoint: peer.endpoint, reason });
+    return { status: "waiting", waitKind: "message", assignmentId, generation: peer.generation, messageId: result.message.messageId, reason };
+  }
+  resolveAnomalies({ roots, projectId: parent.projectId, assignmentId, types: ["peer.message-delivery-uncertain"] });
   return { status: "dispatched", assignmentId, generation: peer.generation, messageId: result.message.messageId };
 }
 
@@ -1720,7 +1745,9 @@ function outstandingWaits(roots, projectId) {
 // The Lead is told once when a wait resolves; it never has to resend the request.
 function reevaluateWaitingRequests({ roots, projectId, adapter }) {
   const resolved = [];
-  for (const waiting of outstandingWaits(roots, projectId)) {
+  const lead = readLead(roots.foremanHome, projectId);
+  const steering = lead ? requestsForLead(roots, projectId, lead.generation).filter((request) => request.status === "waiting" && request.action === "message-peer" && request.outcome?.waitKind === "message") : [];
+  for (const waiting of [...outstandingWaits(roots, projectId), ...steering]) {
     let parent;
     try { parent = readTask(roots.foremanHome, waiting.taskId); } catch (_) { continue; }
     if (parent.status !== "working") continue;
@@ -1739,14 +1766,22 @@ function reevaluateWaitingRequests({ roots, projectId, adapter }) {
 }
 
 function assistantTexts(entries) {
-  return (entries || []).map((entry) => entry?.item || entry).filter((entry) => entry?.type === "assistant_message" && typeof entry.text === "string").map((entry) => ({ text: entry.text, messageId: entry.messageId || entry.id || null }));
+  const responses = [];
+  for (const source of entries || []) {
+    const item = source?.item || source;
+    if (item?.type !== "assistant_message" || typeof item.text !== "string") continue;
+    const messageId = item.messageId || item.id || null;
+    const response = { text: item.text, messageId, seqEnd: source?.seqEnd };
+    const turnId = source?.turnId || (messageId ? `message:${messageId}` : null);
+    if (turnId && responses.at(-1)?.turnId === turnId) responses[responses.length - 1] = { ...response, turnId };
+    else responses.push({ ...response, turnId });
+  }
+  return responses;
 }
 
 function parseLeadEnvelope(text) {
   if (typeof text !== "string") return null;
-  let value = text.trim();
-  const fenced = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenced) value = fenced[1].trim();
+  const value = core.normalizePaseoResponse(text);
   try { return validateLeadEnvelope(JSON.parse(value)); } catch (_) { return null; }
 }
 
@@ -1800,12 +1835,12 @@ function pollLead({ roots, projectId, adapter }) {
     return { state: "unknown" };
   }
   resolveAnomalies({ roots, projectId, endpoint: lead.endpoint, types: ["lead.runtime-unknown"] });
-  const expectedFinishedAttention = !inspection.activeTurn && inspection.attentionReason === "finished";
+  const expectedFinishedAttention = inspection.attentionReason === "finished";
   const herdrBlocked = !usesTimeline(adapter) && String(inspection.status).toLowerCase() === "blocked";
   if ((inspection.requiresAttention && !expectedFinishedAttention) || inspection.pendingPermissions?.length || herdrBlocked) {
     if (herdrBlocked) recordAnomaly({ roots, projectId, type: "lead.permission-wait", endpoint: lead.endpoint, reason: "Herdr reports the Lead is blocked awaiting input" });
     else if (inspection.pendingPermissions?.length) recordAnomaly({ roots, projectId, type: "lead.permission-wait", endpoint: lead.endpoint, reason: `${inspection.pendingPermissions.length} permission request(s) await a human response` });
-    else recordAnomaly({ roots, projectId, type: "lead.attention-required", endpoint: lead.endpoint, reason: inspection.attentionReason || "Lead runtime requires attention" });
+    else recordAnomaly({ roots, projectId, type: "lead.attention-required", endpoint: lead.endpoint, reason: runtimeAttentionReason(inspection, "Lead runtime requires attention") });
   } else resolveAnomalies({ roots, projectId, endpoint: lead.endpoint, types: ["lead.attention-required", "lead.permission-wait"] });
   if (inspection.pendingPermissions?.length || inspection.attentionReason === "permission" || herdrBlocked) return { state: "waiting-input" };
   if (inspection.activeTurn) {
@@ -1843,11 +1878,24 @@ function pollLead({ roots, projectId, adapter }) {
     }
     return { state: "idle" };
   }
-  const response = responses.at(-1);
+  const response = responses[0];
+  const responseCursor = Number.isInteger(response.seqEnd) && timeline.cursor
+    ? { ...timeline.cursor, seq: response.seqEnd }
+    : timeline.cursor;
+  if (core.normalizePaseoResponse(response.text) === "waiting") {
+    core.withHomeLock(roots.foremanHome, () => {
+      const current = readLead(roots.foremanHome, projectId);
+      if (current.endpoint === lead.endpoint && current.generation === lead.generation) {
+        core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: responseCursor || current.timelineCursor || null, actionableTurns: Number(current.actionableTurns || 0) + 1 });
+      }
+    });
+    resolveAnomalies({ roots, projectId, endpoint: lead.endpoint, types: ["lead.request-invalid"] });
+    return { state: "idle" };
+  }
   core.withHomeLock(roots.foremanHome, () => {
     const current = readLead(roots.foremanHome, projectId);
     if (current.endpoint === lead.endpoint && current.generation === lead.generation) {
-      core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, actionableTurns: Number(current.actionableTurns || 0) + 1 });
+      core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: responseCursor || current.timelineCursor || null, actionableTurns: Number(current.actionableTurns || 0) + 1 });
     }
   });
   resolveAnomalies({ roots, projectId, taskId: responseTaskId(roots, projectId, null) || undefined, endpoint: lead.endpoint, types: ["lead.no-report"] });
@@ -1855,7 +1903,7 @@ function pollLead({ roots, projectId, adapter }) {
   if (!envelope) {
     core.withHomeLock(roots.foremanHome, () => {
       const current = readLead(roots.foremanHome, projectId);
-      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: timeline.cursor || current.timelineCursor || null });
+      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: responseCursor || current.timelineCursor || null });
     });
     recordAnomaly({ roots, projectId, type: "lead.request-invalid", endpoint: lead.endpoint, reason: "Latest Lead response did not contain exactly one valid SLP request envelope" });
     const activeTask = latestPromptedTask(roots, projectId, lead);
@@ -1869,7 +1917,7 @@ function pollLead({ roots, projectId, adapter }) {
     const delivered = safeTaskId ? sendLeadMessage({ roots, projectId, taskId: safeTaskId, kind: "slp-request-outcome", payload: { requestId: envelope.requestId, action: envelope.action, outcome: { status: "refused", reason: "request projectId does not match the bound project Lead" } }, adapter, requestId: `cross-project-${envelope.requestId}` }) : { delivered: false, waiting: true, reason: "no active project task is available to carry the refusal" };
     core.withHomeLock(roots.foremanHome, () => {
       const current = readLead(roots.foremanHome, projectId);
-      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: timeline.cursor || current.timelineCursor || null });
+      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: responseCursor || current.timelineCursor || null });
     });
     return { state: "refused", requestId: envelope.requestId, reason: "request projectId does not match the bound project Lead", delivered };
   }
@@ -1879,11 +1927,11 @@ function pollLead({ roots, projectId, adapter }) {
     const delivered = safeTaskId ? sendLeadMessage({ roots, projectId, taskId: safeTaskId, kind: "slp-request-outcome", payload: { requestId: envelope.requestId, action: envelope.action, outcome: { status: "refused", reason: request.reason } }, adapter, requestId: `request-conflict-${envelope.requestId}-${digest(envelope.payload).slice(0, 12)}` }) : { delivered: false, waiting: true, reason: "no active project task is available to carry the refusal" };
     core.withHomeLock(roots.foremanHome, () => {
       const current = readLead(roots.foremanHome, projectId);
-      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: timeline.cursor || current.timelineCursor || null });
+      if (current.endpoint === lead.endpoint && current.generation === lead.generation) core.atomicJson(leadFile(roots.foremanHome, projectId), { ...current, timelineCursor: responseCursor || current.timelineCursor || null });
     });
     return { state: "refused", requestId: envelope.requestId, reason: request.reason, delivered };
   }
-  return finishRequest({ roots, projectId, lead, request, adapter, timelineCursor: timeline.cursor });
+  return finishRequest({ roots, projectId, lead, request, adapter, timelineCursor: responseCursor });
 }
 
 // Process one recorded request and carry its outcome to the Lead; the cursor is kept when delivery waits.
@@ -1957,6 +2005,8 @@ function processHerdrLeadRequests({ roots, projectId, lead, adapter }) {
 function stopReportedPeer({ roots, peer, adapter }) {
   const reportedProgress = peer.status === "working" && peer.lastReport?.status === "progress";
   if (!peer.endpoint || peer.peerRuntimeStopped || (!reportedProgress && !["review-ready", "blocked"].includes(peer.status))) return peer;
+  if (peer.lastReport?.at && peer.lastPromptAt && Date.parse(peer.lastReport.at) < Date.parse(peer.lastPromptAt)) return peer;
+  if (coordination.listMessages({ roots, statuses: ["pending"] }).some((message) => message.taskId === peer.taskId && message.endpoint === peer.endpoint && Number(message.generation) === Number(peer.generation) && message.kind === "foreman-message")) return peer;
   let before;
   try { before = adapter.inspect(peer.endpoint); }
   catch (error) {
@@ -1984,7 +2034,10 @@ function stopReportedPeer({ roots, peer, adapter }) {
       const current = readTask(roots.foremanHome, peer.taskId);
       const next = { ...current, resourceLease: null, peerRuntimeStopped: true, peerStoppedAt: now(), endpoint: current.endpoint, ...(current.pendingResources ? { pendingResources: [] } : {}) };
       core.atomicJson(taskMetaFile(roots.foremanHome, peer.taskId), next);
-      if (next.peerRole === "correction" && next.lastReport?.status === "done") {
+      const correctionReport = next.peerRole === "correction" ? readReportPayload(next) : null;
+      if (next.peerRole === "correction" && next.status === "review-ready" && correctionReport?.status === "done"
+        && !next.slpClaimExceeded?.length && !correctionReport.openItems.length
+        && !correctionReport.checks.some((check) => ["failed", "error", "not-run"].includes(check.result))) {
         for (const blockedId of next.resolvesBlockers || []) {
           const blockedFile = taskMetaFile(roots.foremanHome, blockedId);
           if (!fs.existsSync(blockedFile)) continue;
@@ -2044,6 +2097,9 @@ function observePeerHealth({ roots, peer, adapter }) {
   if (inspection.pendingPermissions?.length || inspection.attentionReason === "permission" || (!usesTimeline(adapter) && status === "blocked")) {
     recordAnomaly({ roots, projectId: peer.projectId, taskId: peer.parentTaskId, assignmentId: peer.taskId, type: "peer.permission-wait", endpoint: peer.endpoint, reason: `${inspection.pendingPermissions?.length || 1} permission request(s) await a human response` });
   } else resolveAnomalies({ roots, projectId: peer.projectId, assignmentId: peer.taskId, endpoint: peer.endpoint, types: ["peer.permission-wait"] });
+  if ((inspection.requiresAttention && inspection.attentionReason === "error") || status === "error") {
+    recordAnomaly({ roots, projectId: peer.projectId, taskId: peer.parentTaskId, assignmentId: peer.taskId, type: "peer.attention-required", endpoint: peer.endpoint, reason: runtimeAttentionReason(inspection, "Peer runtime requires attention") });
+  } else resolveAnomalies({ roots, projectId: peer.projectId, assignmentId: peer.taskId, endpoint: peer.endpoint, types: ["peer.attention-required"] });
   if (inspection.activeTurn) {
     const startedAt = Date.parse(inspection.activeTurn.startedAt || "");
     const progressAt = Date.parse(lastProgressAt || "");
@@ -2211,6 +2267,28 @@ function projectBackend(roots, projectId) {
   return lead?.backend || listSlpTasks(roots, projectId).find((meta) => meta.backend)?.backend || null;
 }
 
+// Retry observations only; mutations require durable reconciliation instead of blind retries.
+function observationAdapter(adapter) {
+  if (!adapter) return adapter;
+  const wrapped = Object.create(adapter);
+  for (const method of ["spawn", "send", "stop", "interrupt", "verifyCompatibility", "capabilities"]) {
+    if (typeof adapter[method] === "function") wrapped[method] = adapter[method].bind(adapter);
+  }
+  for (const method of ["inspect", "read", "cursor", "list"]) {
+    if (typeof adapter[method] !== "function") continue;
+    wrapped[method] = (...args) => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try { return adapter[method](...args); }
+        catch (error) {
+          if (attempt === 2) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+        }
+      }
+    };
+  }
+  return wrapped;
+}
+
 function coordinatorTick({ roots, adapter: defaultAdapter, adapterFor }) {
   const projects = new Set(core.listTasks({ roots }).filter((meta) => ["slp", "slp-peer"].includes(meta.taskModel)).map((meta) => meta.projectId));
   const root = leadsDir(roots.foremanHome);
@@ -2222,7 +2300,7 @@ function coordinatorTick({ roots, adapter: defaultAdapter, adapterFor }) {
   const results = [];
   for (const projectId of projects) {
     const backend = projectBackend(roots, projectId);
-    const adapter = adapterFor ? adapterFor(backend) : defaultAdapter;
+    const adapter = observationAdapter(adapterFor ? adapterFor(backend) : defaultAdapter);
     if (!backend) continue;
     if (adapterBackend(adapter) !== backend) {
       recordAnomaly({ roots, projectId, type: "coordinator.adapter-unavailable", reason: `No ${backend || "bound"} runtime adapter is available to the coordinator; project state was left unchanged` });
@@ -2299,6 +2377,7 @@ function coordinatorHasWork(roots) {
     for (const projectId of fs.readdirSync(root)) {
       const lead = readLead(roots.foremanHome, projectId);
       if (!lead) continue;
+      if (lead.endpoint && lead.status === "working") return true;
       if (requestsForLead(roots, projectId, lead.generation).some((request) => request.status === "pending" || (request.status === "waiting" && (!request.outcomeDeliveredAt || REEVALUATED_WAITS.has(request.outcome?.waitKind))))) return true;
     }
   }
@@ -2312,16 +2391,20 @@ function coordinatorHasWork(roots) {
 function coordinatorStateFile(home) { return path.join(slpData(home), "coordinator.json"); }
 
 function coordinatorCodeVersion(roots) {
-  const files = [path.join(roots.foremanRoot, "src", "slp.js"), path.join(roots.foremanRoot, "bin", "foreman-slp-coordinator")];
+  const files = ["src/slp.js", "src/foreman.js", "src/coordination.js", "bin/foreman-slp-coordinator"].map((file) => path.join(roots.foremanRoot, file));
   return digest(files.map((file) => fs.readFileSync(file)).map((content) => content.toString("base64")));
 }
 
 function coordinatorProcessAlive(record, script) {
-  if (!Number.isInteger(record?.pid) || record.pid < 2) return false;
+  if (!Number.isInteger(record?.pid) || record.pid < 2 || record.script !== script) return false;
   try {
     process.kill(record.pid, 0);
-    const commandLine = fs.readFileSync(`/proc/${record.pid}/cmdline`, "utf8").replaceAll("\0", " ");
-    return commandLine.includes(script);
+    if (process.platform === "linux") {
+      const args = fs.readFileSync(`/proc/${record.pid}/cmdline`, "utf8").split("\0");
+      return args[0] === process.execPath && args[1] === script && args[2] === "run";
+    }
+    const result = spawnSync("ps", ["-p", String(record.pid), "-o", "command="], { encoding: "utf8", timeout: 2000 });
+    return result.status === 0 && result.stdout.trim() === `${process.execPath} ${script} run`;
   } catch (_) { return false; }
 }
 
@@ -2461,15 +2544,17 @@ function deliverDecisionToPeer({ roots, decision, peer, adapter }) {
   });
   let result;
   try { result = adapter.send(peer.endpoint, coordination.deliveryPrompt(message), { messageId }); }
-  catch (error) { result = { delivered: false, error: error.message }; }
+  catch (error) { result = { delivered: false, uncertain: true, error: error.message }; }
   const delivered = result !== false && result?.delivered !== false;
   core.withHomeLock(roots.foremanHome, () => {
-    coordination.markMessageDeliveryUnlocked({ roots, messageId, delivered, evidence: result });
+    if (result?.uncertain) coordination.updateMessageUnlocked({ roots, messageId, mutate: (current) => ({ ...current, transportEvidence: result }) });
+    else coordination.markMessageDeliveryUnlocked({ roots, messageId, delivered, evidence: result });
     if (delivered) {
       const current = readTask(roots.foremanHome, peer.taskId);
       writeTaskUnlocked(roots, { ...current, ...(current.status === "blocked" ? { status: "working" } : {}), blockerReport: null, paseoCursor: cursor || current.paseoCursor || null, lastPromptAt: attemptedAt });
     }
   });
+  if (result?.uncertain) return { delivered: false, waiting: true, uncertain: true, messageId, reason: result.error };
   if (!delivered) recordAnomaly({ roots, projectId: peer.projectId, taskId: peer.parentTaskId, assignmentId: peer.taskId, type: "decision.peer-delivery-failed", endpoint: peer.endpoint, reason: result?.error || "Peer decision delivery was not confirmed" });
   return { delivered, messageId, ...(delivered ? {} : { reason: result?.error || "delivery was not confirmed" }) };
 }
@@ -2551,6 +2636,7 @@ function acceptSlpTask({ roots, taskId, adapter, afterPeerCleanup }) {
   }
   if (closure.schemaVersion !== 1 || closure.taskId !== taskId || !/^[a-z0-9][a-z0-9-]*$/.test(String(closure.projectId || "")) || !Array.isArray(closure.peerTaskIds) || closure.peerTaskIds.some((id) => !/^T-\d{6,}$/.test(id))) throw new SlpError("SLP closure record identity is invalid");
   core.findProject(roots.foremanHome, closure.projectId);
+  writeProjectState({ roots, projectId: closure.projectId });
   for (const peerTaskId of closure.peerTaskIds) {
     const file = taskMetaFile(roots.foremanHome, peerTaskId);
     if (!fs.existsSync(file)) continue;
@@ -2625,6 +2711,13 @@ function taskDecisions(roots, taskId) {
 // Everything is derived from canonical records, so a measurement never diverges from what the lifecycle recorded.
 // A closed task's measurement is frozen into its closure record before its records are purged.
 function taskMetrics({ roots, taskId }) {
+  if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new SlpError("SLP task ID is invalid");
+  const closureFile = path.join(slpData(roots.foremanHome), "closures", `${taskId}.json`);
+  if (fs.existsSync(closureFile)) {
+    const closure = readJson(closureFile);
+    if (closure.schemaVersion !== 1 || closure.taskId !== taskId || !closure.metrics) throw new SlpError("SLP closure metrics identity is invalid");
+    return { ...closure.metrics, status: closure.status === "complete" ? "accepted" : "closing", acceptedAt: closure.acceptedAt };
+  }
   const parent = readTask(roots.foremanHome, taskId);
   const peers = listPeerTasks(roots, taskId);
   const requests = allRequests(roots, parent.projectId).filter((request) => request.taskId === taskId);
@@ -2650,7 +2743,7 @@ function taskMetrics({ roots, taskId }) {
     requestsByAction,
     peerCount: peers.length,
     peersByRole,
-    correctionCycles: Number(parent.reviewCycles || 0),
+    correctionCycles: Math.max(Number(parent.reviewCycles || 0), peersByRole.correction || 0),
     waitedMs,
     waitedRequests: requests.filter((request) => request.waitedMs || request.waitingSince).length,
     humanDecisions,
@@ -2704,7 +2797,8 @@ function fleetView({ roots }) {
   const projects = [];
   for (const project of core.loadProjects(roots.foremanHome)) {
     const lead = fs.existsSync(leadFile(roots.foremanHome, project.id)) ? readLead(roots.foremanHome, project.id) : null;
-    const tasks = listSlpTasks(roots, project.id).filter((meta) => TASK_STATES.includes(meta.status));
+    const closing = new Set(closedTaskMetrics(roots, project.id).filter((item) => item.status === "closing").map((item) => item.taskId));
+    const tasks = listSlpTasks(roots, project.id).filter((meta) => TASK_STATES.includes(meta.status)).map((meta) => closing.has(meta.taskId) ? { ...meta, status: "closing" } : meta);
     if (!lead && !tasks.length) continue;
     const counts = {};
     for (const meta of tasks) counts[meta.status] = (counts[meta.status] || 0) + 1;
@@ -2725,7 +2819,7 @@ function fleetView({ roots }) {
     projects,
     totals: {
       projects: projects.length,
-      activeTasks: projects.reduce((total, item) => total + (item.tasks.working || 0) + (item.tasks.blocked || 0) + (item.tasks["waiting-decision"] || 0), 0),
+      activeTasks: projects.reduce((total, item) => total + (item.tasks.working || 0) + (item.tasks.blocked || 0) + (item.tasks["waiting-decision"] || 0) + (item.tasks.closing || 0), 0),
       livePeers: projects.reduce((total, item) => total + item.livePeers, 0),
       readyForAcceptance: projects.reduce((total, item) => total + item.readyForAcceptance.length, 0),
       anomalies: projects.reduce((total, item) => total + item.anomalies, 0),
@@ -2767,7 +2861,7 @@ function projectStatus({ roots, projectId }) {
   return {
     projectId,
     lead: readLead(roots.foremanHome, projectId),
-    tasks: listSlpTasks(roots, projectId).map((meta) => ({ meta, peers: listPeerTasks(roots, meta.taskId) })),
+    tasks: listSlpTasks(roots, projectId).map((meta) => ({ meta: { ...meta, status: state.activeTasks.find((task) => task.taskId === meta.taskId)?.status || meta.status }, peers: listPeerTasks(roots, meta.taskId) })),
     pendingDecisions: state.pendingDecisions,
     requests: state.requests,
     waits: outstandingWaits(roots, projectId).map((request) => ({ taskId: request.taskId, requestId: request.requestId, kind: request.outcome.waitKind, reason: request.outcome.reason })),

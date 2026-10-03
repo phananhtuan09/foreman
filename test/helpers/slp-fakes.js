@@ -63,6 +63,7 @@ class FakePaseoAdapter {
       requiresAttention: agent.requiresAttention,
       attentionReason: agent.attentionReason,
       attentionTimestamp: agent.attentionTimestamp,
+      lastError: agent.lastError || null,
       pendingPermissions: agent.pendingPermissions || [],
       lastUsage: agent.lastUsage,
     };
@@ -200,6 +201,11 @@ function isolatedRoot(base, capacity) {
   const root = path.join(base, "foreman-root");
   fs.mkdirSync(path.join(root, "config"), { recursive: true });
   for (const name of ["model-routing.json", "paseo-agent-profiles.json"]) fs.copyFileSync(path.join(REPO_ROOT, "config", name), path.join(root, "config", name));
+  // Fake adapters exercise every configured profile independently of local activation choices.
+  const routingFile = path.join(root, "config", "model-routing.json");
+  const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
+  for (const profile of Object.values(routing.profiles)) profile.isActive = true;
+  fs.writeFileSync(routingFile, `${JSON.stringify(routing, null, 2)}\n`);
   if (capacity) fs.writeFileSync(path.join(root, "config", "slp-capacity.json"), JSON.stringify({ schemaVersion: 1, ...capacity }));
   return root;
 }

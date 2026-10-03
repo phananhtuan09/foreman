@@ -147,9 +147,7 @@ test("generated project state projects the SLP task, Peer assignment and report 
     const agentsBefore = fs.readFileSync(path.join(projectRoot, "AGENTS.md"));
 
     // Isolated root: a local config/slp-capacity.json must not change this serial scenario.
-    const isolatedRoot = path.join(base, "foreman-root");
-    fs.mkdirSync(path.join(isolatedRoot, "config"), { recursive: true });
-    for (const name of ["model-routing.json", "paseo-agent-profiles.json"]) fs.copyFileSync(path.join(REPO_ROOT, "config", name), path.join(isolatedRoot, "config", name));
+    const isolatedRoot = require("./helpers/slp-fakes").isolatedRoot(base);
     const roots = core.resolveRoots({ foremanRoot: isolatedRoot, foremanHome: home });
     core.initHome(roots);
     core.registerProject({ roots, id: "pilot", root: projectRoot, name: "Pilot" });

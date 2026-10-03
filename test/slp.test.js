@@ -736,7 +736,7 @@ test("validation SLP tasks preserve blocked evidence in proof completion without
     assert.ok(fs.existsSync(completed.proofReport));
     assert.deepEqual(JSON.parse(fs.readFileSync(completed.proofReport, "utf8")).evidence.map((item) => item.taskId), [peer.taskId]);
     assert.throws(() => slp.acceptSlpTask({ roots: f.roots, taskId, adapter: f.adapter }), /Only a review-ready SLP task can be accepted/);
-    assert.equal(slp.coordinatorHasWork(f.roots), false);
+    assert.equal(slp.coordinatorHasWork(f.roots), true, "the retained project Lead still needs supervision");
   } finally {
     f.cleanup();
   }

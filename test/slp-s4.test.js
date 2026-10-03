@@ -115,6 +115,240 @@ function makeReady(w, projectId, taskId, key, prefix) {
 
 const BACKENDS = ["paseo", "herdr"];
 
+test("Paseo SLP accepts projected final-response separators while retaining original reports and refusing ambiguous prose", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const lead = leadOf(w, "alpha");
+    const request = peerRequest("alpha", taskId, lead.generation, "R-projected", { resources: [{ key: "file/docs/a.txt", mode: "write" }] });
+    w.adapters.paseo.finish(lead.endpoint, `\n\n---\n\n${JSON.stringify(request)}`);
+    w.tick();
+    idleLead(w, "alpha");
+    assert.equal(requestRecord(w, "alpha", "R-projected").status, "dispatched");
+    const peer = peers(w, taskId)[0];
+    const raw = `\n\n---\n\n\`\`\`json\n${peerReport(peer, ["docs/a.txt"])}\n\`\`\``;
+    w.adapters.paseo.finish(peer.endpoint, raw);
+    w.tick();
+    const done = slp.readTask(w.roots.foremanHome, peer.taskId);
+    assert.equal(done.peerRuntimeStopped, true);
+    assert.equal(slp.readReportPayload(done).status, "done");
+    assert.ok(fs.readFileSync(done.lastReport.file, "utf8").endsWith(raw));
+    assert.equal(slp.parseLeadEnvelope(`I propose:\n${JSON.stringify(request)}`), null);
+    assert.equal(slp.parseLeadEnvelope(`${JSON.stringify(request)}\n${JSON.stringify(request)}`), null);
+  } finally { w.cleanup(); }
+});
+
+test("replaying a Peer steering request after losing its outcome never sends the steering twice", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const lead = leadOf(w, "alpha");
+    say(w, "alpha", peerRequest("alpha", taskId, lead.generation, "R-steer-peer", { resources: [{ key: "file/docs/a.txt", mode: "write" }] }));
+    const peer = peers(w, taskId)[0];
+    const request = env("alpha", { taskId, leadGeneration: lead.generation, requestId: "R-steer", action: "message-peer", payload: { assignmentId: peer.taskId, request: "Keep the existing scope and verify the exact contents." } });
+    say(w, "alpha", request);
+    const saved = requestRecord(w, "alpha", "R-steer");
+    const sentBefore = w.adapters.paseo.sent.filter((message) => message.endpoint === peer.endpoint).length;
+    // Simulate a restart after delivery but before the request outcome was persisted.
+    const file = path.join(w.roots.foremanHome, "data", "slp", "leads", "alpha", "requests", `g${lead.generation}`, "R-steer.json");
+    core.atomicJson(file, { ...saved, status: "pending", outcome: null });
+    const replayed = slp.processRequest({ roots: w.roots, request: { ...saved, status: "pending", outcome: null }, adapter: w.adapters.paseo });
+    assert.equal(replayed.status, "dispatched");
+    assert.equal(replayed.outcome.messageId, saved.outcome.messageId);
+    assert.equal(w.adapters.paseo.sent.filter((message) => message.endpoint === peer.endpoint).length, sentBefore);
+  } finally { w.cleanup(); }
+});
+
+test("uncertain Peer steering stays durable through unavailable reads and is reconciled without another send", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const lead = leadOf(w, "alpha");
+    say(w, "alpha", peerRequest("alpha", taskId, lead.generation, "R-peer", { resources: [{ key: "file/docs/a.txt", mode: "write" }] }));
+    const peer = peers(w, taskId)[0];
+    const adapter = w.adapters.paseo;
+    const send = adapter.send.bind(adapter);
+    adapter.send = (...args) => { const result = send(...args); if (args[0] === peer.endpoint) throw new Error("lost steering acknowledgement"); return result; };
+    say(w, "alpha", env("alpha", { taskId, leadGeneration: lead.generation, requestId: "R-steer-lost", action: "message-peer", payload: { assignmentId: peer.taskId, request: "Verify the exact contents within the existing scope." } }));
+    adapter.send = send;
+    assert.equal(requestRecord(w, "alpha", "R-steer-lost").status, "waiting");
+    const before = adapter.sent.filter((message) => message.endpoint === peer.endpoint).length;
+    const read = adapter.read.bind(adapter);
+    adapter.read = (endpoint, ...args) => { if (endpoint === peer.endpoint) throw new Error("timeline unavailable"); return read(endpoint, ...args); };
+    w.tick();
+    assert.equal(requestRecord(w, "alpha", "R-steer-lost").status, "waiting");
+    assert.equal(slp.readTask(w.roots.foremanHome, peer.taskId).resourceLease.leaseId, peer.resourceLease.leaseId);
+    assert.match(slp.sessionContext({ roots: w.roots }), /peer.message-delivery-uncertain/);
+    adapter.read = read;
+    w.tick();
+    const result = requestRecord(w, "alpha", "R-steer-lost");
+    assert.equal(result.status, "dispatched");
+    assert.equal(adapter.sent.filter((message) => message.endpoint === peer.endpoint).length, before);
+    assert.equal(coordination.listMessages({ roots: w.roots }).find((message) => message.messageId === result.outcome.messageId).status, "delivered");
+    assert.ok(!slp.projectStatus({ roots: w.roots, projectId: "alpha" }).anomalies.some((item) => item.type === "peer.message-delivery-uncertain"));
+  } finally { w.cleanup(); }
+});
+
+test("a correction that exceeds its own claims cannot clear blockers, and pre-review repairs stop at the correction bound", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const generation = leadOf(w, "alpha").generation;
+    say(w, "alpha", peerRequest("alpha", taskId, generation, "R-original", { resources: [{ key: "file/docs/a.txt", mode: "write" }] }));
+    const original = peerDone(w, "alpha", peers(w, taskId)[0], ["docs/b.txt"]);
+    assert.equal(original.status, "blocked");
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      say(w, "alpha", peerRequest("alpha", taskId, generation, `R-fix-${attempt}`, { role: "correction", resources: [{ key: "file/docs/b.txt", mode: "write" }], resolves: [original.taskId] }));
+      const correction = peers(w, taskId).find((peer) => peer.slpRequestId === `R-fix-${attempt}`);
+      assert.ok(correction?.endpoint);
+      peerDone(w, "alpha", correction, ["docs/outside.txt"]);
+      assert.equal(slp.readTask(w.roots.foremanHome, original.taskId).slpResolvedBy, undefined, "a blocked correction never resolves another blocker");
+    }
+    say(w, "alpha", peerRequest("alpha", taskId, generation, "R-fix-3", { role: "correction", resources: [{ key: "file/docs/b.txt", mode: "write" }], resolves: [original.taskId] }));
+    assert.equal(requestRecord(w, "alpha", "R-fix-3").status, "refused");
+    assert.match(requestRecord(w, "alpha", "R-fix-3").outcome.reason, /limit.*exhausted/);
+    assert.equal(peers(w, taskId).length, 3);
+    assert.equal(slp.taskMetrics({ roots: w.roots, taskId }).correctionCycles, 2);
+    assert.equal(slp.readTask(w.roots.foremanHome, taskId).status, "working");
+  } finally { w.cleanup(); }
+});
+
+test("Paseo consumes a waiting acknowledgement once without a corrective turn and preserves runtime error detail", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const adapter = w.adapterOf("alpha");
+    const lead = leadOf(w, "alpha");
+    adapter.finish(lead.endpoint, "waiting");
+    const sends = adapter.sent.length;
+    const turns = Number(lead.actionableTurns || 0);
+    w.tick();
+    w.tick();
+    assert.equal(adapter.sent.length, sends);
+    assert.equal(leadOf(w, "alpha").actionableTurns, turns + 1);
+    assert.equal(coordination.listMessages({ roots: w.roots }).filter((message) => message.kind === "slp-request-error").length, 0);
+
+    const agent = adapter.agents.get(lead.endpoint);
+    agent.status = "error";
+    agent.requiresAttention = true;
+    agent.attentionReason = "error";
+    agent.lastError = "Your authentication token has been invalidated.";
+    w.tick();
+    assert.match(slp.sessionContext({ roots: w.roots }), /lead.attention-required.*authentication token has been invalidated/);
+    assert.equal(leadOf(w, "alpha").endpoint, lead.endpoint);
+    assert.equal(slp.readTask(w.roots.foremanHome, taskId).status, "working");
+  } finally { w.cleanup(); }
+});
+
+test("a queued task prompt cannot advance the Lead cursor past an uncollected Paseo request", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const first = newTask(w, "alpha", "Handle task one.");
+    const second = newTask(w, "alpha", "Handle task two.");
+    dispatch(w, "alpha", first);
+    const lead = leadOf(w, "alpha");
+    const request = peerRequest("alpha", first, lead.generation, "R-before-followup", { resources: [{ key: "file/docs/one.md", mode: "write" }] });
+    w.adapters.paseo.finish(lead.endpoint, JSON.stringify(request));
+
+    // A second task's prompt arrives while the first final response is idle but not yet collected.
+    slp.dispatchSlpTask({ roots: w.roots, taskId: second, adapter: w.adapters.paseo, startCoordinator: false });
+    assert.equal(w.adapters.paseo.sent.filter((message) => message.prompt.includes("Handle task two.")).length, 0);
+    w.tick();
+    assert.equal(requestRecord(w, "alpha", "R-before-followup").status, "dispatched");
+    assert.equal(peers(w, first).length, 1);
+    assert.equal(w.adapters.paseo.sent.filter((message) => message.prompt.includes("Handle task two.")).length, 0, "the next task stays pending while the request outcome is being delivered");
+  } finally { w.cleanup(); }
+});
+
+test("coordinator retries transient observations three times without retrying mutations or releasing uncertain leases", () => {
+  const w = world([{ id: "alpha", backend: "paseo" }]);
+  try {
+    const taskId = newTask(w, "alpha");
+    dispatch(w, "alpha", taskId);
+    const adapter = w.adapterOf("alpha");
+    say(w, "alpha", peerRequest("alpha", taskId, leadOf(w, "alpha").generation, "R-observe", { resources: [{ key: "file/docs/check.txt", mode: "write" }] }));
+    const peer = peers(w, taskId)[0];
+    const inspect = adapter.inspect.bind(adapter);
+    let attempts = 0;
+    adapter.inspect = (endpoint) => {
+      if (endpoint === peer.endpoint && ++attempts < 3) throw new Error("transient read failure");
+      return inspect(endpoint);
+    };
+    w.tick();
+    assert.ok(attempts >= 3);
+    assert.ok(!slp.projectStatus({ roots: w.roots, projectId: "alpha" }).anomalies.some((item) => item.type === "peer.runtime-unknown"));
+
+    attempts = 0;
+    adapter.inspect = (endpoint) => {
+      if (endpoint === peer.endpoint) { attempts += 1; throw new Error("exhausted observation"); }
+      return inspect(endpoint);
+    };
+    w.tick();
+    // Health observation and report collection each have one bounded observation.
+    assert.equal(attempts, 6);
+    assert.ok(slp.projectStatus({ roots: w.roots, projectId: "alpha" }).anomalies.some((item) => item.type === "peer.runtime-unknown" && item.reason === "exhausted observation"));
+    assert.equal(slp.readTask(w.roots.foremanHome, peer.taskId).resourceLease.leaseId, peer.resourceLease.leaseId);
+    assert.equal(slp.readTask(w.roots.foremanHome, peer.taskId).generation, peer.generation);
+
+    adapter.inspect = inspect;
+    const lead = leadOf(w, "alpha");
+    let sends = 0;
+    adapter.send = () => { sends += 1; throw new Error("uncertain mutation"); };
+    slp.followupProjectLead({ roots: w.roots, taskId, text: "One durable follow-up.", adapter, startCoordinator: false });
+    w.tick();
+    w.tick();
+    assert.equal(sends, 1, "an uncertain send is never retried blindly");
+    assert.equal(leadOf(w, "alpha").endpoint, lead.endpoint);
+  } finally { w.cleanup(); }
+});
+
+test("coordinator process is reused, stale code restarts it, and an unrelated PID is never killed", async () => {
+  const { once } = require("node:events");
+  const { spawn } = require("node:child_process");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-coordinator-process-"));
+  const roots = core.resolveRoots({ foremanRoot: base, foremanHome: path.join(base, "home") });
+  const script = path.join(base, "bin", "foreman-slp-coordinator");
+  const stateFile = path.join(roots.foremanHome, "data", "slp", "coordinator.json");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.mkdirSync(path.join(base, "src"), { recursive: true });
+  fs.writeFileSync(path.join(base, "src", "slp.js"), "// version one\n");
+  fs.writeFileSync(path.join(base, "src", "foreman.js"), "// core version one\n");
+  fs.writeFileSync(path.join(base, "src", "coordination.js"), "// coordination version one\n");
+  fs.writeFileSync(script, "setInterval(() => {}, 1000);\n");
+  core.initHome(roots);
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const started = [];
+  try {
+    core.atomicJson(stateFile, { pid: unrelated.pid, script });
+    const first = slp.startCoordinatorProcess({ roots });
+    started.push(first.pid);
+    assert.equal(first.started, true);
+    assert.notEqual(first.pid, unrelated.pid);
+    process.kill(unrelated.pid, 0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const second = slp.startCoordinatorProcess({ roots });
+    assert.equal(second.alreadyRunning, true);
+    assert.equal(second.pid, first.pid);
+    fs.writeFileSync(path.join(base, "src", "coordination.js"), "// coordination version two\n");
+    const replacement = slp.startCoordinatorProcess({ roots });
+    started.push(replacement.pid);
+    assert.equal(replacement.started, true);
+    assert.notEqual(replacement.pid, first.pid);
+    process.kill(unrelated.pid, 0);
+  } finally {
+    for (const pid of started) { try { process.kill(pid, "SIGTERM"); } catch (_) {} }
+    const exited = once(unrelated, "exit");
+    unrelated.kill();
+    await exited;
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("two projects on different backends run side by side and share only explicit service resources", () => {
   const w = world([{ id: "alpha", backend: "paseo" }, { id: "beta", backend: "herdr" }]);
   try {
@@ -296,6 +530,20 @@ for (const backend of BACKENDS) {
       const closing = JSON.parse(fs.readFileSync(closureFile, "utf8"));
       assert.equal(closing.status, "closing");
       assert.equal(closing.metrics.peerCount, 2);
+      const during = slp.fleetMetrics({ roots: w.roots }).tasks.find((item) => item.taskId === t1);
+      assert.equal(during.status, "closing");
+      assert.equal(during.peerCount, 2);
+      assert.equal(during.acceptances, 1);
+      assert.equal(slp.taskMetrics({ roots: w.roots, taskId: t1 }).peerCount, 2);
+      const view = slp.fleetView({ roots: w.roots });
+      assert.equal(view.projects[0].tasks.closing, 1);
+      assert.equal(slp.projectStatus({ roots: w.roots, projectId: "pilot" }).tasks.find(({ meta }) => meta.taskId === t1).meta.status, "closing");
+      const projected = slp.buildProjectState({ roots: w.roots, projectId: "pilot" }).activeTasks.find((task) => task.taskId === t1);
+      assert.equal(projected.status, "closing");
+      assert.equal(projected.nextAction, "resume-acceptance");
+      const persisted = JSON.parse(fs.readFileSync(path.join(w.projects.pilot.root, ".foreman", "project-state.json"), "utf8"));
+      assert.equal(persisted.activeTasks.find((task) => task.taskId === t1).status, "closing");
+      assert.equal(view.projects[0].readyForAcceptance.length, 0);
       assert.deepEqual(closing.peerTaskIds.sort(), [implementation.taskId, review.taskId].sort());
 
       const finished = slp.acceptSlpTask({ roots: w.roots, taskId: t1, adapter: w.adapterOf("pilot") });
@@ -308,6 +556,7 @@ for (const backend of BACKENDS) {
       assert.equal(after.endpoint, other.endpoint);
       assert.ok(after.resourceLease, "the other task's Peer keeps its lease");
       assert.equal(slp.fleetMetrics({ roots: w.roots }).tasks.find((item) => item.taskId === t1).status, "accepted");
+      assert.equal(slp.taskMetrics({ roots: w.roots, taskId: t1 }).status, "accepted");
     } finally {
       w.cleanup();
     }

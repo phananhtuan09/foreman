@@ -44,4 +44,6 @@ Resolve these through a separately authorized investigation or contract revision
 The Active product contract and accepted SLP decision revise the Baseline contract for one project-scoped Lead, task-scoped Peer assignments, core-mediated coordination, and task-level human acceptance.
 The 2026-10-01 task-scoped Lead decision is superseded by the 2026-10-02 project-scoped decision.
 The optional `foreman-lead` skill and its existing-installer distribution are owned by the accepted workflow-base decision in the adjacent `ai-agent-workflow` repository.
-The runtime and CLI still implement the prior Supervisor–Worker task model; SLP dispatch must not be treated as available until its implementation gates and the project-local Lead skill prerequisite pass.
+The runtime and CLI preserve the Supervisor–Worker task model and implement SLP coordination.
+The Paseo delivery slice and its live gates are complete; Herdr live proof and coordinator placement remain open, as recorded in the [roadmap S4 status](plans/active/core-roadmap.md#s4-backend-parity-fleet-rollout-and-measured-simplification).
+SLP dispatch requires the compatible project-local Lead skill and confirmed profiles; broad fleet rollout remains deferred.

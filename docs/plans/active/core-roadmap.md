@@ -16,6 +16,10 @@ Keep the original P0–P3 roadmap and proof criteria as historical context rathe
 ## State
 
 The code and CLI retain the compatible Supervisor–Worker path and include Paseo-backed SLP coordination.
+The Paseo SLP delivery slice is complete as of 2026-10-03, including all carried S2–S4 Paseo live gates; see the S4 status and evidence below.
+The read-only completion check reran `npm test` on this checkout: 156 tests, 146 passing, 0 failing, and 10 opt-in live skips.
+It did not rerun live scenarios or mutate the operational fleet.
+Full cross-backend S4 acceptance remains open for Herdr live proof and coordinator placement; broad fleet rollout remains deferred.
 The S0 contract and specification gate is complete, with no runtime behavior changed.
 The historical implementation snapshot is not current verification.
 The 2026-10-01 product and architecture updates described a task-scoped Lead and coordination only during Foreman turns.
@@ -554,7 +558,11 @@ Deferred: broad fleet rollout, additional resource automation beyond demonstrate
 #### S4: backend parity, fleet rollout, and measured simplification
 
 Outcome: the proven project flow operates on both supported backends and more than one project.
-Status: Runtime and focused tests for items 1–5 exist as of 2026-10-02; Paseo ran live with two projects in an isolated home (the user deferred Herdr live proof), so the S4 gate is not met and the rollout procedure stays a `Reference`; see [the S4 plan](s4-herdr-slp-parity.md).
+Status: Paseo implementation and all remaining S2–S4 Paseo live gates passed in isolated daemons and Foreman homes on 2026-10-03; `npm test` passes 156 tests (146 pass, 0 fail, 10 opt-in skips).
+Herdr live proof remains deferred by the user, so full cross-backend S4 acceptance is open and the rollout procedure stays a `Reference`; see [the S4 plan](s4-herdr-slp-parity.md).
+Paseo delivery slice: complete, including the carried S2 health/recovery/retry gates, carried S3 concurrency and rollover gates, interrupted acceptance, coordinator replay, and representative task measurements.
+Verification: all seven Paseo SLP live scenarios and the legacy Paseo Supervisor–Worker live integration passed in isolated homes.
+Remaining acceptance: Herdr parity proof and its coordinator placement; broad fleet rollout remains deferred.
 
 1. Implement and verify the remaining backend against the same request, report, notification, context-handoff, resource, and acceptance contracts.
    Preserve backend identity and refuse unsupported profiles or runtime capabilities without fallback.
@@ -567,10 +575,10 @@ Status: Runtime and focused tests for items 1–5 exist as of 2026-10-02; Paseo 
 5. Keep small-task flows short and remove demonstrated unnecessary steps without weakening review or acceptance gates.
    Publish rollout and rollback procedures only with disclosed verification evidence.
 
-Carried from S2: exercise live on Paseo the complete runtime health classification, explicit Peer recovery, and retry exhaustion, which S2 accepted on focused code proofs.
+Carried from S2: exercise live on Paseo the complete runtime health classification, explicit Peer recovery, and retry exhaustion, which S2 accepted on focused code proofs; passed on 2026-10-03 in an isolated daemon with disclosed fault injection.
 
-Carried from S3: exercise live a cross-Peer integration defect with `peer.claim-exceeded`, cross-task readiness invalidation, a blocked task beside a running one, Lead rollover and Peer replacement with multiple live Peers, and the Foreman inbox rendering of waits, which S3 accepted on focused code proofs.
-Also explain the unverified generation-8 Lead stop and generation-9 recovery at 11:03:08 UTC before relying on Lead recovery evidence.
+Carried from S3: exercise live a cross-Peer integration defect with `peer.claim-exceeded`, cross-task readiness invalidation, a blocked task beside a running one, Lead rollover and Peer replacement with multiple live Peers, and the Foreman inbox rendering of waits, which S3 accepted on focused code proofs; all passed on Paseo in isolated homes on 2026-10-03.
+The historical generation-8 Lead stop and generation-9 recovery at 11:03:08 UTC remain unexplained; current Paseo rollover and recovery proof is independent and does not rely on those events.
 
 Gate: both backends pass the serial, rollover, conflict/dependency, and interrupted-closure scenarios.
 Fleet and project views agree, cross-project effects are refused, and endpoint reuse occurs only after reconciliation.

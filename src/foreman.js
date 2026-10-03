@@ -1135,10 +1135,18 @@ function nextReportFile(home, meta, status) {
 
 const REPORT_CHECK_RESULTS = ["passed", "failed", "error", "skipped", "not-run"];
 
+function normalizePaseoResponse(raw) {
+  let text = String(raw || "").trim();
+  // Projected timelines can put a horizontal rule before the provider's final response.
+  text = text.replace(/^---[ \t]*\r?\n\s*/, "");
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : text;
+}
+
 // The normalized Peer report shared by both backends; identity comes from the canonical assignment, never from this object.
 function parseSlpPeerReport(text, meta) {
   let value;
-  try { value = JSON.parse(String(text).trim()); } catch (_) { return null; }
+  try { value = JSON.parse(meta.backend === "paseo" ? normalizePaseoResponse(text) : String(text).trim()); } catch (_) { return null; }
   if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1 || value.assignmentId !== meta.taskId || Number(value.generation) !== Number(meta.generation)
     || !REPORT_STATUSES.includes(value.status) || typeof value.summary !== "string"
     || !Array.isArray(value.changedSurfaces) || value.changedSurfaces.some((item) => typeof item !== "string")
@@ -1173,11 +1181,7 @@ function recordReport({ roots, paneId, status, summary }) {
 
 function parsePaseoReport(raw) {
   if (typeof raw !== "string" || !raw.trim()) return null;
-  let text = raw.trim();
-  // Paseo may include a Markdown horizontal-rule separator before the provider's final JSON block.
-  if (text.startsWith("---")) text = text.slice(3).trim();
-  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenced) text = fenced[1].trim();
+  const text = normalizePaseoResponse(raw);
   let value;
   try { value = JSON.parse(text); } catch (_) { return null; }
   if (!value || typeof value !== "object" || Array.isArray(value) || !REPORT_STATUSES.includes(value.status) || typeof value.summary !== "string" || !value.summary.trim()) return null;
@@ -1586,21 +1590,44 @@ function reconstructTask({ roots, taskId }) {
 }
 
 // A Foreman prompt reopens a blocked or review-ready task so the worker's next report is expected.
-function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter }) {
+function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter, explicitMessageId }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const backend = assertAdapterBackend(meta, adapter, "messaging its worker");
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
     if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
     const messagePayload = { ...payload, backend, taskModel: taskModel(meta), parentTaskId: meta.parentTaskId || null, peerRole: meta.peerRole || null };
-    const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: messagePayload });
+    let message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: messagePayload, explicitId: explicitMessageId });
+    if (explicitMessageId && message.status === "delivered") return { message, task: meta, delivery: { delivered: true, duplicate: true } };
+    if (explicitMessageId && message.status === "failed") throw new DeliveryError(`Worker message delivery previously failed: ${message.messageId}`);
+    if (explicitMessageId && message.deliveryAttemptedAt) {
+      if (backend !== "paseo") return { message, task: meta, delivery: { delivered: false, uncertain: true } };
+      let timeline;
+      try { timeline = adapter.read(meta.endpoint, message.cursorBefore); }
+      catch (error) { return { message, task: meta, delivery: { delivered: false, uncertain: true, error: error.message } }; }
+      if (timeline.endpoint !== meta.endpoint || timeline.taskId !== taskId || timeline.projectId !== meta.projectId
+        || Number(timeline.generation) !== Number(meta.generation) || timeline.workspaceId !== meta.workspaceId
+        || !timeline.cwd || canonical(timeline.cwd) !== canonical(meta.workspace)) throw new DeliveryError("Worker message reconciliation identity does not match its assignment");
+      if (!(timeline.entries || []).some((entry) => entry.messageId === message.messageId || entry.item?.messageId === message.messageId || entry.item?.id === message.messageId)) {
+        return { message, task: meta, delivery: { delivered: false, uncertain: true } };
+      }
+      message = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: true, evidence: { reconciled: true } });
+      const next = { ...meta, status: "working", completionReport: null, lastPromptAt: message.deliveryAttemptedAt, paseoCursor: message.cursorBefore };
+      atomicJson(metaFile(roots.foremanHome, taskId), next);
+      return { message, task: next, delivery: { delivered: true, reconciled: true } };
+    }
     const promptAt = now();
     if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
     const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
     atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
+    if (explicitMessageId) message = coordination.updateMessageUnlocked({ roots, messageId: message.messageId, mutate: (current) => ({ ...current, deliveryAttemptedAt: promptAt, cursorBefore: paseoCursor || null }) });
     let result;
     try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
-    catch (error) { result = { delivered: false, error: error.message }; }
+    catch (error) { result = { delivered: false, ...(explicitMessageId ? { uncertain: true } : {}), error: error.message }; }
+    if (result?.uncertain && explicitMessageId) {
+      message = coordination.updateMessageUnlocked({ roots, messageId: message.messageId, mutate: (current) => ({ ...current, transportEvidence: result }) });
+      return { message, task: meta, delivery: result };
+    }
     const delivered = result !== false && result?.delivered !== false;
     const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
     if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
@@ -1911,7 +1938,7 @@ module.exports = {
   registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   taskModel, migrateSlpTaskModels, createSlpPeerTask, materializeDispatchProfile,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
-  recordReport, parseSlpPeerReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
+  recordReport, parseSlpPeerReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, normalizePaseoResponse, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
