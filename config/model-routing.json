@@ -41,7 +41,7 @@
         "codex",
         "--yolo"
       ],
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "medium",
       "whenToUse": "Use for tooling-heavy builds, tests, dependencies, CI, or scripted batch edits when this profile is explicitly requested.",
       "isActive": false
@@ -63,7 +63,7 @@
         "mini",
         "--standalone"
       ],
-      "model": "openai/gpt-6-sol",
+      "model": "openai/gpt-6.1-sol",
       "effort": "medium",
       "whenToUse": "Use when OpenCode is explicitly requested."
     },
