@@ -227,7 +227,7 @@ async function main(action, input) {
       const workspace = await client.workspaces.open({ cwd: input.cwd });
       if (workspace.directory && canonicalDirectory(workspace.directory) !== canonicalDirectory(input.cwd)) throw new Error("Paseo workspace directory does not match the Foreman workspace");
       const agent = await workspace.agents.create({
-        title: paseoProfileName || input.owner,
+        title: paseoProfileName ? `${input.taskId} · ${paseoProfileName}` : `${input.taskId} · ${input.owner}`,
         config: {
           provider: `${profile.provider}/${profile.model}`,
           ...(profile.modeId ? { modeId: profile.modeId } : {}),
