@@ -479,6 +479,9 @@ function validateRoutingConfig(config, { includeAllProfiles = false } = {}) {
   }
   if (!Object.keys(profiles).length) throw new ValidationError("At least one active routing profile is required");
   if (typeof config.default !== "string" || !profiles[config.default]) throw new ValidationError("Routing default must name an active configured profile");
+  if (config.leadProfile !== undefined && (typeof config.leadProfile !== "string" || !Object.hasOwn(profiles, config.leadProfile))) {
+    throw new ValidationError("Routing leadProfile must name an active configured profile");
+  }
   if (!config.groups || typeof config.groups !== "object" || Array.isArray(config.groups) || !Object.keys(config.groups).length) {
     throw new ValidationError("Routing groups must be a non-empty object");
   }
@@ -502,7 +505,7 @@ function validateRoutingConfig(config, { includeAllProfiles = false } = {}) {
   for (const name of Object.keys(config.profiles)) {
     if (!groupedProfiles.has(name)) throw new ValidationError(`Routing profile has no group: ${name}`);
   }
-  return { schemaVersion: 1, router, default: config.default, groups, profiles, ...(includeAllProfiles ? { allProfiles } : {}), inactiveProfiles };
+  return { schemaVersion: 1, router, default: config.default, ...(config.leadProfile !== undefined ? { leadProfile: config.leadProfile } : {}), groups, profiles, ...(includeAllProfiles ? { allProfiles } : {}), inactiveProfiles };
 }
 
 function loadRoutingConfig(root, { required = false, includeAllProfiles = false } = {}) {

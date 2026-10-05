@@ -320,7 +320,10 @@ function confirmProjectLeadProfile({ roots, projectId, profileName, backend = SL
   if (adapterBackend(adapter) !== backend) throw new SlpError(`Lead profile binding requested on ${backend} but the runtime adapter is ${adapterBackend(adapter)}`);
   assertSlpBackend(adapter, "Lead profile binding");
   const project = core.findProject(roots.foremanHome, projectId);
+  if (profileName === undefined) profileName = core.initRoutingConfig({ roots, backend }).config.leadProfile;
+  if (profileName === undefined) throw new SlpError("Configure leadProfile or pass --profile to bind the project Lead");
   const profile = configuredProfile({ roots, profileName, backend });
+  core.validateDispatchProfile(profile, adapter.capabilities());
   verifyPilotPrerequisites({ roots, project, profile });
   return core.withHomeLock(roots.foremanHome, () => {
     const existing = readLead(roots.foremanHome, projectId);

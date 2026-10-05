@@ -125,6 +125,50 @@ function acceptedReviewPayload(relatedAssignmentIds, reviewId, outcome = "accept
   };
 }
 
+test("configured Lead profile binds on either backend while task Peers keep their confirmed profile", () => {
+  for (const backend of ["paseo", "herdr"]) {
+    const f = fixture();
+    const adapter = backend === "paseo" ? f.adapter : new FakeHerdrAdapter();
+    const configFile = path.join(f.roots.foremanRoot, "config", "model-routing.json");
+    const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    config.leadProfile = "opencode-sol";
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    try {
+      const bound = slp.confirmProjectLeadProfile({ roots: f.roots, projectId: "pilot", backend, adapter });
+      assert.equal(bound.profileName, "opencode-sol");
+      const task = core.createTask({ roots: f.roots, projectId: "pilot", backend, taskModel: "slp", brief: "Keep Lead and Peer profiles separate.", routingRunner: () => ({ profile: "claude-sonnet" }) });
+      core.confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "claude-sonnet" });
+      config.leadProfile = "opencode-luna";
+      fs.writeFileSync(configFile, JSON.stringify(config));
+      slp.dispatchSlpTask({ roots: f.roots, taskId: task.id, adapter, startCoordinator: false });
+      const lead = slp.readLead(f.roots.foremanHome, "pilot");
+      assert.equal(lead.profileName, "opencode-sol", "a config change must not change the bound Lead");
+      assert.equal(adapter.agents.get(lead.endpoint).dispatchProfile.name, "opencode-sol");
+      const request = JSON.parse(implementationRequest(task.id, lead.generation));
+      if (backend === "paseo") adapter.finish(lead.endpoint, JSON.stringify(request));
+      else { adapter.idle(lead.endpoint); slp.submitLeadRequest({ roots: f.roots, paneId: lead.paneId, envelope: request }); }
+      slp.coordinatorTick({ roots: f.roots, adapter });
+      const peer = slp.listPeerTasks(f.roots, task.id)[0];
+      assert.equal(adapter.agents.get(peer.endpoint).dispatchProfile.name, "claude-sonnet");
+      assert.throws(() => slp.confirmProjectLeadProfile({ roots: f.roots, projectId: "pilot", backend, adapter }), /Cannot change a bound Lead profile/);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("Lead binding requires an explicit profile when legacy config has no leadProfile", () => {
+  const f = fixture();
+  try {
+    const configFile = path.join(f.roots.foremanRoot, "config", "model-routing.json");
+    const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    delete config.leadProfile;
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    assert.throws(() => slp.confirmProjectLeadProfile({ roots: f.roots, projectId: "pilot", adapter: f.adapter }), /Configure leadProfile or pass --profile/);
+    assert.equal(slp.readLead(f.roots.foremanHome, "pilot"), null);
+    const bound = slp.confirmProjectLeadProfile({ roots: f.roots, projectId: "pilot", profileName: "claude-sonnet", adapter: f.adapter });
+    assert.equal(bound.profileName, "claude-sonnet");
+  } finally { f.cleanup(); }
+});
+
 test("SLP Peer prompt distinguishes logical resource claims from its workspace path", () => {
   const prompt = coordination.deliveryPrompt({
     kind: "task-brief",

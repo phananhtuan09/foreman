@@ -15,6 +15,7 @@
     "whenToUse": "Classify every new Foreman task and select one configured worker profile."
   },
   "default": "codex-luna",
+  "leadProfile": "opencode-sol",
   "groups": {
     "ordinary": {
       "whenToUse": "Mechanical edits, initial bug investigation and fixes, features within an existing design, UI, tests, and reviews. Use when the brief does not establish a need for deep redesign; file count alone does not make a task deep.",

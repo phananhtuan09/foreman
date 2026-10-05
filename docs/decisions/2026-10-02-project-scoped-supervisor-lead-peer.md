@@ -125,6 +125,9 @@ This decision supersedes the task-scoped Lead choice while retaining its compati
     The core hands off only at a safe request boundary, fencing the old Lead generation without stopping living Peers.
     Refuse SLP dispatch when the selected runtime has neither a reliable context signal nor a validated bound.
 15. The project Lead uses a project-bound, human-confirmed configured profile.
+    `leadProfile` in `config/model-routing.json` selects the default for an explicit `project lead bind`; `--profile` overrides that choice.
+    If neither is set, binding is refused; a configured `leadProfile` must name an active profile supported by the selected backend.
+    Binding persists the selected runtime profile; later config changes do not change existing Leads, including replacement and recovery sessions, unless the human explicitly requests a profile change.
     Each task's Peer assignments inherit that task's human-confirmed profile.
     Neither Lead requests nor worker reports can silently change profiles.
 16. Keep existing Supervisor–Worker assignments on their current model until closure.

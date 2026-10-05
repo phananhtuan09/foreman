@@ -98,7 +98,7 @@ const usage = [
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task collect   (Paseo: collect finished-turn reports from assigned agents)",
-  "  project lead bind --project ID --profile NAME   (explicitly bind the project Lead profile for the selected backend)",
+  "  project lead bind --project ID [--profile NAME]   (bind the configured leadProfile or an explicit profile for the selected backend)",
   "  project lead status --project ID",
   "  project lead followup --task ID (--text TEXT|--text-file FILE)   (send a durable human follow-up to the current Lead)",
   "  project lead replace --project ID [--profile NAME]   (verified safe-boundary handoff; optional confirmed profile change)",
