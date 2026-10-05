@@ -12,7 +12,7 @@ Enable SLP for one more project at a time, observe it with compact views and rec
 
 - The project is registered and the compatible `foreman-lead` skill is installed where the project's Lead tool discovers it.
 - `config/slp-capacity.json` exists with the intended task, Peer, and endpoint limits; without it the project runs one task and one Peer at a time.
-- The human confirms the Lead profile with `project lead bind` and each task's Peer profile with `task confirm`; no step here selects a profile.
+- The human confirms the Lead profile by configuring `leadProfile` in `config/model-routing.json` (or naming one with `project lead bind --profile`) and each task's Peer profile with `task confirm`; no step here selects a profile.
 - For Herdr, run from a session where `HERDR_ENV=1`, because a coordinator inherits that variable from the process that starts it.
 
 ## Safety
@@ -25,7 +25,7 @@ Never infer a dead Lead or Peer from unknown evidence; recovery requires two mat
 
 ### Roll out one project
 
-1. Bind the Lead profile: `bin/foreman-<backend> project lead bind --project ID --profile NAME`.
+1. Bind the Lead profile: `bin/foreman-<backend> project lead bind --project ID`, which uses the configured `leadProfile`; add `--profile NAME` only for a human-named override.
 2. Create and confirm one small task: `task create --model slp`, then `task confirm --task ID --profile NAME`, then `task dispatch --task ID`.
 3. Watch it with `bin/foreman slp fleet` (one line per project) and `bin/foreman project lead status --project ID`.
 4. Read attributable detail only when needed with `bin/foreman slp evidence --task ID`.
