@@ -236,7 +236,7 @@ async function main(action, input) {
         },
         labels: {
           "foreman.owner": input.owner,
-          ...(input.taskId ? { "foreman.taskId": input.taskId } : {}),
+          "foreman.taskId": input.taskId,
           "foreman.projectId": input.projectId,
           "foreman.generation": String(input.generation),
           ...(routingProfile ? { "foreman.routingProfile": routingProfile } : {}),

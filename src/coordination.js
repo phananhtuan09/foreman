@@ -7,7 +7,7 @@ class MessageValidationError extends CoordinationError {}
 class SchemaValidationError extends CoordinationError {}
 
 const SUPPORTED_SCHEMA_VERSION = 1;
-const TASK_STATUSES = ["routing", "queued", "pending", "working", "blocked", "waiting-decision", "review-ready", "proof-complete", "accepted", "cleaned"];
+const TASK_STATUSES = ["routing", "queued", "pending", "working", "blocked", "waiting-decision", "review-ready", "accepted", "cleaned"];
 
 function isoNow() { return new Date().toISOString(); }
 function digest(value) { return crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex"); }
@@ -52,11 +52,6 @@ function validateTaskMetaRecord(meta, taskId) {
   if (meta.owner !== null && meta.owner !== undefined && typeof meta.owner !== "string") throw new SchemaValidationError(`Task metadata owner is invalid: ${taskId || meta.taskId}`);
   if (meta.endpoint !== null && meta.endpoint !== undefined && typeof meta.endpoint !== "string") throw new SchemaValidationError(`Task metadata endpoint is invalid: ${taskId || meta.taskId}`);
   if (meta.backend !== undefined && !["herdr", "paseo"].includes(meta.backend)) throw new SchemaValidationError(`Task metadata backend is invalid: ${taskId || meta.taskId}`);
-  if (meta.taskModel !== undefined && !["supervisor-worker", "slp", "slp-peer"].includes(meta.taskModel)) throw new SchemaValidationError(`Task metadata model is invalid: ${taskId || meta.taskId}`);
-  if (meta.purpose !== undefined && (meta.taskModel !== "slp" || !["delivery", "validation"].includes(meta.purpose))) throw new SchemaValidationError(`Task purpose is invalid: ${taskId || meta.taskId}`);
-  if (meta.status === "proof-complete" && (meta.taskModel !== "slp" || meta.purpose !== "validation")) throw new SchemaValidationError(`Only validation SLP tasks can be proof-complete: ${taskId || meta.taskId}`);
-  if (meta.taskModel === "slp-peer" && (!/^T-\d{6,}$/.test(String(meta.parentTaskId || "")) || !["exploration", "audit", "implementation", "review", "correction"].includes(meta.peerRole))) throw new SchemaValidationError(`SLP Peer identity is invalid: ${taskId || meta.taskId}`);
-  if (meta.taskModel !== undefined && meta.taskModel !== "slp-peer" && (meta.parentTaskId || meta.peerRole)) throw new SchemaValidationError(`Task model cannot carry a Peer parent identity: ${taskId || meta.taskId}`);
   if (meta.workspaceId !== undefined && meta.workspaceId !== null && typeof meta.workspaceId !== "string") throw new SchemaValidationError(`Task metadata workspace ID is invalid: ${taskId || meta.taskId}`);
   return meta;
 }
@@ -100,37 +95,7 @@ const REPORT_COMMAND = [
   "After the command succeeds, end your turn. If it fails, include the error in your final message.",
 ];
 
-// A Herdr SLP Peer submits the same normalized report object a Paseo Peer returns, through the bound-pane command.
-const SLP_PEER_REPORT_COMMAND = [
-  "\"$FOREMAN_ROOT/bin/foreman\" report --status <done|blocked|progress> <<'REPORT'",
-  "{\"schemaVersion\":1,\"assignmentId\":\"<this assignment task ID>\",\"generation\":<this generation>,\"status\":\"<done|blocked|progress>\",\"summary\":\"<bounded outcome>\",\"changedSurfaces\":[],\"checks\":[],\"openItems\":[]}",
-  "REPORT",
-  "",
-  "Use this assignment task ID and generation exactly as given above; the JSON status must equal --status.",
-  "changedSurfaces and openItems are arrays of strings; checks is an array of {name, result, source, evidence}, with result passed, failed, error, skipped, or not-run and non-empty source and evidence.",
-  "done means the bounded assignment is complete; list unresolved issues in openItems. blocked means only the user can unblock you. progress means you stopped for another reason.",
-  "After the command succeeds, end your turn. If it fails, include the error in your final message.",
-];
-
-// A Herdr project Lead records one request per action through the bound-pane command, then ends its turn.
-const LEAD_REQUEST_COMMAND = [
-  "\"$FOREMAN_ROOT/bin/foreman\" lead request <<'REQUEST'",
-  "{\"schemaVersion\":1,\"requestId\":\"<unique request ID>\",\"projectId\":\"<project ID>\",\"leadGeneration\":<your Lead generation>,\"taskId\":\"<top-level task ID>\",\"action\":\"<create-peer|message-peer|record-review|report-task>\",\"payload\":{}}",
-  "REQUEST",
-  "",
-  "Submit exactly one request envelope per action. The command prints the recorded request; Foreman core then processes it and sends you the outcome as a later message.",
-  "End your turn after the command succeeds. If it fails, include the error in your final message.",
-];
-
-const MESSAGE_TITLES = {
-  "foreman-message": "Foreman message",
-  "human-decision": "Human decision",
-  "slp-task-brief": "New SLP task for the project Lead",
-  "slp-peer-report": "Peer report routed by Foreman core",
-  "slp-request-outcome": "Foreman SLP request outcome",
-  "slp-request-error": "Foreman SLP protocol correction",
-  "slp-readiness-invalidated": "Foreman SLP readiness invalidated",
-};
+const MESSAGE_TITLES = { "foreman-message": "Foreman message", "human-decision": "Human decision" };
 
 // Every worker prompt uses one fixed layout so each dispatch reads the same way.
 function deliveryPrompt(message) {
@@ -142,33 +107,16 @@ function deliveryPrompt(message) {
     return Object.entries(value).map(([key, item]) => `${indent}${key}: ${typeof item === "object" && item !== null ? `\n${plainText(item, `${indent}  `)}` : plainText(item)}`).join("\n");
   };
   const section = (title, body) => ["", `## ${title}`, body];
-  const reportInstruction = payload.taskModel === "slp" && payload.backend === "herdr"
-    ? ["You are the current project Lead. When you take an action, submit exactly one JSON request envelope from this pane with:", "", ...LEAD_REQUEST_COMMAND, "", "Supported actions are create-peer, message-peer, record-review, and report-task. Use only the installed foreman-lead skill and Foreman's core request interface. For readiness, include the required review evidence. Never accept the task or operate runtime endpoints."].join("\n")
-    : payload.taskModel === "slp"
-    ? "You are the current project Lead. When you take an action, return exactly one JSON request envelope as the final response, with schemaVersion, requestId, projectId, leadGeneration, taskId, action, and payload. If no action is needed while waiting for existing work, return exactly waiting without an envelope. Supported actions are create-peer, message-peer, record-review, and report-task. report-task requires status and a non-empty summary. A corrected payload needs a new requestId; reuse an ID only for the exact same payload. Use only the installed foreman-lead skill and Foreman's core request interface. For readiness, include the required review evidence. Never accept the task or operate runtime endpoints."
-    : payload.backend === "paseo"
-    ? (payload.taskModel === "slp-peer"
-      ? "At the end of this turn, return exactly one JSON object with schemaVersion, assignmentId, generation, status, summary, changedSurfaces, checks, and openItems. Use this assignment task ID and generation exactly as given above. status must be done, blocked, or progress. changedSurfaces and openItems are arrays of strings; checks is an array of {name, result, source, evidence}, with result passed, failed, error, skipped, or not-run and non-empty source/evidence. A done report means the bounded assignment is complete; list unresolved issues in openItems. Do not call foreman report; Paseo returns this final response to Foreman."
-      : "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman.")
-    : payload.taskModel === "slp-peer"
-    ? ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...SLP_PEER_REPORT_COMMAND].join("\n")
+  const reportInstruction = payload.backend === "paseo"
+    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman."
     : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
-  if (message.kind === "task-brief" || (payload.taskModel === "slp" && message.kind === "slp-task-brief")) {
+  if (message.kind === "task-brief") {
     const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
-    const slpPeer = payload.taskModel === "slp-peer";
     return [
-      payload.taskModel === "slp"
-        ? `Foreman project Lead ${message.worker} | project ${message.projectId} | generation ${message.generation}`
-        : slpPeer
-        ? `Foreman SLP Peer assignment ${message.taskId} | parent task ${payload.parentTaskId} | project ${message.projectId} | role ${payload.peerRole} | generation ${message.generation}`
-        : `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
+      `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
       `Workspace: ${payload.cwd}`,
       `Branch: ${payload.branch || "current checkout"}`,
-      payload.taskModel === "slp"
-        ? "Resource claims: none held by the Lead; Peers claim resources through Foreman core."
-        : slpPeer ? `Allowed resources (logical lease keys, not filesystem paths): ${resources}` : `Allowed resources: ${resources}`,
-      ...(slpPeer ? section("Authority", "The Workspace path above is the actual filesystem checkout. Resource keys are logical lease identifiers for coordination only; for example, workspace/foreman-runtime-smoke is not a directory. Use the Workspace path for files and commands; do not append a resource key to it. Work only within the delegated scope and listed resources. Do not broaden scope, create another agent, or change Foreman state. Read the project's actual instructions and follow the task-specific report contract.") : []),
-      ...(payload.taskModel === "slp" ? section("Project Lead authority", `Read the installed foreman-lead skill at ${payload.leadSkill || "the project's selected-tool skill directory"}, actual project instructions and workflow, and generated project state at ${payload.projectState || "the project .foreman directory"}. Coordinate direct Peers through authenticated Foreman requests only. Do not change files, create another Lead, accept tasks, or stop runtime endpoints.`) : []),
+      `Allowed resources: ${resources}`,
       ...section("User request", String(payload.brief || "")),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
       ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
@@ -179,7 +127,7 @@ function deliveryPrompt(message) {
     `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
     "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
-    ...section("Report", payload.backend === "paseo" || ["slp", "slp-peer"].includes(payload.taskModel) ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+    ...section("Report", payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
   ].join("\n");
 }
 
@@ -351,8 +299,7 @@ function reconcileFleet({ roots, adapter }) {
   if (adapter && typeof adapter.list === "function") workers = adapter.list() || [];
   const tasks = [];
   for (const { taskId, meta } of activeTaskMetas(roots)) {
-    if (["accepted", "review-ready", "proof-complete", "cleaned"].includes(meta.status)) continue;
-    if (meta.taskModel && meta.taskModel !== "supervisor-worker") continue;
+    if (["accepted", "review-ready", "cleaned"].includes(meta.status)) continue;
     const adapterBackend = adapter?.backend || "herdr";
     if ((meta.backend || "herdr") !== adapterBackend) {
       tasks.push({ taskId, meta, worker: null, state: "unobserved", issues: [] });
@@ -425,7 +372,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord,
-  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, REPORT_COMMAND, SLP_PEER_REPORT_COMMAND, LEAD_REQUEST_COMMAND, deliveryPrompt, createMessageUnlocked,
+  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
 };

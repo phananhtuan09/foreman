@@ -116,7 +116,7 @@ test("real child workers complete a direct assignment and a status check flags t
   } finally { f.cleanup(); }
 });
 
-test("an untouched queued test task can be explicitly discarded but assigned or depended-on tasks cannot", async () => {
+test("an untouched queued test task can be explicitly discarded but assigned or depended-on tasks cannot", () => {
   const f = fixture();
   try {
     const queued = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "remove test intake" });
@@ -130,10 +130,7 @@ test("an untouched queued test task can be explicitly discarded but assigned or 
     const assigned = createTask({ roots: f.roots, projectId: "one", type: "scout", brief: "assigned" });
     assignTask({ roots: f.roots, taskId: assigned.id, owner: "scout", adapter: f.adapter, resources: [{ key: "file/read", mode: "read" }] });
     assert.throws(() => discardTask({ roots: f.roots, taskId: assigned.id, adapter: f.adapter }), /confirmed dead or missing/);
-  } finally {
-    await Promise.all([...f.transport.workers.keys()].map((endpoint) => f.transport.wait(endpoint)));
-    f.cleanup();
-  }
+  } finally { f.cleanup(); }
 });
 
 test("a task whose worker is confirmed dead can be discarded, releasing its lease and records", async () => {

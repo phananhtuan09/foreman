@@ -3,7 +3,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const core = require("../src/foreman");
-const slp = require("../src/slp");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 const { PaseoAdapter } = require("../src/paseo");
 const paseoRouting = require("../src/paseo-routing");
@@ -38,7 +37,7 @@ function sessionBackend() {
   try {
     const taskRoot = path.join(roots().foremanHome, "data", "tasks");
     if (!fs.existsSync(taskRoot)) return null;
-    const active = core.listTasks({ roots: roots() }).filter((meta) => !["accepted", "cleaned", "review-ready", "proof-complete"].includes(meta.status));
+    const active = core.listTasks({ roots: roots() }).filter((meta) => !["accepted", "cleaned", "review-ready"].includes(meta.status));
     const backends = new Set(active.map((meta) => meta.backend || "herdr"));
     return backends.size === 1 ? [...backends][0] : null;
   } catch (_) {
@@ -91,36 +90,23 @@ const usage = [
   "  routing route --task ID",
   "  profiles sync [--dry-run]   (Paseo: sync repo-owned profiles into the selected Paseo home)",
   "  project register --id ID --root PATH [--name NAME]",
-  "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--model supervisor-worker|slp] [--purpose delivery|validation] [--dependency ID]",
-  "  task purpose --task ID --purpose validation   (mark an eligible SLP proof task; cannot change delivery tasks after work starts)",
+  "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
   "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task collect   (Paseo: collect finished-turn reports from assigned agents)",
-  "  project lead bind --project ID [--profile NAME]   (bind the configured leadProfile or an explicit profile for the selected backend)",
-  "  project lead status --project ID",
-  "  project lead followup --task ID (--text TEXT|--text-file FILE)   (send a durable human follow-up to the current Lead)",
-  "  project lead replace --project ID [--profile NAME]   (verified safe-boundary handoff; optional confirmed profile change)",
-  "  project lead recover --project ID [--profile NAME]   (explicit recovery after two matching dead/missing checks)",
-  "  project lead pause|resume --project ID   (rollback or reopen new SLP intake)",
   "  task promote --task ID [--brief TEXT|--brief-file FILE] [--dependency ID]",
   "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
-  "  task recover --task ID [--owner OWNER]   (SLP Peer: explicit recovery after two matching missing/stopped checks)",
+  "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
   "  task message --task ID (--text TEXT|--text-file FILE)",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
   "  decision deliver --task ID --decision ID",
-  "  lead decision answer --task ID --decision ID --response TEXT",
-  "  lead decision deliver --task ID --decision ID",
-  "  slp fleet [--json]   (compact SLP view of every project: Lead, tasks, Peers, waits, anomalies, capacity)",
-  "  slp metrics [--project ID]   (per-task and total Peer count, correction cycles, waiting time, human interventions, runtime failures)",
-  "  slp evidence --task ID   (attributable Peer, request, review, decision, and anomaly evidence for one SLP task)",
   "  status [--project ID] [--json]",
-  "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (Herdr worker; summary defaults to stdin; SLP Peers submit the normalized JSON report)",
-  "  lead request [--envelope-file FILE]   (Herdr project Lead; submits one JSON request envelope, default stdin)",
+  "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
 ].join("\n");
@@ -151,17 +137,12 @@ function main() {
     } catch (error) { process.stderr.write(`foreman worker hook: ${error.message}\n`); }
     return;
   }
-    if (command === "session" && action === "context") {
+  if (command === "session" && action === "context") {
     try {
       const payload = hookPayload();
       const backend = sessionBackend();
       const adapter = backend ? runtimeAdapter(backend) : null;
-      const home = roots();
-      const baseContext = core.sessionContext({ roots: home, adapter, prompt: payload.prompt || "", cwd: payload.cwd });
-      const isDev = /^\s*DEV\b/.test(String(payload.prompt || ""));
-      if (!isDev) slp.ensureCoordinatorRunning({ roots: home });
-      const slpContext = isDev ? null : slp.sessionContext({ roots: home });
-      const context = [baseContext, slpContext].filter(Boolean).join("\n");
+      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
     } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
@@ -176,27 +157,7 @@ function main() {
     output(core.recordReport({ roots: roots(), paneId: process.env.HERDR_PANE_ID, status: arg("--status"), summary }));
     return;
   }
-  if (command === "lead" && action === "request") {
-    if (selectedBackend() !== "herdr") throw new Error("Paseo Leads return the request envelope as their final response; `lead request` is for Herdr Leads");
-    if (!process.env.FOREMAN_ROOT) throw new Error("FOREMAN_ROOT is not set; run bin/foreman init in the Foreman checkout");
-    if (!process.env.HERDR_PANE_ID) throw new Error("HERDR_PANE_ID is not set; only the bound project Lead pane can submit requests");
-    const envelopeFile = arg("--envelope-file");
-    const text = envelopeFile ? fs.readFileSync(path.resolve(envelopeFile), "utf8") : readStdin();
-    let envelope;
-    try { envelope = JSON.parse(text); } catch (error) { throw new Error(`Lead request is not valid JSON: ${error.message}`); }
-    const request = slp.submitLeadRequest({ roots: roots(), paneId: process.env.HERDR_PANE_ID, envelope });
-    slp.ensureCoordinatorRunning({ roots: roots(), backend: "herdr" });
-    output(request.accepted === false ? request : { requestId: request.requestId, status: request.status, outcome: request.outcome, leadGeneration: request.leadGeneration });
-    return;
-  }
   const home = roots();
-  if (command === "slp" && action === "fleet") {
-    const view = slp.fleetView({ roots: home });
-    output(flag("--json") ? view : slp.renderFleetView(view));
-    return;
-  }
-  if (command === "slp" && action === "metrics") { output(slp.fleetMetrics({ roots: home, projectId: arg("--project") })); return; }
-  if (command === "slp" && action === "evidence") { output(slp.taskEvidence({ roots: home, taskId: arg("--task") })); return; }
   if (command === "profiles" && action === "sync") {
     if (selectedBackend() !== "paseo") throw new Error("Profile sync is available only through bin/foreman-paseo");
     output(paseoRouting.syncPaseoProfiles({ foremanRoot: home.foremanRoot, dryRun: flag("--dry-run") }));
@@ -213,50 +174,9 @@ function main() {
     output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));
     return;
   }
-  if (command === "project" && action === "lead") {
-    const projectId = arg("--project");
-    if (process.argv[4] === "followup") {
-      const textFile = arg("--text-file");
-      const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
-      output(slp.followupProjectLead({ roots: home, taskId: arg("--task"), text, adapter: runtimeAdapter(selectedBackend()) }));
-      return;
-    }
-    if (!projectId) throw new Error("project lead requires --project ID");
-    if (process.argv[4] === "bind") {
-      const backend = selectedBackend();
-      output(slp.confirmProjectLeadProfile({ roots: home, projectId, profileName: arg("--profile"), backend, adapter: runtimeAdapter(backend) }));
-      return;
-    }
-    if (process.argv[4] === "status") {
-      output(slp.renderProjectStatus(slp.projectStatus({ roots: home, projectId })));
-      return;
-    }
-    if (process.argv[4] === "replace") {
-      const backend = selectedBackend();
-      output(slp.replaceProjectLead({ roots: home, projectId, profileName: arg("--profile"), adapter: runtimeAdapter(backend) }));
-      return;
-    }
-    if (process.argv[4] === "recover") {
-      const backend = selectedBackend();
-      output(slp.recoverProjectLead({ roots: home, projectId, profileName: arg("--profile"), adapter: runtimeAdapter(backend) }));
-      return;
-    }
-    if (process.argv[4] === "pause" || process.argv[4] === "resume") {
-      output(slp.pauseProjectLead({ roots: home, projectId, paused: process.argv[4] === "pause" }));
-      return;
-    }
-    throw new Error("project lead action must be bind, status, followup, replace, recover, pause, or resume");
-  }
   if (command === "task" && action === "create") {
     core.initRoutingConfig({ roots: home, backend: selectedBackend() });
-    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend(), taskModel: arg("--model", arg("--task-model", "supervisor-worker")), purpose: arg("--purpose") }));
-    return;
-  }
-  if (command === "task" && action === "purpose") {
-    const taskId = arg("--task");
-    const meta = assertSelectedTaskBackend(taskId);
-    if (core.taskModel(meta) !== "slp") throw new Error("Task purpose is available only for SLP top-level tasks");
-    output(slp.markValidationTask({ roots: home, taskId, purpose: arg("--purpose") }));
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend() }));
     return;
   }
   if (command === "task" && action === "list") {
@@ -267,11 +187,7 @@ function main() {
   if (command === "task" && action === "confirm") { assertSelectedTaskBackend(arg("--task")); output(core.confirmTaskProfile({ roots: home, taskId: arg("--task"), profile: arg("--profile") })); return; }
   if (command === "task" && action === "collect") {
     if (selectedBackend() !== "paseo") throw new Error("Paseo report collection is available only through bin/foreman-paseo");
-    const collected = core.collectPaseoReports({ roots: home, adapter: runtimeAdapter() });
-    if (core.listTasks({ roots: home }).some((meta) => ["slp", "slp-peer"].includes(meta.taskModel))) {
-      slp.startCoordinatorProcess({ roots: home, backend: "paseo" });
-    }
-    output(collected);
+    output(core.collectPaseoReports({ roots: home, adapter: runtimeAdapter() }));
     return;
   }
   if (command === "task" && action === "promote") {
@@ -280,14 +196,6 @@ function main() {
     return;
   }
   if (command === "task" && action === "dispatch") {
-    const meta = core.reconstructTask({ roots: home, taskId: arg("--task") }).meta;
-    if (core.taskModel(meta) === "slp-peer") throw new Error("SLP Peer assignments can be dispatched only by their current project Lead through Foreman core");
-    if (core.taskModel(meta) === "slp") {
-      if (["--owner", "--workspace", "--resources", "--reuse-endpoint"].some((option) => flag(option))) throw new Error("SLP dispatch derives its project workspace and conservative resources from the authenticated Lead request");
-      if (meta.backend !== selectedBackend()) throw new Error(`Task backend is ${meta.backend}; use bin/foreman-${meta.backend}`);
-      output(slp.dispatchSlpTask({ roots: home, taskId: meta.taskId, adapter: runtimeAdapter() }));
-      return;
-    }
     // A human dispatch proceeds past held leases; the overlaps are reported as a warning.
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint"), allowResourceConflicts: true });
     warnResourceConflicts(result);
@@ -314,20 +222,13 @@ function main() {
     return;
   }
   if (command === "task" && action === "recover") {
-    const meta = assertSelectedTaskBackend(arg("--task"));
-    const adapter = runtimeAdapter();
-    const result = core.taskModel(meta) === "slp-peer"
-      ? slp.recoverSlpPeer({ roots: home, taskId: meta.taskId, adapter })
-      : core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter });
+    assertSelectedTaskBackend(arg("--task"));
+    const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
     warnResourceConflicts(result);
     output(result);
     return;
   }
-  if (command === "task" && action === "accept") {
-    const meta = assertSelectedTaskBackend(arg("--task"));
-    output(core.taskModel(meta) === "slp" ? slp.acceptSlpTask({ roots: home, taskId: meta.taskId, adapter: runtimeAdapter() }) : core.acceptTask({ roots: home, taskId: meta.taskId, adapter: runtimeAdapter() }));
-    return;
-  }
+  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
   if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
   if (command === "task" && action === "message") {
     assertSelectedTaskBackend(arg("--task"));
@@ -343,37 +244,19 @@ function main() {
     return;
   }
   if (command === "decision" && action === "answer") {
-    const meta = assertSelectedTaskBackend(arg("--task"));
-    if (core.taskModel(meta) === "slp") {
-      output(slp.answerSlpDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), response: arg("--response") }));
-      slp.startCoordinatorProcess({ roots: home, backend: meta.backend });
-    } else output(core.answerDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), response: arg("--response") }));
+    assertSelectedTaskBackend(arg("--task"));
+    output(core.answerDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), response: arg("--response") }));
     return;
   }
   if (command === "decision" && action === "deliver") {
-    const meta = assertSelectedTaskBackend(arg("--task"));
-    output(core.taskModel(meta) === "slp" ? slp.deliverSlpDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), adapter: runtimeAdapter() }) : core.deliverDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), adapter: runtimeAdapter() }));
-    return;
-  }
-  if (command === "lead" && action === "decision") {
-    const decisionAction = process.argv[4];
-    const meta = assertSelectedTaskBackend(arg("--task"));
-    if (core.taskModel(meta) !== "slp") throw new Error("lead decision is available only for SLP tasks");
-    if (decisionAction === "answer") {
-      output(slp.answerSlpDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), response: arg("--response") }));
-      slp.startCoordinatorProcess({ roots: home, backend: meta.backend });
-    }
-    else if (decisionAction === "deliver") output(slp.deliverSlpDecision({ roots: home, taskId: meta.taskId, decisionId: arg("--decision"), adapter: runtimeAdapter() }));
-    else throw new Error("lead decision action must be answer or deliver");
+    assertSelectedTaskBackend(arg("--task"));
+    output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
     return;
   }
   if (command === "status") {
     const adapter = runtimeAdapter();
     const status = arg("--project") ? core.projectStatus({ roots: home, projectId: arg("--project"), adapter }) : core.fleetStatus({ roots: home, adapter });
-    const projects = arg("--project") ? [arg("--project")] : core.loadProjects(home.foremanHome).map((project) => project.id);
-    const slpProjects = projects.map((projectId) => slp.projectStatus({ roots: home, projectId })).filter((item) => item.lead || item.tasks.length || item.anomalies.length);
-    status.slp = arg("--project") ? slpProjects[0] || null : { projects: slpProjects };
-    output(flag("--json") ? status : `${core.renderUserReport(status, home)}${slpProjects.map(slp.renderProjectStatus).join("\n")}`);
+    output(flag("--json") ? status : core.renderUserReport(status, home));
     return;
   }
   die(usage);

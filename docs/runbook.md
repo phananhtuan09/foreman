@@ -1,29 +1,6 @@
-# Foreman local operations
+# Foreman local runbook
 
-Status: Reference
-Applies to: Local Herdr and Paseo installations
-Verification status: Preserved procedure; complete execution verification was not established during migration
-
-## Outcome
-
-Configure the selected local backend and operate project-bound tasks through dispatch, reporting, supervision, recovery, and acceptance.
-
-## Preconditions
-
-- Review the selected backend's operational skill and ensure its runtime is available.
-- Use the Foreman checkout and the correct operational home; project workspaces remain client-owned.
-- Command examples contain illustrative paths, profiles, IDs, and optional-argument notation; substitute validated values rather than executing the examples blindly.
-
-## Safety
-
-Initialization edits shell startup files; profile synchronization changes the selected Paseo home's profiles.
-Acceptance and discard delete task records after endpoint and lease checks, but leave project files intact.
-Do not run these mutations merely to verify documentation or against an unknown home.
-Never delete active fleet state or infer a dead worker from unknown evidence.
-
-## Procedure
-
-### Setup
+## Setup
 
 For Herdr mode, run `bin/foreman-herdr init` from the Foreman checkout.
 For Paseo mode, run `bin/foreman-paseo init` from the same checkout.
@@ -34,7 +11,7 @@ For an unrecognized shell, `init` fails and prints the `export` lines to add you
 Shells and worker panes opened after `init` see the variables; restart older coding agents if they should report to Foreman.
 The backend wrappers set `FOREMAN_BACKEND` only for their own CLI process and do not write it to the shell startup file.
 
-### Hooks
+## Hooks
 
 Herdr workers report through a stop hook that you install in each coding agent, globally if you like.
 Point the agent's stop hook at the absolute path of `hooks/foreman-worker-stop.sh`.
@@ -60,7 +37,7 @@ The Foreman session's prompt hook is configured for Claude Code in `.claude/sett
 Codex hook support is enabled for this project in `.codex/config.toml`; the project must be trusted, and the hook must be reviewed in `/hooks` before it runs.
 The hook runs `hooks/foreman-session-context.sh`, which adds unread worker reports and status anomalies to prompts that do not start with `DEV`.
 
-### Commands
+## Commands
 
 Use the selected backend wrapper for each Foreman command:
 
@@ -146,7 +123,7 @@ For a confirmed dead Herdr worker it stops the pane before cleanup; a missing en
 It releases the lease and deletes the task's records, reports, and decisions; the project workspace stays on disk.
 Use it to drop work that should not continue; use `task recover` instead to hand it to a new worker.
 
-### Routing
+## Routing
 
 For Herdr, edit `FOREMAN_ROOT/config/model-routing.json` to change the router, named worker profiles, or the `default` profile.
 For Codex, Claude, and OMP, set `effort` to `low`, `medium`, `high`, `xhigh`, or `max`; Codex also supports `none` for the configured GPT-6 models.
@@ -157,8 +134,7 @@ Foreman encodes a non-null `effort` as the model variant suffix `#<effort>` on `
 OpenCode resolves whether the selected variant exists for that model; an unknown variant fails model resolution.
 OpenCode V2's `mini` interface does not accept `--auto`, so Foreman rejects profiles that include it.
 The pane-local server is required so the global worker-stop plugin inherits the worker's `HERDR_PANE_ID`; a shared service may have another pane's ID.
-Install the global OpenCode V2 Foreman worker-stop plugin before dispatch by adding the absolute directory `FOREMAN_ROOT/hooks/foreman-worker-stop-opencode` to `plugins` in `~/.config/opencode/opencode.jsonc` (preserving other entries).
-Check that `opencode plugin list` shows `foreman.worker-stop`; a loaded plugin alone is not proof that a worker reported.
+Install the global OpenCode V2 Foreman worker-stop plugin before dispatch by adding the absolute directory `FOREMAN_ROOT/hooks/foreman-worker-stop-opencode` to `plugins` in `~/.config/opencode/opencode.jsonc` (preserving other entries). Check that `opencode plugin list` shows `foreman.worker-stop`; a loaded plugin alone is not proof that a worker reported.
 For V2, the plugin reads `event.data.sessionID` from `session.execution.succeeded` (not V1 `session.idle`/`event.properties`) and prompts the root session with `ctx.session.prompt({ sessionID, text: reason })` only when the worker hook returns `decision: block`.
 Set a profile's `isActive` to `false` to hide it from the router; omitted means `true`.
 The `default` profile must stay active, and tasks routed before a profile was disabled keep the profile they were given.
@@ -182,7 +158,7 @@ Every task is routed during creation, and the decision is stored in `data/tasks/
 If the router fails or returns an unknown profile, Foreman uses only the configured `default` and records the failure.
 Use `routing route --task <id>` to resume a task left in `routing` after an interrupted process.
 
-### Status and recovery
+## Status and recovery
 
 `status` lists the selected runtime once and prints the grouped Vietnamese report; `status --json` and `task list --json` keep the machine-readable record.
 `status --project <id>` filters the same snapshot.
@@ -198,22 +174,3 @@ Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handof
 
 Do not delete `data/` while work is active.
 Pull-request delivery, remote homes, relay channels, additional runtime backends, and merge authority are deferred.
-
-## Verification
-
-The historical implementation snapshot reports focused tests and live backend flows on 2026-09-28.
-Those claims do not establish that every command, hook configuration, or troubleshooting path documented here has been exercised.
-Before operational use, validate the selected backend, home, task identity, current assignment, and command syntax through the relevant operational skill and read-only CLI output.
-No complete setup-to-recovery procedure was re-executed for this migration; do not label this artifact Verified without supporting evidence.
-
-## Recovery
-
-Preserve the current workspace and records when an operation fails or its delivery is uncertain.
-Follow the documented Status and recovery procedure only after two checks confirm a dead or missing endpoint.
-Unknown, contradictory, or live evidence does not authorize recovery or discard.
-
-## References
-
-- [Product contract](../product/foreman-contract.md)
-- [State and runtime contract](../decisions/state-runtime-contract.md)
-- [Historical implementation baseline](../plans/completed/implementation-baseline.md)

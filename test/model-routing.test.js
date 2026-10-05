@@ -74,17 +74,6 @@ function routingConfig() {
   };
 }
 
-test("routing config preserves an optional Lead profile and rejects invalid or inactive choices", () => {
-  const config = routingConfig();
-  assert.equal(validateRoutingConfig(config).leadProfile, undefined);
-  assert.equal(validateRoutingConfig({ ...config, leadProfile: "claude-deep" }).leadProfile, "claude-deep");
-  for (const leadProfile of [null, true, "", "missing-profile"]) {
-    assert.throws(() => validateRoutingConfig({ ...config, leadProfile }), /Routing leadProfile must name an active configured profile/);
-  }
-  config.profiles["claude-deep"].isActive = false;
-  assert.throws(() => validateRoutingConfig({ ...config, leadProfile: "claude-deep" }), /Routing leadProfile must name an active configured profile/);
-});
-
 test("routing config supports codex, claude, omp, opencode and reads the repository file", () => {
   const f = fixture();
   try {
@@ -101,7 +90,7 @@ test("routing config supports codex, claude, omp, opencode and reads the reposit
     assert.ok(initialized.config.router.command.includes("--skip-git-repo-check"));
     assert.deepEqual(allRepositoryProfiles["codex-luna"].command, ["codex", "--yolo", "--config", 'model_reasoning_effort="high"']);
     assert.deepEqual(allRepositoryProfiles["opencode-sol"].command, ["opencode", "mini", "--standalone"]);
-    assert.equal(allRepositoryProfiles["opencode-sol"].model, "openai/gpt-6.1-sol");
+    assert.equal(allRepositoryProfiles["opencode-sol"].model, "openai/gpt-6-sol");
     assert.deepEqual(allRepositoryProfiles["opencode-luna"].command, ["opencode", "mini", "--standalone"]);
     assert.equal(allRepositoryProfiles["opencode-luna"].model, "openai/gpt-6-luna");
     assert.deepEqual([...initialized.config.inactiveProfiles].sort(), Object.entries(repositoryConfig.profiles).filter(([, profile]) => profile.isActive === false).map(([name]) => name).sort());

@@ -15,7 +15,7 @@
     "id": "foreman-codex-sol",
     "name": "Foreman Codex Sol",
     "provider": "codex",
-    "model": "gpt-6.1-sol",
+    "model": "gpt-6-sol",
     "modeId": "full-access",
     "thinkingOptionId": "medium",
     "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for tooling-heavy builds, dependencies, CI, or scripted batch edits when this profile is explicitly requested."
@@ -24,7 +24,7 @@
     "id": "foreman-opencode-sol",
     "name": "Foreman OpenCode Sol",
     "provider": "opencode",
-    "model": "openai/gpt-6.1-sol",
+    "model": "openai/gpt-6-sol",
     "modeId": "build",
     "thinkingOptionId": "medium",
     "featureValues": {

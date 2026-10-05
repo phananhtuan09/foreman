@@ -14,8 +14,7 @@
     "effort": null,
     "whenToUse": "Classify every new Foreman task and select one configured worker profile."
   },
-  "default": "codex-luna",
-  "leadProfile": "claude-opus",
+  "default": "claude-sonnet",
   "groups": {
     "ordinary": {
       "whenToUse": "Mechanical edits, initial bug investigation and fixes, features within an existing design, UI, tests, and reviews. Use when the brief does not establish a need for deep redesign; file count alone does not make a task deep.",
@@ -41,7 +40,7 @@
         "codex",
         "--yolo"
       ],
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6-sol",
       "effort": "medium",
       "whenToUse": "Use for tooling-heavy builds, tests, dependencies, CI, or scripted batch edits when this profile is explicitly requested.",
       "isActive": false
@@ -54,7 +53,8 @@
       ],
       "model": "gpt-6-luna",
       "effort": "high",
-      "whenToUse": "Preferred within its group unless another tool is explicitly requested or needs native capabilities this tool lacks."
+      "whenToUse": "Preferred within its group unless another tool is explicitly requested or needs native capabilities this tool lacks.",
+      "isActive": false
     },
     "opencode-sol": {
       "tool": "opencode",
@@ -63,7 +63,7 @@
         "mini",
         "--standalone"
       ],
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6-sol",
       "effort": "medium",
       "whenToUse": "Use when OpenCode is explicitly requested.",
       "isActive": false
