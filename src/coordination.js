@@ -434,7 +434,8 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     rounds,
     roundReports,
     decisions,
-    lastReport: read(meta.lastReport?.file),
+    // The latest done or blocked report already travels in roundReports.
+    lastReport: roundReports.some((report) => report.file === meta.lastReport?.file) ? null : read(meta.lastReport?.file),
     workspace: meta.workspace,
     branch: meta.branch,
     resources: meta.resources || [],

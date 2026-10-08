@@ -279,6 +279,48 @@ test("continue with interrupt stops a running worker, marks the replaced round, 
   } finally { f.cleanup(); }
 });
 
+test("a send that fails after the interrupt leaves a stopped worker and a failed round, not a running task", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "first");
+    f.workers.get(assignment.endpoint).status = "idle";
+    proceed(f, task.id);
+    f.workers.get(assignment.endpoint).status = "working";
+    f.state.failSend = true;
+    assert.throws(() => proceed(f, task.id, { text: "Only the handler.", original: "chỉ handler", interrupt: true }), /was interrupted but round 3 was not delivered/);
+    assert.deepEqual(f.interrupts, [assignment.endpoint]);
+    assert.deepEqual(rounds(f, task.id).map((item) => [item.round, item.status]), [[2, "delivered"], [3, "failed"]]);
+    assert.ok(f.meta(task.id).interruptedRound);
+    f.state.failSend = false;
+    const retry = proceed(f, task.id, { text: "Only the handler.", original: "chỉ handler", interrupt: true });
+    assert.equal(retry.round.round, 3);
+    assert.equal(f.meta(task.id).interruptedRound, undefined);
+  } finally { f.cleanup(); }
+});
+
+test("a worker waiting for input can be replaced with interrupt but not continued without it", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    f.workers.get(assignment.endpoint).status = "blocked";
+    assert.throws(() => proceed(f, task.id), /waiting for input/);
+    const result = proceed(f, task.id, { interrupt: true });
+    assert.equal(result.interrupted, true);
+    assert.equal(result.round.round, 2);
+  } finally { f.cleanup(); }
+});
+
+test("reassign points to recover when the Herdr pane is gone", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "first");
+    f.workers.delete(assignment.endpoint);
+    assert.throws(() => reassign(f, task.id, {}), /use task recover/);
+  } finally { f.cleanup(); }
+});
+
 test("interrupt does not send ctrl-c to a worker that already stopped", () => {
   const f = fixture();
   try {
@@ -487,7 +529,7 @@ test("reassign can change the worker profile and the mode in the same step", () 
   } finally { f.cleanup(); }
 });
 
-test("a failed reassignment leaves the requested mode undone", () => {
+test("a failed reassignment keeps the requested round and handoff on the queued task so a redispatch carries them", () => {
   const f = fixture();
   try {
     const { task, assignment } = dispatch(f, { type: "scout" });
@@ -495,8 +537,26 @@ test("a failed reassignment leaves the requested mode undone", () => {
     idle(f, assignment);
     f.state.failSend = true;
     assert.throws(() => reassign(f, task.id, { type: "ship", text: "Add the key.", original: "sửa đi" }), /did not confirm brief delivery|delivery/);
-    assert.equal(f.meta(task.id).type, "scout");
-    assert.equal(rounds(f, task.id).length, 0);
+    const queued = f.meta(task.id);
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.type, "ship");
+    assert.equal(queued.handoff.nextRequest.text, "Add the key.");
+    assert.deepEqual(rounds(f, task.id).map((round) => [round.round, round.status, round.original]), [[2, "pending", "sửa đi"]]);
+  } finally { f.cleanup(); }
+});
+
+test("a reassignment that fails before the old worker is stopped restores mode and marks the round failed", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    f.adapter.stop = () => { throw new Error("stop failed"); };
+    assert.throws(() => reassign(f, task.id, { type: "ship", text: "Add the key.", original: "sửa đi" }), /stop failed/);
+    const meta = f.meta(task.id);
+    assert.equal(meta.type, "scout");
+    assert.equal(meta.everShip, undefined);
+    assert.deepEqual(rounds(f, task.id).map((round) => round.status), ["failed"]);
   } finally { f.cleanup(); }
 });
 

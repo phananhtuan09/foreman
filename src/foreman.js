@@ -943,7 +943,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
         throw new DeliveryError(`${backend} did not confirm brief delivery`);
       }
       const assignedAt = now();
-      const assigned = { ...pending, endpoint, workspaceId: assignedWorkspaceId, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, lastPromptAt: promptAt, briefMessageId: message.messageId, handoffPending: false, dispatchProfile: profile, paseoCursor, deliveryInspection: delivered?.inspectedStatus || null, ...(delivered?.verified === false ? { deliveryUnverified: "Endpoint could not be verified after prompt submission" } : {}) };
+      const unverified = delivered?.verified === false ? "Endpoint could not be verified after prompt submission" : null;
+      const round = finishHandoffRoundUnlocked({ roots, taskId, handoff: handoff || prior.handoff, generation, messageId: message.messageId, resources: resourceLease.resources, unverified });
+      const assigned = { ...pending, endpoint, workspaceId: assignedWorkspaceId, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, lastPromptAt: promptAt, briefMessageId: message.messageId, handoffPending: false, dispatchProfile: profile, paseoCursor, deliveryInspection: delivered?.inspectedStatus || null, ...(round ? { round } : {}), ...(unverified ? { deliveryUnverified: unverified } : {}) };
       atomicJson(metaFile(roots.foremanHome, taskId), assigned);
       for (const priorMessage of coordination.listMessages({ roots }).filter((item) => item.taskId === taskId && item.generation !== generation && item.status === "pending")) {
         coordination.failMessageUnlocked({ roots, messageId: priorMessage.messageId, reason: "assignment generation was replaced" });
@@ -956,7 +958,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
           if (sent.status !== "delivered") coordination.failMessageUnlocked({ roots, messageId: createdBriefMessageId, reason: `prompt submission outcome is uncertain: ${error.message}` });
         }
         const assignedAt = now();
-        const uncertain = { ...pending, endpoint: deliveryEndpoint, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, briefMessageId: createdBriefMessageId, deliveryUnverified: error.message };
+        const round = finishHandoffRoundUnlocked({ roots, taskId, handoff: handoff || prior.handoff, generation, messageId: createdBriefMessageId, resources: pending.resources, unverified: error.message });
+        const uncertain = { ...pending, endpoint: deliveryEndpoint, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, briefMessageId: createdBriefMessageId, deliveryUnverified: error.message, ...(round ? { round } : {}) };
         atomicJson(metaFile(roots.foremanHome, taskId), uncertain);
         return uncertain;
       }
@@ -980,6 +983,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
           status: "queued",
           generation,
           briefMessageId: null,
+          handoff: handoff || prior?.handoff || null,
           dispatchError: error.message,
         };
         atomicJson(metaFile(roots.foremanHome, taskId), retryable);
@@ -990,6 +994,21 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       throw error;
     }
   });
+}
+
+/**
+ * Marks the pending round a handoff carries as delivered together with the brief that carried it.
+ * Returns the round number, or null when the handoff has no pending next round.
+ */
+function finishHandoffRoundUnlocked({ roots, taskId, handoff, generation, messageId, resources, unverified }) {
+  const round = handoff?.nextRequest?.round;
+  if (!round) return null;
+  const file = coordination.roundFile(roots.foremanHome, taskId, round);
+  if (!fs.existsSync(file)) return null;
+  const record = readJson(file);
+  if (record.status !== "pending") return null;
+  coordination.writeRoundUnlocked({ roots, record: { ...record, generation, resources, messageId, status: "delivered", deliveredAt: now(), ...(unverified ? { deliveryUnverified: unverified } : {}) } });
+  return round;
 }
 
 function readMeta(home, taskId) {
@@ -1478,14 +1497,16 @@ function endpointState(adapter, meta) {
   let inspection;
   try { inspection = adapter.inspect(meta.endpoint); } catch (_) { return "unknown"; }
   if (!inspection) return "unknown";
+  if (inspection.status === "missing") return "missing";
   const state = coordination.classifyRuntime(meta, inspection);
   return state === "idle" && inspection.activeTurn ? "working" : state;
 }
 
-// What the worker is doing right now: "running", "idle", or "unknown" for anything that is not clear evidence.
+// What the worker is doing right now: "running", "waiting-input", "idle", or "unknown" for anything that is not clear evidence.
 function endpointActivity(adapter, meta) {
   const state = endpointState(adapter, meta);
-  return state === "working" ? "running" : (state === "idle" ? "idle" : "unknown");
+  if (state === "working") return "running";
+  return ["idle", "waiting-input"].includes(state) ? state : "unknown";
 }
 
 /**
@@ -1533,8 +1554,12 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     // An instruction still in flight is one that has not been answered by a report.
     const awaiting = meta.status !== "working" || coordination.reportedSincePrompt(meta);
     if (activity === "running" && !interrupt) throw new ValidationError(`Worker of ${taskId} is still running; wait for its report or pass --interrupt`);
+    if (activity === "waiting-input" && !interrupt) throw new ValidationError(`Worker of ${taskId} is waiting for input such as a permission prompt; resolve it in the runtime, or pass --interrupt to replace its instruction`);
     if (activity === "idle" && !awaiting && !interrupt) throw new ValidationError(`Worker of ${taskId} stopped without reporting; ask it to report with task message, or pass --interrupt to replace its instruction`);
-    if (activity === "running" && typeof adapter.interrupt !== "function") throw new DeliveryError("Runtime adapter cannot interrupt a worker");
+    // A worker that is mid-turn is stopped before the new round is sent.
+    const stopTurn = activity === "running" || activity === "waiting-input";
+    if (stopTurn && typeof adapter.interrupt !== "function") throw new DeliveryError("Runtime adapter cannot interrupt a worker");
+    if (typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
 
     const project = findProject(roots.foremanHome, meta.projectId);
     const { mode, everShip, claims, previousClaims, leaseChanged } = planRoundMode({ meta, project, type: requestedType, resources });
@@ -1547,7 +1572,18 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     const record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode, resources: lease?.resources || claims, previousResources: previousClaims, supersedes, messageId: null, status: "pending" };
     coordination.writeRoundUnlocked({ roots, record });
 
-    if (activity === "running") adapter.interrupt(meta.endpoint);
+    const failRound = (error) => coordination.writeRoundUnlocked({ roots, record: { ...record, status: "failed", failedAt: now(), failure: error.message } });
+    let interruptedAt = null;
+    if (stopTurn) {
+      // The interrupt may have reached the worker even when it was not confirmed, so the task records it.
+      try { adapter.interrupt(meta.endpoint); }
+      catch (error) {
+        failRound(error);
+        atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, interruptUnconfirmed: { round: meta.round || 1, at: now(), reason: error.message } });
+        throw new DeliveryError(`Interrupting the worker of ${taskId} was not confirmed; run status before retrying: ${error.message}`);
+      }
+      interruptedAt = now();
+    }
     const prospective = { ...meta, type: mode, everShip, round: meta.round || 1, resources: lease?.resources || claims, resourceLease: lease };
     const payload = {
       taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint,
@@ -1557,15 +1593,21 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     let delivery;
     try { delivery = deliverWorkerMessageUnlocked({ roots, meta: prospective, kind: "task-update", payload, adapter, backend }); }
     catch (error) {
-      // Nothing reached the worker, so the round, mode and lease go back to what they were.
-      coordination.writeRoundUnlocked({ roots, record: { ...record, status: "failed", failedAt: now(), failure: error.message } });
-      atomicJson(metaFile(roots.foremanHome, taskId), meta);
-      throw error;
+      // The new round never reached the worker, so the round, mode and lease go back to what they were.
+      failRound(error);
+      if (!interruptedAt) {
+        atomicJson(metaFile(roots.foremanHome, taskId), meta);
+        throw error;
+      }
+      // The old instruction was already stopped, so the task must not claim it is still running.
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, interruptedRound: { round: meta.round || 1, at: interruptedAt, reason: error.message } });
+      throw new DeliveryError(`Worker of ${taskId} was interrupted but round ${round} was not delivered; it is idle, retry with task continue --interrupt: ${error.message}`);
     }
     coordination.writeRoundUnlocked({ roots, record: { ...record, status: "delivered", deliveredAt: now(), messageId: delivery.message.messageId } });
-    const next = { ...prospective, status: "working", completionReport: null, round, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
+    const { interruptedRound: _interrupted, interruptUnconfirmed: _unconfirmed, ...current } = prospective;
+    const next = { ...current, status: "working", completionReport: null, round, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
-    return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: activity === "running" };
+    return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: stopTurn };
   });
 }
 
@@ -1754,6 +1796,8 @@ function reassignWorker({ roots, taskId, adapter, profile, owner, text, original
     : { instruction: "A new worker replaces the previous one at the user's request. Inspect the workspace first, then carry out nextRequest.", nextRequest: { round, mode: plan.mode, text } };
   withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
+    // The user's words are on disk before the new worker is spawned; the brief that carries them marks the round delivered.
+    if (text !== undefined) coordination.writeRoundUnlocked({ roots, record: { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: plan.claims, previousResources: plan.previousClaims, supersedes: null, messageId: null, status: "pending" } });
     if (plan.mode !== meta.type || plan.everShip !== Boolean(meta.everShip)) atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, type: plan.mode, everShip: plan.everShip });
   });
   let assignment;
@@ -1762,21 +1806,19 @@ function reassignWorker({ roots, taskId, adapter, profile, owner, text, original
   } catch (error) {
     withHomeLock(roots.foremanHome, () => {
       const current = readMeta(roots.foremanHome, taskId);
-      atomicJson(metaFile(roots.foremanHome, taskId), { ...current, type: initial.type, ...(initial.everShip === undefined ? {} : { everShip: initial.everShip }) });
+      // The old worker is already stopped and the task waits in the queue with this handoff, so its round and mode stay for the next dispatch.
+      if (current.status === "queued" && current.handoff?.nextRequest?.round === round) return;
+      if (text !== undefined) {
+        const file = coordination.roundFile(roots.foremanHome, taskId, round);
+        if (fs.existsSync(file)) coordination.writeRoundUnlocked({ roots, record: { ...readJson(file), status: "failed", failedAt: now(), failure: error.message } });
+      }
+      const { everShip: _everShip, ...rest } = current;
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...rest, type: initial.type, ...(initial.everShip === undefined ? {} : { everShip: initial.everShip }) });
     });
     throw error;
   }
-  return withHomeLock(roots.foremanHome, () => {
-    const meta = readMeta(roots.foremanHome, taskId);
-    let record = null;
-    if (text !== undefined) {
-      record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: meta.resources || plan.claims, previousResources: plan.previousClaims, supersedes: null, messageId: meta.briefMessageId || null, status: "delivered", deliveredAt: now() };
-      coordination.writeRoundUnlocked({ roots, record });
-    }
-    const next = { ...meta, round: text !== undefined ? round : (meta.round || 1) };
-    atomicJson(metaFile(roots.foremanHome, taskId), next);
-    return { ...assignment, ...next, handoff: assignment.handoff, roundRecord: record };
-  });
+  const roundRecord = text === undefined ? null : coordination.listRounds({ roots, taskId }).find((record) => record.round === round) || null;
+  return { ...assignment, handoff: assignment.handoff, roundRecord };
 }
 
 function listTasks({ roots, projectId, statuses } = {}) {
