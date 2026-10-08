@@ -659,7 +659,6 @@ function needsProfileConfirmation(meta) {
   return Boolean(meta.routingProfile) && !meta.profileConfirmedAt && !meta.endpoint;
 }
 
-// Records the human's choice of worker profile; a routed task cannot dispatch before it.
 // The active routing profile the human named, for the task's own backend.
 function resolveWorkerProfile({ roots, backend, profile }) {
   if (typeof profile !== "string" || !profile) throw new ValidationError("A worker profile name is required");
@@ -671,6 +670,7 @@ function resolveWorkerProfile({ roots, backend, profile }) {
   return config.profiles[profile];
 }
 
+// Records the human's choice of worker profile; a routed task cannot dispatch before it.
 function confirmTaskProfile({ roots, taskId, profile }) {
   const selected = resolveWorkerProfile({ roots, backend: readMeta(roots.foremanHome, taskId).backend, profile });
   return withHomeLock(roots.foremanHome, () => {
