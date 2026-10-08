@@ -53,6 +53,8 @@ function validateTaskMetaRecord(meta, taskId) {
   if (meta.endpoint !== null && meta.endpoint !== undefined && typeof meta.endpoint !== "string") throw new SchemaValidationError(`Task metadata endpoint is invalid: ${taskId || meta.taskId}`);
   if (meta.backend !== undefined && !["herdr", "paseo"].includes(meta.backend)) throw new SchemaValidationError(`Task metadata backend is invalid: ${taskId || meta.taskId}`);
   if (meta.workspaceId !== undefined && meta.workspaceId !== null && typeof meta.workspaceId !== "string") throw new SchemaValidationError(`Task metadata workspace ID is invalid: ${taskId || meta.taskId}`);
+  if (meta.round !== undefined && (!Number.isInteger(meta.round) || meta.round < 1)) throw new SchemaValidationError(`Task metadata round is invalid: ${taskId || meta.taskId}`);
+  if (meta.everShip !== undefined && typeof meta.everShip !== "boolean") throw new SchemaValidationError(`Task metadata everShip is invalid: ${taskId || meta.taskId}`);
   return meta;
 }
 
@@ -69,6 +71,32 @@ function validateMessageRecord(message, id) {
 
 function taskDir(home, taskId) { return path.join(home, "data", "tasks", taskId); }
 function metaFile(home, taskId) { return path.join(taskDir(home, taskId), "meta.json"); }
+function roundsDir(home, taskId) { return path.join(taskDir(home, taskId), "rounds"); }
+function roundFile(home, taskId, round) { return path.join(roundsDir(home, taskId), `round-${String(round).padStart(3, "0")}.json`); }
+
+function validateRoundRecord(record, taskId, round) {
+  assertSchemaVersion(record, "Round", { field: "taskId", value: taskId });
+  if (!Number.isInteger(record.round) || record.round < 2 || (round !== undefined && record.round !== round)) throw new SchemaValidationError(`Round identity is invalid: ${taskId} round ${round ?? record.round}`);
+  if (!["pending", "delivered", "failed"].includes(record.status)) throw new SchemaValidationError(`Round lifecycle is invalid: ${taskId} round ${record.round}`);
+  if (typeof record.sent !== "string" || !record.sent || typeof record.original !== "string") throw new SchemaValidationError(`Round text is invalid: ${taskId} round ${record.round}`);
+  return record;
+}
+
+// Round 1 is the task brief itself; later rounds are append-only records written by `task continue` and `task reassign`.
+function listRounds({ roots, taskId, statuses }) {
+  const dir = roundsDir(roots.foremanHome, taskId);
+  if (!fs.existsSync(dir)) return [];
+  const allowed = statuses ? new Set(statuses) : null;
+  return fs.readdirSync(dir).filter((name) => /^round-\d+\.json$/.test(name)).sort()
+    .map((name) => validateRoundRecord(readJson(path.join(dir, name)), taskId, Number(name.slice(6, -5))))
+    .filter((record) => !allowed || allowed.has(record.status));
+}
+
+function writeRoundUnlocked({ roots, record }) {
+  validateRoundRecord(record, record.taskId, record.round);
+  atomicJson(roundFile(roots.foremanHome, record.taskId, record.round), record);
+  return record;
+}
 
 function coordinationDirs(home) {
   return { messages: path.join(home, "data", "messages") };
@@ -333,6 +361,31 @@ function reconcileFleet({ roots, adapter }) {
   return { workers, tasks };
 }
 
+const ROUND_REPORT_LIMIT = 5;
+const ROUND_REPORT_CHARS = 4000;
+
+// The last done or blocked report of each of the most recent rounds; a report without a ROUND header belongs to round 1.
+function collectRoundReports(dir) {
+  const reportsDir = path.join(dir, "reports");
+  if (!fs.existsSync(reportsDir)) return [];
+  const byRound = new Map();
+  for (const name of fs.readdirSync(reportsDir).filter((item) => item.endsWith(".md"))) {
+    const file = path.join(reportsDir, name);
+    const text = fs.readFileSync(file, "utf8");
+    const header = text.split(/\r?\n\r?\n/, 1)[0];
+    const status = header.match(/^STATUS: (.+)$/m)?.[1];
+    if (status !== "done" && status !== "blocked") continue;
+    const round = Number(header.match(/^ROUND: (\d+)$/m)?.[1] || 1);
+    const at = header.match(/^REPORTED_AT: (.+)$/m)?.[1] || "";
+    const previous = byRound.get(round);
+    if (!previous || at >= previous.at) byRound.set(round, { round, status, at, file, text });
+  }
+  return [...byRound.values()].sort((left, right) => left.round - right.round).slice(-ROUND_REPORT_LIMIT).map(({ round, status, at, file, text }) => {
+    const body = text.slice(text.indexOf("\n\n") + 2);
+    return { round, status, at, file, summary: body.length > ROUND_REPORT_CHARS ? `${body.slice(0, ROUND_REPORT_CHARS)}\n[truncated; full report: ${file}]` : body };
+  });
+}
+
 function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
   const dir = taskDir(roots.foremanHome, taskId);
   const meta = validateTaskMetaRecord(readJson(metaFile(roots.foremanHome, taskId)), taskId);
@@ -344,6 +397,8 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     if (decision.taskId !== taskId || decision.projectId !== meta.projectId || typeof decision.generation !== "number" || decision.generation > meta.generation) throw new SchemaValidationError(`Decision identity is stale: ${name}`);
     return decision;
   }) : [];
+  const rounds = listRounds({ roots, taskId, statuses: ["delivered"] }).map((round) => ({ round: round.round, mode: round.mode, sent: round.sent, original: round.original, supersedes: round.supersedes ?? null }));
+  const roundReports = collectRoundReports(dir);
   const evidenceFile = path.join(dir, "evidence.json");
   const unresolvedFile = path.join(dir, "unresolved-checks.json");
   return {
@@ -355,7 +410,10 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     previousEndpoint: meta.endpoint,
     previousGeneration: meta.generation,
     reason,
-    brief: read(path.join(dir, "brief.md")),
+    // The brief itself reaches the successor as the task's "User request"; only what came after it travels here.
+    original: read(path.join(dir, "original.md")),
+    rounds,
+    roundReports,
     decisions,
     lastReport: read(meta.lastReport?.file),
     workspace: meta.workspace,
@@ -372,7 +430,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord,
-  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
+  digest, initCoordination, coordinationDirs, taskDir, metaFile, roundsDir, roundFile, listRounds, writeRoundUnlocked, validateRoundRecord, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
 };

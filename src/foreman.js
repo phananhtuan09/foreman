@@ -589,7 +589,9 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
   initHome(roots);
   const meta = readMeta(roots.foremanHome, taskId);
   if (meta.status !== "routing") throw new ValidationError(`Task is not awaiting model routing: ${taskId}`);
-  const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+  // The router reads the user's own words: they carry any tool or profile preference that the worker-facing rewrite drops.
+  const originalFile = path.join(taskDir(roots.foremanHome, taskId), "original.md");
+  const brief = fs.readFileSync(fs.existsSync(originalFile) ? originalFile : path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
   const paseoConfig = meta.backend === "paseo" ? paseoRouting.loadPaseoRoutingConfig(roots.foremanRoot, { required: true }).config : null;
   const config = meta.backend === "paseo" ? paseoConfig : loadRoutingConfig(roots.foremanRoot);
   let selectedName = null;
@@ -723,9 +725,10 @@ function validateDependenciesUnlocked({ home, projectId, dependencies }) {
   for (const dependency of dependencies) visit(dependency);
 }
 
-function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
+function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
   if (notes != null && (typeof notes !== "string" || !notes)) throw new ValidationError("Foreman notes must be non-empty text when given");
+  if (original != null && (typeof original !== "string" || !original)) throw new ValidationError("Original user wording must be non-empty text when given");
   if (!new Set(["herdr", "paseo"]).has(backend)) throw new ValidationError(`Unsupported task backend: ${backend}`);
   const normalizedType = normalizeTaskType(taskType || type);
   const normalizedDependencies = normalizeDependencies(dependencies);
@@ -734,13 +737,14 @@ function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", tas
   validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
   const id = allocateTaskId(roots.foremanHome);
   atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), brief);
+  if (original) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), original);
   if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
   atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
-  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, notes: notes || null };
+  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, original: original || null, notes: notes || null };
 }
 
-function createTask({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
-  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, notes, type, taskType, dependencies, backend }));
+function createTask({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
+  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, original, notes, type, taskType, dependencies, backend }));
   const routing = routeTask({ roots, taskId: task.id, routingRunner });
   return { ...task, routing };
 }
@@ -808,9 +812,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
     const workspaceMode = projectVcs(project) === "none" ? "shared-directory" : "shared-current-branch";
     const taskType = prior.type || "ship";
     const requestedResources = resources === undefined && preflight === undefined
-      ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" ? "read" : "exclusive" }]
+      ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" && !prior.everShip ? "read" : "exclusive" }]
       : (resources === undefined ? preflight : resources);
-    if (taskType === "scout" && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
+    if (taskType === "scout" && !prior.everShip && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
     let resourceLease;
     try {
       resourceLease = claimResourcesUnlocked({ roots, taskId, generation, owner, resources: requestedResources, ignoreLeaseId: prior?.resourceLease?.leaseId, allowConflicts: allowResourceConflicts });
@@ -845,6 +849,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       status: "pending",
       dispatchProfile: dispatchProfile || prior.dispatchProfile || null,
       ...Object.fromEntries(ROUTING_EVIDENCE_FIELDS.filter((key) => prior[key] !== undefined).map((key) => [key, prior[key]])),
+      ...(prior.round ? { round: prior.round } : {}),
+      ...(prior.everShip ? { everShip: true } : {}),
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
@@ -1000,6 +1006,9 @@ function findTaskForPane(home, paneId) {
   return matches[0] || null;
 }
 
+// Round 1 reports carry no ROUND line, which keeps the original report format; a missing line means round 1.
+function roundHeader(meta) { return (meta.round || 1) > 1 ? [`ROUND: ${meta.round}`] : []; }
+
 function nextReportFile(home, meta, status) {
   const dir = path.join(taskDir(home, meta.taskId), "reports");
   const prefix = `generation-${meta.generation}-`;
@@ -1017,8 +1026,8 @@ function recordReport({ roots, paneId, status, summary }) {
     const at = now();
     const file = nextReportFile(roots.foremanHome, meta, status);
     // Every report is kept verbatim under its own name.
-    atomicWrite(file, [`TASK: ${meta.taskId}`, `PROJECT: ${meta.projectId}`, `AGENT: ${meta.owner}`, `GENERATION: ${meta.generation}`, `STATUS: ${status}`, `REPORTED_AT: ${at}`, "", summary].join("\n"));
-    let next = { ...meta, lastReport: { file, status, at, readAt: null } };
+    atomicWrite(file, [`TASK: ${meta.taskId}`, `PROJECT: ${meta.projectId}`, `AGENT: ${meta.owner}`, `GENERATION: ${meta.generation}`, ...roundHeader(meta), `STATUS: ${status}`, `REPORTED_AT: ${at}`, "", summary].join("\n"));
+    let next = { ...meta, lastReport: { file, status, at, readAt: null, round: meta.round || 1 } };
     if (status === "done") next = { ...next, status: "review-ready", completionReport: file, completionAt: at };
     else if (status === "blocked") next = { ...next, status: "blocked", blockerReport: file, blockerAt: at };
     atomicJson(metaFile(roots.foremanHome, meta.taskId), next);
@@ -1072,6 +1081,7 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
       `PROJECT: ${meta.projectId}`,
       `AGENT: ${endpoint}`,
       `GENERATION: ${generation}`,
+      ...roundHeader(meta),
       `TURN: ${turnId || "unknown"}`,
       `STATUS: ${report.status}`,
       `REPORTED_AT: ${at}`,
@@ -1080,7 +1090,7 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
     ].join("\n"));
     let next = {
       ...meta,
-      lastReport: { file, status: report.status, at, readAt: null },
+      lastReport: { file, status: report.status, at, readAt: null, round: meta.round || 1 },
       paseoCursor: cursor || meta.paseoCursor || null,
       lastPaseoTurnId: turnId || null,
       paseoReportError: null,
@@ -1318,7 +1328,7 @@ function projectWithoutGitForWorkerCwd(home, cwd, projectId) {
   return { project, workspace: validateWorkspace(project, project.root) };
 }
 
-function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId, type = "ship", explicit = false }) {
+function adoptExistingWorker({ roots, adapter, worker, taskId, brief, original, projectId, type = "ship", explicit = false }) {
   if (explicit !== true) throw new ValidationError("Adoption requires an explicit request");
   if (!worker) throw new ValidationError("Adoption requires an explicit worker");
   if (!taskId && !brief) throw new ValidationError("Adoption requires an existing queued task or a requirement");
@@ -1344,7 +1354,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
     }
     let created = null;
     if (!taskId) {
-      created = createTaskUnlocked({ roots, projectId: bound.project.id, brief, type, backend: adapter.backend || "herdr" });
+      created = createTaskUnlocked({ roots, projectId: bound.project.id, brief, original, type, backend: adapter.backend || "herdr" });
       const queued = { ...readMeta(roots.foremanHome, created.id), status: "queued" };
       atomicJson(metaFile(roots.foremanHome, created.id), queued);
     }
@@ -1523,18 +1533,22 @@ function deliverDecision({ roots, taskId, decisionId, adapter }) {
   });
 }
 
-function promoteScout({ roots, taskId, brief, dependencies = [], routingRunner }) {
+function promoteScout({ roots, taskId, brief, original, dependencies = [], routingRunner }) {
   const promoted = withHomeLock(roots.foremanHome, () => {
     const scout = readMeta(roots.foremanHome, taskId);
     if (scout.type !== "scout" || scout.status !== "review-ready") throw new ValidationError("Only a review-ready scout can be promoted; promote it before accepting it");
     const sourceReport = fs.readFileSync(scout.completionReport, "utf8");
     // The brief carries only the user's words; the scout's verbatim report travels as Foreman notes.
     const text = brief || fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+    // New wording brings its own original; reusing the scout's brief reuses the scout's original too.
+    const scoutOriginal = path.join(taskDir(roots.foremanHome, taskId), "original.md");
+    const originalText = original || (!brief && fs.existsSync(scoutOriginal) ? fs.readFileSync(scoutOriginal, "utf8") : null);
     const notes = `Promoted from scout ${taskId}. Scout report:\n${sourceReport}`;
     const normalized = normalizeDependencies(dependencies);
     validateDependenciesUnlocked({ home: roots.foremanHome, projectId: scout.projectId, dependencies: normalized });
     const id = allocateTaskId(roots.foremanHome);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), text);
+    if (originalText) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), originalText);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
     const backend = scout.backend || "herdr";
     atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
