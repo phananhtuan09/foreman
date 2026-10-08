@@ -6,7 +6,7 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
 `bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and selects the matching runtime adapter.
-All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
+All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, the user's original wording, round records, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
 `src/herdr.js` is the narrow Herdr adapter.
 `src/paseo.js` invokes the SDK bridge in `bin/foreman-paseo-bridge.js`; each command opens a short-lived Paseo client and does not add a Foreman observer process.
 `config/model-routing.json` is the shared routing source for Herdr and Paseo, while `config/paseo-agent-profiles.json` maps every model profile to Paseo's provider, model, mode, thinking, feature, and notes fields.
@@ -14,7 +14,7 @@ All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, 
 `hooks/` holds the worker stop hook and the Foreman session prompt hook.
 `adapters/herdr/` is the distribution wrapper.
 
-Every task enters a durable `routing` state after its verbatim brief is stored.
+Every task enters a durable `routing` state after its brief and the user's original wording are stored; the router reads the original wording.
 The tracked `FOREMAN_ROOT/config/model-routing.json` defines one fixed router, one default worker profile, named task groups with usage criteria and ordered profile lists, and named worker profiles.
 Each configured profile belongs to exactly one group; inactive profiles are removed from routing candidates, and groups with no active profiles are omitted from the prompt.
 The router may select only a configured profile; failure selects the configured default and records the error.
@@ -48,8 +48,10 @@ The private outbox retains message identity and payload; delivered prompts are n
 After submission, Foreman inspects the endpoint without interrupting the worker and records the result as runtime evidence.
 An uncertain task-brief submission keeps the endpoint for inspection.
 
+A task runs as rounds with one worker: `task continue` appends a round record, may switch the mode and claim a new lease in place, and sends a `task-update` message to the same endpoint and generation; a failed send restores the mode and lease.
 Task ownership changes create a new generation.
-A confirmed dead or missing worker is replaced only through a durable handoff containing the original brief, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
+A confirmed dead or missing worker is replaced through `task recover`, and a healthy one at the user's request through `task reassign`, both with a durable handoff containing the original wording, every delivered round, the last report of each recent round, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
+Only recovery counts against the attempt limit.
 Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, and deletes task-specific Foreman records and coordination state.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.

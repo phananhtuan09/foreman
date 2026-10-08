@@ -43,7 +43,7 @@ Workers own deep project context. They inspect, implement, reproduce, verify, an
 5. Foreman can recover safely after its session or a worker exits.
 6. Supervision is event-driven and consumes no model tokens while nothing actionable happens.
 7. The user sees conclusions, decisions, approvals, and material anomalies rather than worker transcripts or internal housekeeping.
-8. Human intent and worker reports are retained verbatim before Foreman summarizes them.
+8. Human wording and worker reports are retained verbatim before Foreman summarizes them, and the user confirms any rewritten instruction before a worker receives it.
 9. Foreman never silently broadens authority, merges, discards work, or guesses recovery state.
 10. The first production runtime backend is Herdr; the core state model must not depend on Herdr-specific identifiers.
 
@@ -98,7 +98,9 @@ Foreman does not retain accepted task history.
 
 ### 5.6 Verbatim authority transport
 
-User requirements and decisions are persisted verbatim before being sent to a worker.
+The user's own words and human decisions are persisted verbatim before anything is sent to a worker.
+Foreman may rewrite a request into a clear instruction for the worker, using only the user's words, the task's earlier rounds, and worker reports; it adds no technical decision, drops no constraint, and changes the scope in neither direction.
+Both versions are persisted, the user confirms the rewritten text before it is sent, text the user put in quotation marks is sent verbatim, and the answer to a Decision Package is never rewritten.
 Worker reports are persisted verbatim before Foreman summarizes them.
 Summaries never replace the original report.
 
@@ -218,7 +220,9 @@ Task records live under `data/tasks/<id>/` until user acceptance or explicit dis
 
 ```text
 data/tasks/T-000123/
-├── brief.md          original user requirements and accepted additions
+├── brief.md          the round-one instruction sent to the worker
+├── original.md       the user's own words for round one, when given
+├── rounds/           append-only records of later rounds (instruction sent, the user's words, mode, resources, status)
 ├── notes.md          optional Foreman context for the worker, kept apart from the user's words
 ├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
 ├── decisions/        versioned Decision Packages and verbatim human responses
@@ -256,7 +260,7 @@ Herdr workers report with `foreman report --status done|blocked|progress`, givin
 Paseo workers return one JSON object with `status` and a non-empty `summary` at the end of each turn; Foreman tolerates a leading Markdown horizontal rule emitted by the Paseo timeline and preserves the full original response.
 Paseo workers do not invoke `foreman report` or depend on a stop hook.
 `done` means the task is complete, `blocked` means only the user can unblock it, and `progress` means the worker stopped before finishing for another reason.
-Each accepted report is stored verbatim under the task reports directory after an identity header of task, project, agent, generation, status, and report time.
+Each accepted report is stored verbatim under the task reports directory after an identity header of task, project, agent, generation, status, and report time; a report written in round two or later also names its round, and a report without a round belongs to round one.
 Earlier reports are never overwritten.
 
 A report is accepted only while the task is `working` or `blocked`.
@@ -279,12 +283,14 @@ Message, decision, and report records carry correlation fields sufficient to tra
 ### 7.7 Durable message outbox
 
 Every Foreman-to-worker message is persisted before runtime delivery.
-The same outbox is used for task briefs, steering, follow-up requests, human decisions, and recovery instructions.
+The same outbox is used for task briefs, round updates, steering, follow-up requests, human decisions, and recovery instructions.
 The worker receives a concise text prompt containing the task brief and only the operational details needed to work within its lease.
 Every worker prompt is rendered by one fixed template.
 A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, and `Report`.
 The prompt carries no rules section; Git and resource limits are not restated to the worker.
 A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
+A round update (`task-update`) has a header line with task, project, mode, round, and generation, then the allowed resources (marking a change), a note when it replaces an interrupted round, the instruction for that round, optionally the user's original words for reference, and the `Report` section.
+A worker report in a done or blocked state ends with one numbered `Next steps` list that a short reply can point at.
 The `Report` section uses the Herdr report command and stop-hook guidance for Herdr assignments, and the required JSON response shape for Paseo assignments.
 The outbox retains the full message identity, payload, and delivery evidence privately.
 
@@ -327,7 +333,7 @@ Foreman does not resume authority-blocked work until the selected runtime accept
 
 ### 7.10 Task types and dependencies
 
-Every task has one immutable type:
+Every task has a type that is the mode of its current round, changed only by a round the user directs:
 
 - `ship` changes managed-project state and requires completion followed by user acceptance;
 - `scout` investigates, audits, diagnoses, or researches and produces a report without modifying production code.
@@ -335,6 +341,8 @@ Every task has one immutable type:
 Promoting a scout result creates a new ship task from its report while the scout is review-ready; do this before accepting the scout because acceptance deletes its report.
 The promoted brief is the user's new wording when given, otherwise the scout's original brief verbatim; the scout report travels verbatim in the new task's Foreman notes.
 A scout may use read-only resource claims and must not receive write or exclusive project leases.
+`task continue --type` switches a task between scout and ship at a round boundary; switching to ship raises the lease to an exclusive project workspace claim unless the user gives resources, and a task that has ever been a ship keeps its write lease until acceptance, even for a later investigating round.
+Promotion remains available but is optional, because a scout can continue as a ship with the same worker.
 
 A task may declare dependencies by stable task ID.
 A task with unsatisfied dependencies remains queued and cannot be dispatched.
@@ -410,7 +418,7 @@ An explicitly selected Git worktree is checked against the registered project an
 A project without Git uses its canonical root path and has no branch.
 
 Multiple workers may share a workspace when their declared resource leases do not conflict. An undeclared mutation defaults to an exclusive project workspace lease.
-A conflict is a warning, not a refusal, when the human requests the assignment: an explicit dispatch, adoption, or recovery proceeds and records the overlapping leases in its own lease as evidence.
+A conflict is a warning, not a refusal, when the human requests the assignment: an explicit dispatch, adoption, recovery, reassignment, or a round that changes the lease proceeds and records the overlapping leases in its own lease as evidence.
 
 Resource keys are opaque hierarchical identifiers such as `file/src/auth/**`, `db/users/record/123`, `mcp/chrome/profile/default`, or `service/port/3000`. Read/read claims may coexist; write or exclusive claims conflict on overlapping keys. Leases have an owner and generation and are held until acceptance, reassignment, or a failed dispatch releases them; they do not expire, because no heartbeat renews them and a worker may run for a long time without reporting.
 
@@ -421,9 +429,10 @@ A preflight worker may return the structured resource claims and dependency hint
 The dispatched brief includes:
 
 - task ID, project ID, and workspace;
-- user requirements verbatim;
+- the user's request as the instruction for the current round, rewritten only as section 5.6 allows;
 - Foreman notes, kept separate from the user's words, may add supporting context such as related report paths but must not reinterpret the request or add requirements, limits, or rules;
 - accepted follow-up decisions verbatim;
+- the earlier rounds and the last report of each recent round, for a replacement worker;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
 - required deliverable and evidence contract, given as the backend's report command or JSON response shape.
@@ -435,7 +444,10 @@ The brief does not list worker rules such as scope, Git, or lease prohibitions; 
 Herdr workers report through `"$FOREMAN_ROOT/bin/foreman" report`, which every Herdr worker prompt states and the stop hook in section 7.8 repeats when a worker stops without reporting.
 Paseo workers return the required `status` and non-empty `summary` JSON object at the end of each turn.
 Foreman collects Paseo reports using the persisted timeline cursor and current endpoint, workspace, generation, and turn evidence.
-Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form request, and a request to a `blocked` or `review-ready` task returns it to `working`.
+Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form question from Foreman, and a request to a `blocked` or `review-ready` task returns it to `working`.
+`foreman task continue` answers a report with the next round to the same worker, storing the instruction and the user's words, and optionally switching mode, resources, or interrupting a running round.
+`foreman task reassign` moves the task to a new worker, with a new profile if the user names one, and is not limited by the recovery attempt bound.
+`foreman task brief` replaces the brief of a task that has no worker yet.
 Workers never edit the project registry or task metadata.
 
 ### 9.4 Scheduling and concurrency
@@ -458,7 +470,7 @@ Supervision runs only inside Foreman turns; there is no observer, heartbeat, or 
 2. Before answering the user, the session reads the supervision context from its prompt hook, or runs the selected backend's supervision commands when that context is absent.
    In Paseo mode, it runs `task collect` before `status` to reconcile reports after a missed event or disconnected turn.
 3. It reads each new worker report named in the context from its file.
-4. It acts on anomalies: it sends a follow-up with `foreman task message`, creates a Decision Package, or confirms a dead or missing worker with a second status check before `foreman task recover`.
+4. It acts on anomalies: it asks the worker with `foreman task message`, answers a report the user replied to with `foreman task continue`, creates a Decision Package, or confirms a dead or missing worker with a second status check before `foreman task recover`.
 5. It persists lifecycle changes before reporting them.
 6. It reports only approvals, decisions, material anomalies, and requested detail.
 
@@ -518,7 +530,8 @@ Adoption requires an explicit user request naming the worker and requirement or 
 ### 11.5 Blocker and decision
 
 A `blocked` report stops the task at `blocked`.
-Foreman reads the report and either returns a technical blocker to the worker with `foreman task message` or, when the choice needs product, architecture, compatibility, security, operational, or acceptance authority, persists a complete Decision Package before asking the user.
+Foreman shows the user what the worker needs and its next steps, and the user's reply becomes the next round, sent with `foreman task continue` once the user confirms it.
+When Foreman itself sees a choice that needs product, architecture, compatibility, security, operational, or acceptance authority, it persists a complete Decision Package before asking the user.
 The human response is stored verbatim and delivered through the durable outbox to the current generation, which resumes the task.
 
 ### 11.6 Completion and acceptance
@@ -530,8 +543,9 @@ The project workspace remains on disk, and no accepted task history is kept.
 
 ### 11.7 Dead worker and handoff
 
-Only confirmed `dead` or `missing` evidence permits handoff, and Foreman starts it explicitly after a second status check agrees.
-The successor receives original requirements, accepted decisions, the latest report, workspace state, resource claims, and an instruction to inspect rather than trust previous implementation assumptions.
+Only confirmed `dead` or `missing` evidence permits recovery handoff, and Foreman starts it explicitly after a second status check agrees.
+A user who wants a new worker or model for a healthy task asks for `foreman task reassign`; it uses the same handoff, requires a `working`, `blocked`, or `review-ready` task whose worker state is readable, and the successor reports the workspace state before changing anything unless the user sent it a next round.
+The successor receives the original requirements, every delivered round, the last report of each recent round, accepted decisions, workspace state, resource claims, and an instruction to inspect rather than trust previous implementation assumptions.
 
 Recovery preserves the current workspace and resource lease, stops or verifies absence of the old endpoint, increments the assignment generation, and spawns a replacement worker.
 The handoff package also includes available evidence and unresolved checks.
@@ -548,7 +562,7 @@ The client controls any Git operation and can inspect the retained workspace aft
 
 A scout completes with an evidence-backed report and enters review-ready without a landing requirement.
 In a project without Git, the scout mutation guard hashes every file except those under `node_modules`, `.git`, `dist`, and `build`.
-Promote a review-ready scout before accepting it if its report implies implementation work.
+If its report implies implementation work, the user may continue the same task as a ship with `task continue --type ship`, or promote a review-ready scout before accepting it.
 Acceptance closes the scout, releases its read-only runtime resources, and deletes its report and task records.
 
 ## 12. User-facing reporting
@@ -643,7 +657,7 @@ P1 is complete only when all of the following are directly demonstrated:
 2. A confirmed dead or missing worker is replaced with a new generation without losing the workspace, requirements, human decisions, progress, evidence, or unresolved checks.
 3. `unknown` runtime state never triggers automatic recovery.
 4. The replacement worker inspects existing state, and the prior generation's pane cannot update the new assignment.
-5. A `blocked` report leads to either a Foreman follow-up for a technical blocker or one complete Decision Package for an authority blocker.
+5. A `blocked` report leads to a user-confirmed next round, or one complete Decision Package when Foreman sees an authority choice.
 6. A human decision is preserved verbatim and delivered to the correct generation before work resumes.
 7. A scout cannot modify production code, completes through report review, and can produce a ship task from its report only through explicit user-approved promotion before acceptance.
 
@@ -688,7 +702,7 @@ A new feature belongs in Foreman core only if it passes every check:
 
 1. Its necessary state survives a cleared session.
 2. It preserves Foreman's global-context and worker deep-context boundary.
-3. It preserves user wording, decisions, and original worker reports.
+3. It preserves user wording on disk, decisions, and original worker reports.
 4. It keeps the user as acceptance and material-policy authority.
 5. It materially reduces user coordination or protects fleet correctness.
 6. Any new state has one writer, a stable identity, and a cleanup lifecycle.
@@ -736,8 +750,9 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - The compatibility gate checks the agent, workspace, and pane verbs used for dispatch.
 - Interrupt returns success only after a later inspection shows the endpoint still exists and is no longer working.
 - Recovery composes a status check that confirms `dead` or `missing`, stop or confirmed absence, a new generation, spawn, and a brief carrying the durable handoff.
-- The handoff contains the brief, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
+- The handoff contains the user's original wording, every delivered round, the last report of each recent round, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions; the brief itself reaches the successor as its request.
 - Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
+- Task rounds are implemented: `task continue`, `task reassign`, and `task brief`, with the instruction and the user's words stored per round, mode and lease changes at round boundaries, and per-round handoff.
 - Adoption is an explicit request.
 - It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and the backend-specific endpoint; Paseo adoption sends the persisted brief before reports can be collected.
 - A scout receives read-only resource claims; its brief has no separate instruction not to modify production files.
@@ -778,7 +793,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Brief delivery requires no worker acknowledgement, and delivered prompts are not automatically resent.
 - Herdr reports an agent showing a startup screen as idle, so spawn confirms Codex and Claude folder-trust screens with Enter before it treats the agent as ready; the workspace is a registered project that the user dispatched work into.
 - A startup screen that Foreman does not recognize can still consume the brief; `foreman status` then shows the worker idle without a report.
-- Resource leases have no expiry; a task that is never accepted keeps its lease until it is reassigned.
+- Resource leases have no expiry; a task that is never accepted keeps its lease until it is reassigned, and a round that changes the mode or resources claims a new lease in place.
 - Stop-hook support is verified for Claude Code's `decision: block` and `stop_hook_active` contract; other coding agents may use a different hook payload or output.
 - Model names and OpenCode variants are passed to the selected coding tool and are not independently enumerated by Herdr; the coding tool reports unsupported models or variants.
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag; OpenCode V2 maps `effort` to its `provider/model#variant` reference. The adapter-level `reasoningEffort` capability remains unsupported.

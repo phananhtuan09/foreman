@@ -589,7 +589,9 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
   initHome(roots);
   const meta = readMeta(roots.foremanHome, taskId);
   if (meta.status !== "routing") throw new ValidationError(`Task is not awaiting model routing: ${taskId}`);
-  const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+  // The router reads the user's own words: they carry any tool or profile preference that the worker-facing rewrite drops.
+  const originalFile = path.join(taskDir(roots.foremanHome, taskId), "original.md");
+  const brief = fs.readFileSync(fs.existsSync(originalFile) ? originalFile : path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
   const paseoConfig = meta.backend === "paseo" ? paseoRouting.loadPaseoRoutingConfig(roots.foremanRoot, { required: true }).config : null;
   const config = meta.backend === "paseo" ? paseoConfig : loadRoutingConfig(roots.foremanRoot);
   let selectedName = null;
@@ -657,19 +659,23 @@ function needsProfileConfirmation(meta) {
   return Boolean(meta.routingProfile) && !meta.profileConfirmedAt && !meta.endpoint;
 }
 
-// Records the human's choice of worker profile; a routed task cannot dispatch before it.
-function confirmTaskProfile({ roots, taskId, profile }) {
+// The active routing profile the human named, for the task's own backend.
+function resolveWorkerProfile({ roots, backend, profile }) {
   if (typeof profile !== "string" || !profile) throw new ValidationError("A worker profile name is required");
-  const metaForBackend = readMeta(roots.foremanHome, taskId);
-  const config = metaForBackend.backend === "paseo"
+  const config = backend === "paseo"
     ? paseoRouting.loadPaseoRoutingConfig(roots.foremanRoot, { required: true }).config
     : loadRoutingConfig(roots.foremanRoot, { required: true });
   if (config.inactiveProfiles.includes(profile)) throw new ValidationError(`Worker profile is inactive: ${profile}`);
   if (!config.profiles[profile]) throw new ValidationError(`Unknown worker profile: ${profile}`);
+  return config.profiles[profile];
+}
+
+// Records the human's choice of worker profile; a routed task cannot dispatch before it.
+function confirmTaskProfile({ roots, taskId, profile }) {
+  const selected = resolveWorkerProfile({ roots, backend: readMeta(roots.foremanHome, taskId).backend, profile });
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     if (!["queued", "pending"].includes(meta.status) || meta.endpoint) throw new ValidationError(`Only an unassigned queued task can have its worker profile confirmed: ${taskId}`);
-    const selected = config.profiles[profile];
     const dispatchProfile = materializeDispatchProfile(meta.backend || "herdr", selected, profile);
     const confirmed = { ...meta, dispatchProfile, profileConfirmedAt: now() };
     atomicJson(metaFile(roots.foremanHome, taskId), confirmed);
@@ -723,9 +729,10 @@ function validateDependenciesUnlocked({ home, projectId, dependencies }) {
   for (const dependency of dependencies) visit(dependency);
 }
 
-function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
+function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
   if (notes != null && (typeof notes !== "string" || !notes)) throw new ValidationError("Foreman notes must be non-empty text when given");
+  if (original != null && (typeof original !== "string" || !original)) throw new ValidationError("Original user wording must be non-empty text when given");
   if (!new Set(["herdr", "paseo"]).has(backend)) throw new ValidationError(`Unsupported task backend: ${backend}`);
   const normalizedType = normalizeTaskType(taskType || type);
   const normalizedDependencies = normalizeDependencies(dependencies);
@@ -734,13 +741,14 @@ function createTaskUnlocked({ roots, projectId, brief, notes, type = "ship", tas
   validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
   const id = allocateTaskId(roots.foremanHome);
   atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), brief);
+  if (original) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), original);
   if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
   atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
-  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, notes: notes || null };
+  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, original: original || null, notes: notes || null };
 }
 
-function createTask({ roots, projectId, brief, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
-  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, notes, type, taskType, dependencies, backend }));
+function createTask({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
+  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, original, notes, type, taskType, dependencies, backend }));
   const routing = routeTask({ roots, taskId: task.id, routingRunner });
   return { ...task, routing };
 }
@@ -750,9 +758,9 @@ function dependencySatisfied(meta) {
   return ["accepted", "cleaned"].includes(meta.status);
 }
 
-function assertTaskDispatchable(home, taskId, { allowWaitingDecision = false } = {}) {
+function assertTaskDispatchable(home, taskId, { allowWaitingDecision = false, allowReviewReady = false } = {}) {
   const meta = readMeta(home, taskId);
-  if (["accepted", "review-ready", "cleaned"].includes(meta.status)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
+  if (["accepted", "cleaned"].includes(meta.status) || (meta.status === "review-ready" && !allowReviewReady)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
   if (meta.status === "waiting-decision" && !allowWaitingDecision) throw new ValidationError(`Task is waiting for a human decision: ${taskId}`);
   for (const dependency of meta.dependencies || []) {
     if (!fs.existsSync(metaFile(home, dependency)) || !dependencySatisfied(readMeta(home, dependency))) throw new ValidationError(`Task is blocked by dependency: ${dependency}`);
@@ -786,11 +794,11 @@ function assertIdleEndpointReusable({ roots, adapter, endpoint, workspace, owner
   return { inspection, holders };
 }
 
-function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint, allowResourceConflicts = false }) {
+function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint, allowResourceConflicts = false, allowReviewReady = false }) {
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
-    const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId) });
+    const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId), allowReviewReady });
     const backend = prior.backend || "herdr";
     const adapterBackend = adapter?.backend || "herdr";
     if (backend !== adapterBackend) throw new ValidationError(`Task backend is ${backend}; select bin/foreman-${backend} before changing its worker`);
@@ -808,9 +816,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
     const workspaceMode = projectVcs(project) === "none" ? "shared-directory" : "shared-current-branch";
     const taskType = prior.type || "ship";
     const requestedResources = resources === undefined && preflight === undefined
-      ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" ? "read" : "exclusive" }]
+      ? [{ key: `workspace/${project.id}`, mode: taskType === "scout" && !prior.everShip ? "read" : "exclusive" }]
       : (resources === undefined ? preflight : resources);
-    if (taskType === "scout" && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
+    if (taskType === "scout" && !prior.everShip && normalizeResourceClaims(requestedResources).some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
     let resourceLease;
     try {
       resourceLease = claimResourcesUnlocked({ roots, taskId, generation, owner, resources: requestedResources, ignoreLeaseId: prior?.resourceLease?.leaseId, allowConflicts: allowResourceConflicts });
@@ -845,6 +853,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       status: "pending",
       dispatchProfile: dispatchProfile || prior.dispatchProfile || null,
       ...Object.fromEntries(ROUTING_EVIDENCE_FIELDS.filter((key) => prior[key] !== undefined).map((key) => [key, prior[key]])),
+      ...(prior.round ? { round: prior.round } : {}),
+      ...(prior.everShip ? { everShip: true } : {}),
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
@@ -933,7 +943,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
         throw new DeliveryError(`${backend} did not confirm brief delivery`);
       }
       const assignedAt = now();
-      const assigned = { ...pending, endpoint, workspaceId: assignedWorkspaceId, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, lastPromptAt: promptAt, briefMessageId: message.messageId, handoffPending: false, dispatchProfile: profile, paseoCursor, deliveryInspection: delivered?.inspectedStatus || null, ...(delivered?.verified === false ? { deliveryUnverified: "Endpoint could not be verified after prompt submission" } : {}) };
+      const unverified = delivered?.verified === false ? "Endpoint could not be verified after prompt submission" : null;
+      const round = finishHandoffRoundUnlocked({ roots, taskId, handoff: handoff || prior.handoff, generation, messageId: message.messageId, resources: resourceLease.resources, unverified });
+      const assigned = { ...pending, endpoint, workspaceId: assignedWorkspaceId, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, lastPromptAt: promptAt, briefMessageId: message.messageId, handoffPending: false, dispatchProfile: profile, paseoCursor, deliveryInspection: delivered?.inspectedStatus || null, ...(round ? { round } : {}), ...(unverified ? { deliveryUnverified: unverified } : {}) };
       atomicJson(metaFile(roots.foremanHome, taskId), assigned);
       for (const priorMessage of coordination.listMessages({ roots }).filter((item) => item.taskId === taskId && item.generation !== generation && item.status === "pending")) {
         coordination.failMessageUnlocked({ roots, messageId: priorMessage.messageId, reason: "assignment generation was replaced" });
@@ -946,7 +958,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
           if (sent.status !== "delivered") coordination.failMessageUnlocked({ roots, messageId: createdBriefMessageId, reason: `prompt submission outcome is uncertain: ${error.message}` });
         }
         const assignedAt = now();
-        const uncertain = { ...pending, endpoint: deliveryEndpoint, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, briefMessageId: createdBriefMessageId, deliveryUnverified: error.message };
+        const round = finishHandoffRoundUnlocked({ roots, taskId, handoff: handoff || prior.handoff, generation, messageId: createdBriefMessageId, resources: pending.resources, unverified: error.message });
+        const uncertain = { ...pending, endpoint: deliveryEndpoint, paneId: backend === "herdr" ? paneId : null, status: "working", assignedAt, briefMessageId: createdBriefMessageId, deliveryUnverified: error.message, ...(round ? { round } : {}) };
         atomicJson(metaFile(roots.foremanHome, taskId), uncertain);
         return uncertain;
       }
@@ -970,6 +983,7 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
           status: "queued",
           generation,
           briefMessageId: null,
+          handoff: handoff || prior?.handoff || null,
           dispatchError: error.message,
         };
         atomicJson(metaFile(roots.foremanHome, taskId), retryable);
@@ -980,6 +994,21 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       throw error;
     }
   });
+}
+
+/**
+ * Marks the pending round a handoff carries as delivered together with the brief that carried it.
+ * Returns the round number, or null when the handoff has no pending next round.
+ */
+function finishHandoffRoundUnlocked({ roots, taskId, handoff, generation, messageId, resources, unverified }) {
+  const round = handoff?.nextRequest?.round;
+  if (!round) return null;
+  const file = coordination.roundFile(roots.foremanHome, taskId, round);
+  if (!fs.existsSync(file)) return null;
+  const record = readJson(file);
+  if (record.status !== "pending") return null;
+  coordination.writeRoundUnlocked({ roots, record: { ...record, generation, resources, messageId, status: "delivered", deliveredAt: now(), ...(unverified ? { deliveryUnverified: unverified } : {}) } });
+  return round;
 }
 
 function readMeta(home, taskId) {
@@ -1000,6 +1029,9 @@ function findTaskForPane(home, paneId) {
   return matches[0] || null;
 }
 
+// Round 1 reports carry no ROUND line, which keeps the original report format; a missing line means round 1.
+function roundHeader(meta) { return (meta.round || 1) > 1 ? [`ROUND: ${meta.round}`] : []; }
+
 function nextReportFile(home, meta, status) {
   const dir = path.join(taskDir(home, meta.taskId), "reports");
   const prefix = `generation-${meta.generation}-`;
@@ -1017,8 +1049,8 @@ function recordReport({ roots, paneId, status, summary }) {
     const at = now();
     const file = nextReportFile(roots.foremanHome, meta, status);
     // Every report is kept verbatim under its own name.
-    atomicWrite(file, [`TASK: ${meta.taskId}`, `PROJECT: ${meta.projectId}`, `AGENT: ${meta.owner}`, `GENERATION: ${meta.generation}`, `STATUS: ${status}`, `REPORTED_AT: ${at}`, "", summary].join("\n"));
-    let next = { ...meta, lastReport: { file, status, at, readAt: null } };
+    atomicWrite(file, [`TASK: ${meta.taskId}`, `PROJECT: ${meta.projectId}`, `AGENT: ${meta.owner}`, `GENERATION: ${meta.generation}`, ...roundHeader(meta), `STATUS: ${status}`, `REPORTED_AT: ${at}`, "", summary].join("\n"));
+    let next = { ...meta, lastReport: { file, status, at, readAt: null, round: meta.round || 1 } };
     if (status === "done") next = { ...next, status: "review-ready", completionReport: file, completionAt: at };
     else if (status === "blocked") next = { ...next, status: "blocked", blockerReport: file, blockerAt: at };
     atomicJson(metaFile(roots.foremanHome, meta.taskId), next);
@@ -1072,6 +1104,7 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
       `PROJECT: ${meta.projectId}`,
       `AGENT: ${endpoint}`,
       `GENERATION: ${generation}`,
+      ...roundHeader(meta),
       `TURN: ${turnId || "unknown"}`,
       `STATUS: ${report.status}`,
       `REPORTED_AT: ${at}`,
@@ -1080,7 +1113,7 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
     ].join("\n"));
     let next = {
       ...meta,
-      lastReport: { file, status: report.status, at, readAt: null },
+      lastReport: { file, status: report.status, at, readAt: null, round: meta.round || 1 },
       paseoCursor: cursor || meta.paseoCursor || null,
       lastPaseoTurnId: turnId || null,
       paseoReportError: null,
@@ -1318,7 +1351,7 @@ function projectWithoutGitForWorkerCwd(home, cwd, projectId) {
   return { project, workspace: validateWorkspace(project, project.root) };
 }
 
-function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId, type = "ship", explicit = false }) {
+function adoptExistingWorker({ roots, adapter, worker, taskId, brief, original, projectId, type = "ship", explicit = false }) {
   if (explicit !== true) throw new ValidationError("Adoption requires an explicit request");
   if (!worker) throw new ValidationError("Adoption requires an explicit worker");
   if (!taskId && !brief) throw new ValidationError("Adoption requires an existing queued task or a requirement");
@@ -1344,7 +1377,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, projectId,
     }
     let created = null;
     if (!taskId) {
-      created = createTaskUnlocked({ roots, projectId: bound.project.id, brief, type, backend: adapter.backend || "herdr" });
+      created = createTaskUnlocked({ roots, projectId: bound.project.id, brief, original, type, backend: adapter.backend || "herdr" });
       const queued = { ...readMeta(roots.foremanHome, created.id), status: "queued" };
       atomicJson(metaFile(roots.foremanHome, created.id), queued);
     }
@@ -1428,29 +1461,164 @@ function reconstructTask({ roots, taskId }) {
   return { id: taskId, brief: fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta, lastReport: read(meta.lastReport?.file), report: read(meta.completionReport) };
 }
 
+// Persists the message, records the prompt time and Paseo cursor, then submits it; throws DeliveryError when the runtime does not accept it.
+function deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend }) {
+  if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
+  const message = coordination.createMessageUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: { ...payload, backend } });
+  const promptAt = now();
+  if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
+  const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
+  atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
+  let result;
+  try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
+  catch (error) { result = { delivered: false, error: error.message }; }
+  const delivered = result !== false && result?.delivered !== false;
+  const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
+  if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+  return { message: updated, promptAt, paseoCursor };
+}
+
 // A Foreman prompt reopens a blocked or review-ready task so the worker's next report is expected.
 function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const backend = assertAdapterBackend(meta, adapter, "messaging its worker");
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
-    if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
-    const messagePayload = { ...payload, backend };
-    const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: messagePayload });
-    const promptAt = now();
-    if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
-    const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
-    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
-    let result;
-    try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
-    catch (error) { result = { delivered: false, error: error.message }; }
-    const delivered = result !== false && result?.delivered !== false;
-    const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
-    if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+    const { message, promptAt, paseoCursor } = deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend });
     const reopened = ["blocked", "review-ready"].includes(meta.status) ? { status: "working", completionReport: null } : {};
     const next = { ...meta, ...reopened, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
-    return { message: updated, task: next };
+    return { message, task: next };
+  });
+}
+
+// The runtime's own word on one worker, classified like a status check; any failure to read it is "unknown".
+function endpointState(adapter, meta) {
+  let inspection;
+  try { inspection = adapter.inspect(meta.endpoint); } catch (_) { return "unknown"; }
+  if (!inspection) return "unknown";
+  if (inspection.status === "missing") return "missing";
+  const state = coordination.classifyRuntime(meta, inspection);
+  return state === "idle" && inspection.activeTurn ? "working" : state;
+}
+
+// What the worker is doing right now: "running", "waiting-input", "idle", or "unknown" for anything that is not clear evidence.
+function endpointActivity(adapter, meta) {
+  const state = endpointState(adapter, meta);
+  if (state === "working") return "running";
+  return ["idle", "waiting-input"].includes(state) ? state : "unknown";
+}
+
+/**
+ * The mode and lease a new round runs under.
+ * Without an explicit claim list, only a switch to ship widens the lease; a task that has ever shipped keeps the write lease it holds.
+ */
+function planRoundMode({ meta, project, type, resources }) {
+  const mode = type === undefined ? meta.type : normalizeTaskType(type);
+  const everShip = Boolean(meta.everShip) || meta.type === "ship" || mode === "ship";
+  const previousClaims = meta.resourceLease?.resources || meta.resources || [];
+  let claims;
+  if (resources !== undefined) claims = normalizeResourceClaims(resources);
+  else if (mode !== meta.type && mode === "ship") claims = [{ key: `workspace/${project.id}`, mode: "exclusive" }];
+  else claims = previousClaims;
+  if (mode === "scout" && !everShip && claims.some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
+  return { mode, everShip, claims, previousClaims, leaseChanged: !sameClaims(claims, previousClaims) };
+}
+
+function sameClaims(left, right) {
+  const key = (claims) => JSON.stringify([...claims].map(({ key: resource, mode }) => [resource, mode]).sort());
+  return key(left) === key(right);
+}
+
+/**
+ * Starts the next round of a task with the same worker.
+ * `text` is the instruction sent to the worker and `original` is the user's own wording; both are stored.
+ * The lease follows the round's mode, but a task that was ever a ship keeps write access until acceptance.
+ */
+function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter }) {
+  if (typeof text !== "string" || !text.trim()) throw new ValidationError("A round needs non-empty instruction text");
+  if (typeof original !== "string" || !original.trim()) throw new ValidationError("A round needs the user's original wording");
+  const requestedType = type === undefined ? undefined : normalizeTaskType(type);
+  initHome(roots);
+  // A report that already finished must be on disk before the task is judged to be waiting for the user.
+  if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    const backend = assertAdapterBackend(meta, adapter, "continuing it");
+    if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
+    if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
+    if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
+    if (!adapter || typeof adapter.inspect !== "function") throw new DeliveryError("A runtime adapter is required to continue a task");
+    const activity = endpointActivity(adapter, meta);
+    if (activity === "unknown") throw new ValidationError(`Worker state of ${taskId} is unknown; run status before continuing`);
+    // An instruction still in flight is one that has not been answered by a report.
+    const awaiting = meta.status !== "working" || coordination.reportedSincePrompt(meta);
+    if (activity === "running" && !interrupt) throw new ValidationError(`Worker of ${taskId} is still running; wait for its report or pass --interrupt`);
+    if (activity === "waiting-input" && !interrupt) throw new ValidationError(`Worker of ${taskId} is waiting for input such as a permission prompt; resolve it in the runtime, or pass --interrupt to replace its instruction`);
+    if (activity === "idle" && !awaiting && !interrupt) throw new ValidationError(`Worker of ${taskId} stopped without reporting; ask it to report with task message, or pass --interrupt to replace its instruction`);
+    // A worker that is mid-turn is stopped before the new round is sent.
+    const stopTurn = activity === "running" || activity === "waiting-input";
+    if (stopTurn && typeof adapter.interrupt !== "function") throw new DeliveryError("Runtime adapter cannot interrupt a worker");
+    if (typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
+
+    const project = findProject(roots.foremanHome, meta.projectId);
+    const { mode, everShip, claims, previousClaims, leaseChanged } = planRoundMode({ meta, project, type: requestedType, resources });
+    const lease = leaseChanged
+      ? claimResourcesUnlocked({ roots, taskId, generation: meta.generation, owner: meta.owner, resources: claims, ignoreLeaseId: meta.resourceLease?.leaseId, allowConflicts: true })
+      : meta.resourceLease;
+
+    const round = (meta.round || 1) + 1;
+    const supersedes = interrupt && !awaiting ? (meta.round || 1) : null;
+    const record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode, resources: lease?.resources || claims, previousResources: previousClaims, supersedes, messageId: null, status: "pending" };
+    coordination.writeRoundUnlocked({ roots, record });
+
+    const failRound = (error) => coordination.writeRoundUnlocked({ roots, record: { ...record, status: "failed", failedAt: now(), failure: error.message } });
+    let interruptedAt = null;
+    if (stopTurn) {
+      // The interrupt may have reached the worker even when it was not confirmed, so the task records it.
+      try { adapter.interrupt(meta.endpoint); }
+      catch (error) {
+        failRound(error);
+        atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, interruptUnconfirmed: { round: meta.round || 1, at: now(), reason: error.message } });
+        throw new DeliveryError(`Interrupting the worker of ${taskId} was not confirmed; run status before retrying: ${error.message}`);
+      }
+      interruptedAt = now();
+    }
+    const prospective = { ...meta, type: mode, everShip, round: meta.round || 1, resources: lease?.resources || claims, resourceLease: lease };
+    const payload = {
+      taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint,
+      round, mode, resources: record.resources, ...(leaseChanged ? { previousResources: previousClaims } : {}),
+      supersedes, request: text, ...(withOriginal ? { original } : {}),
+    };
+    let delivery;
+    try { delivery = deliverWorkerMessageUnlocked({ roots, meta: prospective, kind: "task-update", payload, adapter, backend }); }
+    catch (error) {
+      // The new round never reached the worker, so the round, mode and lease go back to what they were.
+      failRound(error);
+      if (!interruptedAt) {
+        atomicJson(metaFile(roots.foremanHome, taskId), meta);
+        throw error;
+      }
+      // The old instruction was already stopped, so the task must not claim it is still running.
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, interruptedRound: { round: meta.round || 1, at: interruptedAt, reason: error.message } });
+      throw new DeliveryError(`Worker of ${taskId} was interrupted but round ${round} was not delivered; it is idle, retry with task continue --interrupt: ${error.message}`);
+    }
+    coordination.writeRoundUnlocked({ roots, record: { ...record, status: "delivered", deliveredAt: now(), messageId: delivery.message.messageId } });
+    const { interruptedRound: _interrupted, interruptUnconfirmed: _unconfirmed, ...current } = prospective;
+    const next = { ...current, status: "working", completionReport: null, round, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
+    atomicJson(metaFile(roots.foremanHome, taskId), next);
+    return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: stopTurn };
+  });
+}
+
+// Replaces the worker-facing brief of a task that has no worker yet, so the user can correct a rewrite before round one is sent.
+function replaceTaskBrief({ roots, taskId, text }) {
+  if (typeof text !== "string" || !text.trim()) throw new ValidationError("A task brief must be non-empty text");
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (!["routing", "queued", "pending"].includes(meta.status) || meta.endpoint || meta.owner) throw new ValidationError(`Task ${taskId} already has a worker; send a new round with task continue`);
+    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), text);
+    return { taskId, brief: text, status: meta.status };
   });
 }
 
@@ -1523,18 +1691,22 @@ function deliverDecision({ roots, taskId, decisionId, adapter }) {
   });
 }
 
-function promoteScout({ roots, taskId, brief, dependencies = [], routingRunner }) {
+function promoteScout({ roots, taskId, brief, original, dependencies = [], routingRunner }) {
   const promoted = withHomeLock(roots.foremanHome, () => {
     const scout = readMeta(roots.foremanHome, taskId);
     if (scout.type !== "scout" || scout.status !== "review-ready") throw new ValidationError("Only a review-ready scout can be promoted; promote it before accepting it");
     const sourceReport = fs.readFileSync(scout.completionReport, "utf8");
     // The brief carries only the user's words; the scout's verbatim report travels as Foreman notes.
     const text = brief || fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+    // New wording brings its own original; reusing the scout's brief reuses the scout's original too.
+    const scoutOriginal = path.join(taskDir(roots.foremanHome, taskId), "original.md");
+    const originalText = original || (!brief && fs.existsSync(scoutOriginal) ? fs.readFileSync(scoutOriginal, "utf8") : null);
     const notes = `Promoted from scout ${taskId}. Scout report:\n${sourceReport}`;
     const normalized = normalizeDependencies(dependencies);
     validateDependenciesUnlocked({ home: roots.foremanHome, projectId: scout.projectId, dependencies: normalized });
     const id = allocateTaskId(roots.foremanHome);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), text);
+    if (originalText) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), originalText);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
     const backend = scout.backend || "herdr";
     atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
@@ -1555,6 +1727,36 @@ function recoveryOwnerName(meta) {
   return `${prefix}${suffix}`;
 }
 
+/**
+ * Hands the task to a new worker: persists the handoff, then assigns under the next generation.
+ * Recovery counts against the bounded attempt limit; a reassignment the user asked for does not.
+ */
+function replaceWorker({ roots, taskId, adapter, owner, reason, extraHandoff = {}, countAttempt, maxRecoveryAttempts = 3, assignOptions = {} }) {
+  const handoff = { ...buildHandoff({ roots, taskId, reason }), ...extraHandoff };
+  let meta;
+  withHomeLock(roots.foremanHome, () => {
+    meta = readMeta(roots.foremanHome, taskId);
+    const attempts = Number(meta.recoveryAttempts || 0);
+    if (countAttempt && attempts >= Math.max(1, Number(maxRecoveryAttempts) || 3)) throw new ValidationError("Worker recovery attempt limit is exhausted");
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, ...(countAttempt ? { recoveryAttempts: attempts + 1 } : {}), handoffPending: handoff.handoffId });
+    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`);
+  });
+  let assignment;
+  try {
+    // The replaced assignment was human-requested, so leases that overlapped it do not block its replacement.
+    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff, allowResourceConflicts: true, ...assignOptions });
+  } catch (error) {
+    if (countAttempt) {
+      withHomeLock(roots.foremanHome, () => {
+        const current = readMeta(roots.foremanHome, taskId);
+        atomicJson(metaFile(roots.foremanHome, taskId), { ...current, recoveryAttempts: Math.max(Number(current.recoveryAttempts || 0), Number(meta.recoveryAttempts || 0) + 1), handoffPending: handoff.handoffId });
+      });
+    }
+    throw error;
+  }
+  return { ...assignment, handoff };
+}
+
 function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts = 3 }) {
   initHome(roots);
   const initial = readMeta(roots.foremanHome, taskId);
@@ -1562,27 +1764,61 @@ function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts 
   const fleet = coordination.reconcileFleet({ roots, adapter });
   const item = fleet.tasks.find((entry) => entry.taskId === taskId);
   if (!item || !["dead", "missing"].includes(item.state)) throw new ValidationError("Recovery requires confirmed dead or missing runtime evidence");
-  const handoff = buildHandoff({ roots, taskId, reason: item.state });
-  let meta;
+  return replaceWorker({ roots, taskId, adapter, owner, reason: item.state, countAttempt: true, maxRecoveryAttempts });
+}
+
+/**
+ * Moves a task to a new worker because the user asked, not because the old one died.
+ * The successor reads every round and reports the workspace state; with `text` it then carries out that new round.
+ */
+function reassignWorker({ roots, taskId, adapter, profile, owner, text, original, type, resources }) {
+  if ((text === undefined) !== (original === undefined)) throw new ValidationError("A reassignment request needs both the instruction text and the user's original wording");
+  if (text !== undefined && (typeof text !== "string" || !text.trim() || typeof original !== "string" || !original.trim())) throw new ValidationError("A reassignment request needs non-empty instruction text and original wording");
+  if (profile !== undefined && (typeof profile !== "string" || !profile)) throw new ValidationError("A worker profile name is required");
+  initHome(roots);
+  // The latest report must be on disk before it travels in the handoff.
+  if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
+  const initial = readMeta(roots.foremanHome, taskId);
+  assertAdapterBackend(initial, adapter, "reassigning it");
+  if (initial.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it before changing its worker`);
+  if (!["working", "blocked", "review-ready"].includes(initial.status)) throw new ValidationError(`Task ${taskId} is ${initial.status}; only a task with an assigned worker can be reassigned`);
+  if (!initial.endpoint || !initial.owner) throw new DeliveryError("Task has no active worker endpoint");
+  if (typeof adapter.inspect !== "function" || typeof adapter.stop !== "function") throw new DeliveryError("A runtime adapter that can inspect and stop workers is required");
+  const state = endpointState(adapter, initial);
+  if (["dead", "missing"].includes(state)) throw new ValidationError(`Worker of ${taskId} is ${state}; use task recover`);
+  if (!["working", "idle", "waiting-input"].includes(state)) throw new ValidationError(`Worker state of ${taskId} is ${state}; run status before changing its worker`);
+  const dispatchProfile = profile === undefined ? undefined : materializeDispatchProfile(initial.backend || "herdr", resolveWorkerProfile({ roots, backend: initial.backend, profile }), profile);
+  const project = findProject(roots.foremanHome, initial.projectId);
+  const plan = planRoundMode({ meta: initial, project, type, resources });
+  const round = (initial.round || 1) + 1;
+  const extraHandoff = text === undefined
+    ? { instruction: "A new worker replaces the previous one at the user's request. Read every round and report above, inspect the workspace, then report its current state to Foreman. Do not change anything yet." }
+    : { instruction: "A new worker replaces the previous one at the user's request. Inspect the workspace first, then carry out nextRequest.", nextRequest: { round, mode: plan.mode, text } };
   withHomeLock(roots.foremanHome, () => {
-    meta = readMeta(roots.foremanHome, taskId);
-    const attempts = Number(meta.recoveryAttempts || 0);
-    if (attempts >= Math.max(1, Number(maxRecoveryAttempts) || 3)) throw new ValidationError("Worker recovery attempt limit is exhausted");
-    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, recoveryAttempts: attempts + 1, handoffPending: handoff.handoffId });
-    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`);
+    const meta = readMeta(roots.foremanHome, taskId);
+    // The user's words are on disk before the new worker is spawned; the brief that carries them marks the round delivered.
+    if (text !== undefined) coordination.writeRoundUnlocked({ roots, record: { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: plan.claims, previousResources: plan.previousClaims, supersedes: null, messageId: null, status: "pending" } });
+    if (plan.mode !== meta.type || plan.everShip !== Boolean(meta.everShip)) atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, type: plan.mode, everShip: plan.everShip });
   });
   let assignment;
   try {
-    // The replaced assignment was human-requested, so leases that overlapped it do not block its recovery.
-    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff, allowResourceConflicts: true });
+    assignment = replaceWorker({ roots, taskId, adapter, owner, reason: "human-reassign", extraHandoff, countAttempt: false, assignOptions: { resources: plan.claims, dispatchProfile, allowReviewReady: true } });
   } catch (error) {
     withHomeLock(roots.foremanHome, () => {
       const current = readMeta(roots.foremanHome, taskId);
-      atomicJson(metaFile(roots.foremanHome, taskId), { ...current, recoveryAttempts: Math.max(Number(current.recoveryAttempts || 0), Number(meta.recoveryAttempts || 0) + 1), handoffPending: handoff.handoffId });
+      // The old worker is already stopped and the task waits in the queue with this handoff, so its round and mode stay for the next dispatch.
+      if (current.status === "queued" && current.handoff?.nextRequest?.round === round) return;
+      if (text !== undefined) {
+        const file = coordination.roundFile(roots.foremanHome, taskId, round);
+        if (fs.existsSync(file)) coordination.writeRoundUnlocked({ roots, record: { ...readJson(file), status: "failed", failedAt: now(), failure: error.message } });
+      }
+      const { everShip: _everShip, ...rest } = current;
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...rest, type: initial.type, ...(initial.everShip === undefined ? {} : { everShip: initial.everShip }) });
     });
     throw error;
   }
-  return { ...assignment, handoff };
+  const roundRecord = text === undefined ? null : coordination.listRounds({ roots, taskId }).find((record) => record.round === round) || null;
+  return { ...assignment, handoff: assignment.handoff, roundRecord };
 }
 
 function listTasks({ roots, projectId, statuses } = {}) {
@@ -1638,8 +1874,15 @@ function dispatchReadyTasks({ roots, adapter, ownerForTask, maxConcurrency = Inf
   return results;
 }
 
+// The first line of the instruction the worker is working on: the latest delivered round, else the task brief.
 function taskBriefLine(roots, taskId) {
-  try { return fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8").split(/\r?\n/)[0].trim(); }
+  try {
+    const rounds = coordination.listRounds({ roots, taskId, statuses: ["delivered"] });
+    const latest = rounds.at(-1);
+    const text = latest ? latest.sent : fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+    const line = text.split(/\r?\n/)[0].trim();
+    return latest ? `(vòng ${latest.round}) ${line}` : line;
+  }
   catch (_) { return taskId; }
 }
 
@@ -1760,8 +2003,8 @@ module.exports = {
   registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
-  sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
-  recoverDeadWorker, buildHandoff,
+  sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
+  recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,

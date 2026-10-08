@@ -70,6 +70,10 @@ function briefText() {
   const briefFile = arg("--brief-file");
   return briefFile ? fs.readFileSync(path.resolve(briefFile), "utf8") : arg("--brief");
 }
+function originalText() {
+  const originalFile = arg("--original-file");
+  return originalFile ? fs.readFileSync(path.resolve(originalFile), "utf8") : arg("--original");
+}
 function notesText() {
   const notesFile = arg("--notes-file");
   return notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : arg("--notes");
@@ -90,17 +94,20 @@ const usage = [
   "  routing route --task ID",
   "  profiles sync [--dry-run]   (Paseo: sync repo-owned profiles into the selected Paseo home)",
   "  project register --id ID --root PATH [--name NAME]",
-  "  task create --project ID (--brief TEXT|--brief-file FILE) [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
+  "  task create --project ID (--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
   "  task list [--project ID] [--json]",
   "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
   "  task collect   (Paseo: collect finished-turn reports from assigned agents)",
-  "  task promote --task ID [--brief TEXT|--brief-file FILE] [--dependency ID]",
-  "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--project ID] [--type ship|scout]",
+  "  task promote --task ID [--brief TEXT|--brief-file FILE] [--original TEXT|--original-file FILE] [--dependency ID]",
+  "  task adopt --worker NAME (--task ID|--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--project ID] [--type ship|scout]",
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
+  "  task brief --task ID (--text TEXT|--text-file FILE)   (replace the brief of a task that has no worker yet)",
+  "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original]",
+  "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE] [--type ship|scout] [--resources JSON]",
   "  task message --task ID (--text TEXT|--text-file FILE)",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
@@ -176,7 +183,7 @@ function main() {
   }
   if (command === "task" && action === "create") {
     core.initRoutingConfig({ roots: home, backend: selectedBackend() });
-    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend() }));
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), original: originalText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend() }));
     return;
   }
   if (command === "task" && action === "list") {
@@ -192,7 +199,7 @@ function main() {
   }
   if (command === "task" && action === "promote") {
     assertSelectedTaskBackend(arg("--task"));
-    output(core.promoteScout({ roots: home, taskId: arg("--task"), brief: briefText(), dependencies: args("--dependency") }));
+    output(core.promoteScout({ roots: home, taskId: arg("--task"), brief: briefText(), original: originalText(), dependencies: args("--dependency") }));
     return;
   }
   if (command === "task" && action === "dispatch") {
@@ -216,7 +223,7 @@ function main() {
     return;
   }
   if (command === "task" && action === "adopt") {
-    const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
+    const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), original: originalText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
     warnResourceConflicts(result);
     output(result);
     return;
@@ -230,6 +237,34 @@ function main() {
   }
   if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
   if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "brief") {
+    assertSelectedTaskBackend(arg("--task"));
+    const textFile = arg("--text-file");
+    const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
+    if (!text) throw new Error("task brief requires --text or --text-file");
+    output(core.replaceTaskBrief({ roots: home, taskId: arg("--task"), text }));
+    return;
+  }
+  if (command === "task" && action === "continue") {
+    assertSelectedTaskBackend(arg("--task"));
+    const textFile = arg("--text-file");
+    const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
+    if (!text) throw new Error("task continue requires --text or --text-file");
+    const original = originalText();
+    if (!original) throw new Error("task continue requires --original or --original-file");
+    const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter() });
+    warnResourceConflicts(result.task);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "reassign") {
+    assertSelectedTaskBackend(arg("--task"));
+    const textFile = arg("--text-file");
+    const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims() });
+    warnResourceConflicts(result);
+    output(result);
+    return;
+  }
   if (command === "task" && action === "message") {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");

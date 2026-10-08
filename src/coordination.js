@@ -53,6 +53,8 @@ function validateTaskMetaRecord(meta, taskId) {
   if (meta.endpoint !== null && meta.endpoint !== undefined && typeof meta.endpoint !== "string") throw new SchemaValidationError(`Task metadata endpoint is invalid: ${taskId || meta.taskId}`);
   if (meta.backend !== undefined && !["herdr", "paseo"].includes(meta.backend)) throw new SchemaValidationError(`Task metadata backend is invalid: ${taskId || meta.taskId}`);
   if (meta.workspaceId !== undefined && meta.workspaceId !== null && typeof meta.workspaceId !== "string") throw new SchemaValidationError(`Task metadata workspace ID is invalid: ${taskId || meta.taskId}`);
+  if (meta.round !== undefined && (!Number.isInteger(meta.round) || meta.round < 1)) throw new SchemaValidationError(`Task metadata round is invalid: ${taskId || meta.taskId}`);
+  if (meta.everShip !== undefined && typeof meta.everShip !== "boolean") throw new SchemaValidationError(`Task metadata everShip is invalid: ${taskId || meta.taskId}`);
   return meta;
 }
 
@@ -69,6 +71,32 @@ function validateMessageRecord(message, id) {
 
 function taskDir(home, taskId) { return path.join(home, "data", "tasks", taskId); }
 function metaFile(home, taskId) { return path.join(taskDir(home, taskId), "meta.json"); }
+function roundsDir(home, taskId) { return path.join(taskDir(home, taskId), "rounds"); }
+function roundFile(home, taskId, round) { return path.join(roundsDir(home, taskId), `round-${String(round).padStart(3, "0")}.json`); }
+
+function validateRoundRecord(record, taskId, round) {
+  assertSchemaVersion(record, "Round", { field: "taskId", value: taskId });
+  if (!Number.isInteger(record.round) || record.round < 2 || (round !== undefined && record.round !== round)) throw new SchemaValidationError(`Round identity is invalid: ${taskId} round ${round ?? record.round}`);
+  if (!["pending", "delivered", "failed"].includes(record.status)) throw new SchemaValidationError(`Round lifecycle is invalid: ${taskId} round ${record.round}`);
+  if (typeof record.sent !== "string" || !record.sent || typeof record.original !== "string") throw new SchemaValidationError(`Round text is invalid: ${taskId} round ${record.round}`);
+  return record;
+}
+
+// Round 1 is the task brief itself; later rounds are append-only records written by `task continue` and `task reassign`.
+function listRounds({ roots, taskId, statuses }) {
+  const dir = roundsDir(roots.foremanHome, taskId);
+  if (!fs.existsSync(dir)) return [];
+  const allowed = statuses ? new Set(statuses) : null;
+  return fs.readdirSync(dir).filter((name) => /^round-\d+\.json$/.test(name)).sort()
+    .map((name) => validateRoundRecord(readJson(path.join(dir, name)), taskId, Number(name.slice(6, -5))))
+    .filter((record) => !allowed || allowed.has(record.status));
+}
+
+function writeRoundUnlocked({ roots, record }) {
+  validateRoundRecord(record, record.taskId, record.round);
+  atomicJson(roundFile(roots.foremanHome, record.taskId, record.round), record);
+  return record;
+}
 
 function coordinationDirs(home) {
   return { messages: path.join(home, "data", "messages") };
@@ -90,8 +118,9 @@ const REPORT_COMMAND = [
   "",
   "Choose the status:",
   "- done: the task is complete. Summary: outcome, changed files, verification evidence, unresolved checks, risks.",
-  "- blocked: only the user can unblock you. Summary: finding, why user authority is needed, options, your recommendation.",
+  "- blocked: only the user can unblock you. Summary: finding, why user authority is needed.",
   "- progress: you stopped before finishing for another reason. Summary: what is done, what remains, why you stopped.",
+  "End a done or blocked summary with \"Next steps\": one numbered list of 1-3 things the user could ask for next (for blocked, the options to choose from), marking the one you recommend. Use no other numbered list in the summary.",
   "After the command succeeds, end your turn. If it fails, include the error in your final message.",
 ];
 
@@ -108,10 +137,27 @@ function deliveryPrompt(message) {
   };
   const section = (title, body) => ["", `## ${title}`, body];
   const reportInstruction = payload.backend === "paseo"
-    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman."
+    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. For done and blocked, end the summary with \"Next steps\": one numbered list of 1-3 things the user could ask for next (for blocked, the options to choose from), marking the one you recommend, and use no other numbered list. Do not call foreman report; Paseo returns this final response to Foreman."
     : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
+  const claimList = (claims) => (claims || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+  const followUpReport = payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
+  if (message.kind === "task-update") {
+    // A scout round that still holds a write lease reads only; the lease stays because earlier rounds changed the workspace.
+    const readOnly = payload.mode === "scout" && (payload.resources || []).some((claim) => claim.mode !== "read");
+    const mode = readOnly ? "scout (read-only for this round)" : (payload.mode || "ship");
+    return [
+      `Foreman task ${message.taskId} | project ${message.projectId} | ${mode} | round ${payload.round} | generation ${message.generation}`,
+      `Allowed resources: ${claimList(payload.resources)}${payload.previousResources ? ` (changed from ${claimList(payload.previousResources)})` : ""}`,
+      ...(payload.supersedes ? ["", `This replaces round ${payload.supersedes}, which was interrupted before you reported. Inspect the workspace for what it already changed before continuing.`] : []),
+      ...section(`User request (round ${payload.round})`, String(payload.request || "")),
+      ...(payload.original ? section("User's original words (reference)", String(payload.original)) : []),
+      ...section("Report", followUpReport),
+    ].join("\n");
+  }
   if (message.kind === "task-brief") {
-    const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+    const resources = claimList(payload.resources);
+    // A reassignment may carry the next round; it reads as a request, not as handoff history.
+    const { nextRequest, ...handoffRest } = payload.handoff || {};
     return [
       `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
       `Workspace: ${payload.cwd}`,
@@ -119,7 +165,8 @@ function deliveryPrompt(message) {
       `Allowed resources: ${resources}`,
       ...section("User request", String(payload.brief || "")),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
-      ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
+      ...(payload.handoff ? section("Previous work and handoff", plainText(handoffRest)) : []),
+      ...(nextRequest ? section(`User request (round ${nextRequest.round})`, String(nextRequest.text)) : []),
       ...section("Report", reportInstruction),
     ].join("\n");
   }
@@ -127,7 +174,7 @@ function deliveryPrompt(message) {
     `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
     "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
-    ...section("Report", payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+    ...section("Report", followUpReport),
   ].join("\n");
 }
 
@@ -333,6 +380,31 @@ function reconcileFleet({ roots, adapter }) {
   return { workers, tasks };
 }
 
+const ROUND_REPORT_LIMIT = 5;
+const ROUND_REPORT_CHARS = 4000;
+
+// The last done or blocked report of each of the most recent rounds; a report without a ROUND header belongs to round 1.
+function collectRoundReports(dir) {
+  const reportsDir = path.join(dir, "reports");
+  if (!fs.existsSync(reportsDir)) return [];
+  const byRound = new Map();
+  for (const name of fs.readdirSync(reportsDir).filter((item) => item.endsWith(".md"))) {
+    const file = path.join(reportsDir, name);
+    const text = fs.readFileSync(file, "utf8");
+    const header = text.split(/\r?\n\r?\n/, 1)[0];
+    const status = header.match(/^STATUS: (.+)$/m)?.[1];
+    if (status !== "done" && status !== "blocked") continue;
+    const round = Number(header.match(/^ROUND: (\d+)$/m)?.[1] || 1);
+    const at = header.match(/^REPORTED_AT: (.+)$/m)?.[1] || "";
+    const previous = byRound.get(round);
+    if (!previous || at >= previous.at) byRound.set(round, { round, status, at, file, text });
+  }
+  return [...byRound.values()].sort((left, right) => left.round - right.round).slice(-ROUND_REPORT_LIMIT).map(({ round, status, at, file, text }) => {
+    const body = text.slice(text.indexOf("\n\n") + 2);
+    return { round, status, at, file, summary: body.length > ROUND_REPORT_CHARS ? `${body.slice(0, ROUND_REPORT_CHARS)}\n[truncated; full report: ${file}]` : body };
+  });
+}
+
 function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
   const dir = taskDir(roots.foremanHome, taskId);
   const meta = validateTaskMetaRecord(readJson(metaFile(roots.foremanHome, taskId)), taskId);
@@ -344,6 +416,8 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     if (decision.taskId !== taskId || decision.projectId !== meta.projectId || typeof decision.generation !== "number" || decision.generation > meta.generation) throw new SchemaValidationError(`Decision identity is stale: ${name}`);
     return decision;
   }) : [];
+  const rounds = listRounds({ roots, taskId, statuses: ["delivered"] }).map((round) => ({ round: round.round, mode: round.mode, sent: round.sent, original: round.original, supersedes: round.supersedes ?? null }));
+  const roundReports = collectRoundReports(dir);
   const evidenceFile = path.join(dir, "evidence.json");
   const unresolvedFile = path.join(dir, "unresolved-checks.json");
   return {
@@ -355,9 +429,13 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     previousEndpoint: meta.endpoint,
     previousGeneration: meta.generation,
     reason,
-    brief: read(path.join(dir, "brief.md")),
+    // The brief itself reaches the successor as the task's "User request"; only what came after it travels here.
+    original: read(path.join(dir, "original.md")),
+    rounds,
+    roundReports,
     decisions,
-    lastReport: read(meta.lastReport?.file),
+    // The latest done or blocked report already travels in roundReports.
+    lastReport: roundReports.some((report) => report.file === meta.lastReport?.file) ? null : read(meta.lastReport?.file),
     workspace: meta.workspace,
     branch: meta.branch,
     resources: meta.resources || [],
@@ -372,7 +450,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord,
-  digest, initCoordination, coordinationDirs, taskDir, metaFile, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
+  digest, initCoordination, coordinationDirs, taskDir, metaFile, roundsDir, roundFile, listRounds, writeRoundUnlocked, validateRoundRecord, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
 };
