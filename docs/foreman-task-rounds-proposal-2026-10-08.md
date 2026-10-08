@@ -3,6 +3,7 @@
 Ngày: 2026-10-08 · Dựa trên `phananhtuan09/foreman` tại `da91e00` · Thay thế bộ proposal ngày 2026-10-07 cho bài toán task chưa rõ.
 Cập nhật cùng ngày: Foreman **viết lại** yêu cầu trước khi gửi worker, thay cho quy tắc gửi nguyên văn. Lời gốc vẫn được lưu.
 Cập nhật lần 2 (sau review): chốt flow `blocked`, hành vi `reassign`, lease khi đổi chế độ; đổi cách lưu vòng sang file JSON riêng; ghi rõ các chi tiết implement. Xem mục "Quyết định đã chốt".
+Cập nhật lần 3: bản viết lại phải được bạn **xác nhận trước khi gửi**, thay cho "gửi ngay rồi hiện".
 
 ## Ý chính
 
@@ -19,7 +20,7 @@ Foreman làm bốn việc:
 - **Viết lại** lời bạn thành một chỉ dẫn rõ cho worker. Việc này chỉ dựa trên lời bạn và report đã có, không thêm kiến thức dự án.
 - **Lưu cả hai bản**: bản viết lại (gửi đi) và lời gốc của bạn.
 - **Đổi chế độ và lease** nếu bạn nói rõ là chuyển giữa điều tra và sửa.
-- **Gửi tiếp** cho đúng worker đó, rồi cho bạn thấy bản đã gửi.
+- **Hỏi bạn xác nhận** bản viết lại, rồi mới gửi tiếp cho đúng worker đó.
 
 Tạo task mới hoặc mở worker mới chỉ xảy ra khi bạn nói ra.
 
@@ -30,6 +31,7 @@ Tạo task mới hoặc mở worker mới chỉ xảy ra khi bạn nói ra.
 | Worker report `blocked`, bạn trả lời thế nào? | Luôn là **một vòng mới** qua `task continue`. Decision Package chỉ còn dùng khi Foreman tự thấy cần bạn quyết một việc về sản phẩm, kiến trúc, tương thích, bảo mật hay vận hành. |
 | `reassign` không kèm yêu cầu thì worker mới làm gì? | **Chỉ kiểm tra rồi report**: đọc mọi chỉ dẫn, kiểm tra workspace, report tình trạng hiện tại, không làm thêm. Có kèm yêu cầu thì yêu cầu đó được gửi luôn như vòng tiếp theo. |
 | Task đã sửa code rồi chuyển về điều tra, lease thế nào? | **Giữ exclusive** tới khi accept, vì workspace còn thay đổi dở. Chỉ chỉ dẫn gửi worker đổi sang chỉ đọc. |
+| Bản viết lại gửi ngay hay chờ duyệt? | **Chờ bạn xác nhận.** Foreman hiện bản viết lại kèm vòng, chế độ, lease, worker; chỉ gửi khi bạn đồng ý. Ở vòng 1, xác nhận gộp chung với bước chọn profile nên không thêm lần chạm. |
 
 ## Hiện tại đã có gì, còn thiếu gì
 
@@ -47,40 +49,55 @@ Khoảng 70% flow này đã chạy được bằng `task message`. Lệnh này g
 
 ```
 Bạn:     điều tra bug: đơn hàng thỉnh thoảng bị tính phí ship 2 lần (shop)
-Foreman: Tạo T-000040 · điều tra (chỉ đọc). Gửi worker:
+Foreman: Tạo T-000040 · điều tra (chỉ đọc). Sẽ gửi worker:
            "Điều tra vì sao đơn hàng đôi khi bị tính phí ship 2 lần. Chưa sửa code.
             Report: nguyên nhân, bằng chứng, các hướng sửa."
-         Chọn profile: 1 codex-luna (đề xuất) · 2 … · 3 … · 4 …
+         Chọn profile để gửi: 1 codex-luna (đề xuất) · 2 … · 3 … · 4 …  (hoặc sửa nội dung trên)
 Bạn:     1
+Foreman: Đã gửi @shop-t-000040 (codex-luna).
          ── report vòng 1: webhook retry không idempotent. Bước tiếp theo: 1. idempotency key  2. khoá nút ──
 Bạn:     T-40 làm 1 đi, chưa đụng UI, bảo nó chạy test luôn
-Foreman: T-000040 vòng 2 · sửa code · lease workspace/shop exclusive · gửi @shop-t-000040:
+Foreman: T-000040 vòng 2 · sửa code · lease workspace/shop exclusive · @shop-t-000040 · sẽ gửi:
            "Thực hiện bước 1 trong report vòng 1 của bạn: thêm idempotency key cho webhook payment
             để retry không cộng phí lần 2. Chưa thay đổi UI. Chạy test liên quan trước khi report."
+         Gửi?
+Bạn:     ok nhưng chỉ chạy test của payment thôi
+Foreman: T-000040 vòng 2 · sẽ gửi:
+           "… Chưa thay đổi UI. Chỉ chạy test trong tests/payment/ trước khi report."
+         Gửi?
+Bạn:     ok
+Foreman: Đã gửi vòng 2.
          ── cùng worker, nguyên context → report blocked: cần thêm cột vào orders (~5M dòng) ──
 Bạn:     xem thử dùng bảng riêng payment_events có ổn ko, đừng sửa gì thêm
-Foreman: T-000040 vòng 3 · điều tra (chỉ đọc) · lease giữ exclusive vì workspace còn thay đổi dở · gửi:
+Foreman: T-000040 vòng 3 · điều tra (chỉ đọc) · lease giữ exclusive vì workspace còn thay đổi dở · sẽ gửi:
            "Đánh giá phương án lưu idempotency key trong bảng riêng payment_events thay vì thêm cột
             vào orders. Không sửa thêm code ở vòng này. Report: ưu nhược điểm và đề xuất."
+         Gửi?
+Bạn:     ok
 Bạn:     accept T-40
 ```
 
-Nếu bản viết lại sai ý, bạn sửa ngay. Ví dụ ngay sau khi vòng 2 vừa gửi:
+Vì bản viết lại được duyệt trước, chuyện gửi sai ý hiếm khi xảy ra. `--interrupt` dành cho lúc bạn đổi ý khi worker đang chạy:
 
 ```
-Bạn:     T-40 dừng, ý mình là chỉ chạy test của payment thôi chứ không phải cả suite
-Foreman: T-000040 đã ngắt lượt đang chạy · vòng 3 (thay thế vòng 2) gửi:
+Bạn:     T-40 dừng, khoan chạy test, chỉ sửa code thôi
+Foreman: T-000040 vòng 3 (thay thế vòng 2, sẽ ngắt lượt đang chạy) · sẽ gửi:
            "Chỉ dẫn này thay thế vòng 2, vòng đó đã bị ngắt giữa chừng; kiểm tra phần đã sửa dở trước khi làm tiếp.
             Thực hiện bước 1 trong report vòng 1: thêm idempotency key cho webhook payment để retry không cộng
-            phí lần 2. Chưa thay đổi UI. Chỉ chạy test trong tests/payment/, không chạy cả suite."
+            phí lần 2. Chưa thay đổi UI. Chưa chạy test ở vòng này."
+         Gửi?
+Bạn:     ok
+Foreman: Đã ngắt lượt đang chạy và gửi vòng 3.
 ```
 
-Bản sửa luôn là một vòng mới có `supersedes`, vì lịch sử vòng chỉ nối thêm. Nó nhắc lại đủ chỉ dẫn của vòng bị thay để worker không phải ghép hai vòng.
+Worker chỉ bị ngắt ngay lúc gửi, sau khi bạn xác nhận. Bản sửa luôn là một vòng mới có `supersedes`, vì lịch sử vòng chỉ nối thêm. Nó nhắc lại đủ chỉ dẫn của vòng bị thay để worker không phải ghép hai vòng.
 
 Khi worker bắt đầu lan man:
 
 ```
 Bạn:     T-40 mở worker mới, dùng claude-opus
+Foreman: T-000040 → worker mới claude-opus, dừng @shop-t-000040. Worker mới chỉ kiểm tra workspace rồi report. Làm?
+Bạn:     ok
 Foreman: T-000040 → @shop-t-000040-r2 (claude-opus). Worker cũ đã dừng.
          Worker mới nhận mọi chỉ dẫn đã gửi + report cuối mỗi vòng; nó kiểm tra workspace rồi report tình trạng, chưa làm thêm.
 ```
@@ -94,7 +111,7 @@ Foreman không có context dự án. Vì vậy nó chỉ được viết lại t
 - Bỏ phần nói với Foreman: mã task, "bảo nó", "giao cho codex", "dùng claude", "gấp", tên worker.
 - Giải tham chiếu bằng cách trích lại từ report. Ví dụ "làm 1" thành nội dung bước 1 trong report, "cái lỗi đó" thành tên lỗi worker đã báo.
 - Sắp lại thành câu mệnh lệnh rõ: làm gì, giới hạn gì, report gì.
-- Gộp nhiều tin nhắn của bạn cho cùng một task **trong cùng một lượt Foreman** thành một chỉ dẫn. Tin đến sau khi đã gửi thì là vòng mới, hoặc bản sửa có `--interrupt` nếu bạn bảo dừng.
+- Gộp nhiều tin nhắn của bạn cho cùng một task thành một chỉ dẫn, miễn là chưa gửi. Tin đến trong lúc chờ xác nhận được gộp vào bản viết lại và hỏi lại. Tin đến sau khi đã gửi thì là vòng mới, hoặc bản sửa có `--interrupt` nếu bạn bảo dừng.
 - Sửa lỗi gõ, viết rõ chữ viết tắt.
 
 **Không được làm**
@@ -111,7 +128,15 @@ Foreman không có context dự án. Vì vậy nó chỉ được viết lại t
 
 Hai trường hợp này đi bằng một câu hỏi duy nhất, chưa gửi gì cho worker.
 
-**Luôn cho bạn thấy bản đã gửi.** Sau mỗi lần gửi, Foreman in nguyên bản viết lại, ngắn gọn. Mặc định là gửi ngay rồi hiện, không chờ duyệt, vì chờ duyệt thêm một lần chạm mỗi vòng. Nếu bạn nói "xem trước" thì riêng tin đó Foreman hiện bản viết lại và chờ bạn đồng ý; không lưu thành tuỳ chọn.
+**Xác nhận trước khi gửi.** Foreman hiện nguyên bản viết lại cùng một dòng (vòng, chế độ, lease, worker, có ngắt hay không) rồi hỏi "Gửi?". Chưa gửi gì cho worker cho tới khi bạn đồng ý.
+
+- Bạn trả lời đồng ý ("ok", "gửi", "1"…) thì Foreman gửi đúng bản vừa hiện, không viết lại thêm.
+- Bạn sửa hoặc bổ sung thì Foreman viết lại và hỏi lại.
+- Bạn bỏ ("thôi", "huỷ") thì không gửi gì và không ghi vòng nào.
+- Ở vòng 1, câu hỏi xác nhận gộp chung với bước chọn profile: chọn profile nghĩa là đồng ý bản viết lại.
+- Không cần hỏi khi bản gửi trùng nguyên văn lời bạn (không viết lại gì, hoặc toàn bộ nằm trong ngoặc kép).
+- Câu chờ xác nhận chỉ nằm trong hội thoại. Session bị clear trước khi bạn đồng ý thì chưa có gì được gửi hay ghi; bạn chỉ cần nói lại.
+- CLI không tự kiểm được việc đã hỏi; đây là kỷ luật của skill, giống quy tắc chọn profile hiện nay.
 
 **Không viết lại** câu trả lời cho Decision Package (`decision answer`): câu đó vẫn được lưu và gửi nguyên văn như hiện nay.
 
@@ -120,7 +145,7 @@ Hai trường hợp này đi bằng một câu hỏi duy nhất, chưa gửi gì
 | Việc | Người quyết | Ghi chú |
 |---|---|---|
 | Ý của mỗi vòng | Bạn | Lời gốc được lưu nguyên văn |
-| Câu chữ gửi worker | Foreman | Theo quy tắc viết lại ở trên; bạn thấy bản gửi và sửa được ngay |
+| Câu chữ gửi worker | Foreman viết, bạn duyệt | Theo quy tắc viết lại ở trên; chỉ gửi sau khi bạn xác nhận |
 | Chuyển điều tra ↔ sửa | Bạn | Foreman chỉ đổi khi câu của bạn nói rõ ("sửa", "fix", "đừng sửa gì thêm"). Không rõ thì giữ chế độ hiện tại, và dòng xác nhận có ghi chế độ |
 | Lease | Tự động theo chế độ | Điều tra → `workspace/<project>` read; sửa → `workspace/<project>` exclusive (mặc định hiện nay). Đã từng sửa thì giữ exclusive tới khi accept. Chỉ hẹp hơn khi bạn đưa `--resources` |
 | Trả lời report `blocked` | Bạn | Luôn bằng một vòng mới qua `task continue` |
@@ -220,6 +245,15 @@ Khi chế độ là scout nhưng lease vẫn exclusive, header ghi `scout (read-
 
 `task adopt` và `task promote` giữ nguyên cú pháp, nhận thêm `--original` tuỳ chọn.
 
+Xác nhận ở vòng 1: Foreman chạy `task create` (để router đề xuất profile), rồi hiện bản viết lại cùng danh sách profile trong một câu hỏi. Nếu bạn sửa nội dung thay vì chỉ chọn profile, Foreman ghi đè bản gửi bằng lệnh mới:
+
+```
+task brief --task ID (--text TEXT | --text-file FILE)
+```
+
+- Chỉ chạy được khi task chưa giao (`routing`, `queued` hoặc `pending`, chưa có endpoint), nên không đụng gì tới worker.
+- Chỉ ghi đè `brief.md`; `original.md` giữ nguyên. Không cần route lại vì router đọc lời gốc.
+
 ### 4. Lệnh `task reassign` (đổi worker theo ý bạn)
 
 ```
@@ -279,7 +313,7 @@ Mỗi report chỉ có một danh sách đánh số, nên "làm 1" luôn trích 
 - Dòng 19 ("pass the user's request verbatim as `--brief`") và dòng 27 ("Send a follow-up with … `task message` using the user's words") thay bằng mục **Quy tắc viết lại** ở trên, kèm 3–4 ví dụ đúng/sai.
 - Trả lời report của task nào (kể cả `blocked`) thì dùng `task continue` trên đúng task đó, luôn truyền `--original`.
 - Chỉ truyền `--type` khi người dùng nói rõ chuyển giữa điều tra và sửa.
-- Sau khi gửi, in một dòng (vòng, chế độ, lease, worker) và bản đã gửi.
+- Trước khi gửi, hiện một dòng (vòng, chế độ, lease, worker, có ngắt hay không) cùng bản viết lại và chờ người dùng xác nhận; ở vòng 1 gộp với bước chọn profile. Người dùng sửa thì viết lại và hỏi lại; huỷ thì không gửi gì.
 - Không tạo task mới, không promote, không reassign trừ khi người dùng yêu cầu.
 - `task message` chỉ còn dùng cho việc Foreman tự hỏi worker (ví dụ `idle-without-report`).
 
@@ -287,7 +321,7 @@ Mỗi report chỉ có một danh sách đánh số, nên "làm 1" luôn trích 
 
 SPEC cần sửa:
 
-- §5.6: giữ "persisted verbatim"; bỏ yêu cầu gửi nguyên văn; thêm "Foreman may rewrite the request for the worker from the user's words, prior rounds and worker reports only; both versions are persisted; quoted text and decision answers are sent verbatim".
+- §5.6: giữ "persisted verbatim"; bỏ yêu cầu gửi nguyên văn; thêm "Foreman may rewrite the request for the worker from the user's words, prior rounds and worker reports only; the user confirms the rewritten text before it is sent; both versions are persisted; quoted text and decision answers are sent verbatim".
 - §7.3: thêm `original.md` và `rounds/`.
 - §7.5: report có header `ROUND`.
 - §7.7 và §9.2: worker nhận bản viết lại; thêm message kind `task-update`.
@@ -309,7 +343,7 @@ Lịch sử repo (`legacy/foreman-agent/DNA.md`):
 
 - 2026-08-14 "Lọc vỏ điều phối khỏi prompt worker": cho bỏ mệnh đề điều phối nhưng cấm đổi chữ; đồng thời từ chối việc bắt Foreman hiểu task.
 - 2026-08-17 "Nguồn của prompt là đĩa, và ngoặc kép là dạng tường minh": kết luận siết hay nới bộ lọc chỉ đổi bug này lấy bug ngược lại, nên chuyển chỗ sai sang nơi thấy ngay và sửa được.
-- Proposal này đi tiếp một bước: cho đổi chữ và giải tham chiếu. Nó vẫn giữ tinh thần của 08-17: chỗ sai nằm ở nơi bạn thấy ngay (bản đã gửi luôn được in), sửa được ngay (`--interrupt`), và ngoặc kép vẫn là dạng gửi nguyên văn. Giải tham chiếu chỉ là trích lại một mục đánh số trong report, không phải hiểu task.
+- Proposal này đi tiếp một bước: cho đổi chữ và giải tham chiếu. Nó vẫn giữ tinh thần của 08-17: chỗ sai nằm ở nơi bạn thấy và sửa được **trước khi** worker nhận (bản viết lại phải được bạn xác nhận), và ngoặc kép vẫn là dạng gửi nguyên văn. Giải tham chiếu chỉ là trích lại một mục đánh số trong report, không phải hiểu task.
 
 ## So với bộ proposal hôm qua
 
@@ -325,7 +359,7 @@ Lịch sử repo (`legacy/foreman-agent/DNA.md`):
 
 Tổng thay đổi:
 
-- 2 lệnh mới (`continue`, `reassign`), 1 cờ mới cho `create`, `adopt`, `promote` (`--original`);
+- 3 lệnh mới (`continue`, `reassign`, `brief`), 1 cờ mới cho `create`, `adopt`, `promote` (`--original`);
 - 1 message kind mới;
 - record mới `rounds/round-NNN.json` và file `original.md`;
 - field meta: `round`, `everShip`, và `type` được phép đổi;
@@ -356,13 +390,14 @@ Không thêm lifecycle state nào. Ước lượng: khoảng 500–700 dòng cod
 - **Foreman hiểu sai ý khi viết lại.** Đây là rủi ro chính của bản cập nhật. Giảm thiểu:
   - giới hạn nguồn (chỉ lời bạn, các vòng trước, report);
   - hỏi lại khi tham chiếu không có trên đĩa;
-  - luôn hiện bản đã gửi;
+  - bạn xác nhận bản viết lại trước khi gửi;
   - ngoặc kép để gửi nguyên văn;
-  - `--interrupt` để sửa ngay;
+  - `--interrupt` khi bạn đổi ý lúc worker đang chạy;
   - lời gốc lưu cạnh bản gửi để soát lại sau.
 
-  Không có cách máy kiểm "Foreman có thêm ý không". Phần đó dựa vào kỷ luật của skill và việc bạn liếc bản đã gửi.
+  Không có cách máy kiểm "Foreman có thêm ý không". Phần đó dựa vào kỷ luật của skill và bước xác nhận của bạn.
 - **Viết lại quá dài hoặc tự thêm tiêu chí.** Skill nên có ví dụ sai rõ ràng. Nên theo dõi vài tuần đầu.
+- **Thêm một lần chạm mỗi vòng.** Đây là cái giá đã chấp nhận để đổi lấy việc không gửi sai ý. Vòng 1 không tốn thêm vì gộp với chọn profile; bản gửi nguyên văn không cần hỏi.
 - **Context phình theo số vòng.** Hiện số vòng (và token với Paseo), `reassign` khi bạn thấy cần. Chưa đo ngưỡng thực tế.
 - **Đoán sai chế độ từ câu của bạn.** Chỉ đổi khi câu nói rõ, luôn in chế độ trong dòng xác nhận. Sai cũng rẻ vì lease chỉ để phối hợp, không phải sandbox (SPEC §20.3).
 - **`--interrupt` trên Herdr.** Primitive có sẵn và tự xác minh, nhưng chưa có CLI nào dùng nó, nên chưa được chạy thật qua flow này. Transport gửi `ctrl-c`, nên chỉ được gọi khi worker đang chạy.
