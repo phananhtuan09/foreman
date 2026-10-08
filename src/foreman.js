@@ -1569,6 +1569,17 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
   });
 }
 
+// Replaces the worker-facing brief of a task that has no worker yet, so the user can correct a rewrite before round one is sent.
+function replaceTaskBrief({ roots, taskId, text }) {
+  if (typeof text !== "string" || !text.trim()) throw new ValidationError("A task brief must be non-empty text");
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (!["routing", "queued", "pending"].includes(meta.status) || meta.endpoint || meta.owner) throw new ValidationError(`Task ${taskId} already has a worker; send a new round with task continue`);
+    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), text);
+    return { taskId, brief: text, status: meta.status };
+  });
+}
+
 function createDecision({ roots, taskId, finding, why, options, impact, evidence, recommendation, blocker = false }) {
   if (!finding || !why || !Array.isArray(options) || options.length < 2) throw new ValidationError("Decision Package requires finding, rationale, and at least two options");
   return withHomeLock(roots.foremanHome, () => {
@@ -1950,7 +1961,7 @@ module.exports = {
   registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
-  sendWorkerMessage, continueTask, createDecision, answerDecision, deliverDecision, promoteScout,
+  sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,

@@ -9,7 +9,7 @@ const coordination = require("../src/coordination");
 
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, listMessages,
-  adoptExistingWorker, promoteScout, recoverDeadWorker, continueTask, reassignWorker, createDecision, renderUserReport, listTasks, HerdrAdapter,
+  adoptExistingWorker, promoteScout, recoverDeadWorker, continueTask, reassignWorker, replaceTaskBrief, createDecision, renderUserReport, listTasks, HerdrAdapter,
 } = core;
 
 function fixture({ routing = false } = {}) {
@@ -497,6 +497,33 @@ test("a failed reassignment leaves the requested mode undone", () => {
     assert.throws(() => reassign(f, task.id, { type: "ship", text: "Add the key.", original: "sửa đi" }), /did not confirm brief delivery|delivery/);
     assert.equal(f.meta(task.id).type, "scout");
     assert.equal(rounds(f, task.id).length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("a task without a worker can have its brief replaced, and only then", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "app", brief: "First rewrite.", original: "lời gốc của tôi" });
+    const replaced = replaceTaskBrief({ roots: f.roots, taskId: task.id, text: "Corrected rewrite." });
+    assert.equal(replaced.brief, "Corrected rewrite.");
+    assert.equal(fs.readFileSync(f.file(task.id, "brief.md"), "utf8"), "Corrected rewrite.");
+    assert.equal(fs.readFileSync(f.file(task.id, "original.md"), "utf8"), "lời gốc của tôi");
+    assert.throws(() => replaceTaskBrief({ roots: f.roots, taskId: task.id, text: "  " }), /non-empty/);
+    assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
+    assert.match(f.sent.at(-1).text, /## User request\nCorrected rewrite\./);
+    assert.throws(() => replaceTaskBrief({ roots: f.roots, taskId: task.id, text: "Too late." }), /already has a worker; send a new round with task continue/);
+  } finally { f.cleanup(); }
+});
+
+test("worker prompts ask for one numbered Next steps list and no separate options list", () => {
+  const f = fixture();
+  try {
+    dispatch(f);
+    const prompt = f.sent.at(-1).text;
+    assert.match(prompt, /End a done or blocked summary with "Next steps": one numbered list of 1-3 things/);
+    assert.match(prompt, /- blocked: only the user can unblock you\. Summary: finding, why user authority is needed\.\n/);
+    assert.doesNotMatch(prompt, /options, your recommendation/);
+    assert.ok(coordination.REPORT_COMMAND.some((line) => /Next steps/.test(line)));
   } finally { f.cleanup(); }
 });
 

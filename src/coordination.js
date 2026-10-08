@@ -118,8 +118,9 @@ const REPORT_COMMAND = [
   "",
   "Choose the status:",
   "- done: the task is complete. Summary: outcome, changed files, verification evidence, unresolved checks, risks.",
-  "- blocked: only the user can unblock you. Summary: finding, why user authority is needed, options, your recommendation.",
+  "- blocked: only the user can unblock you. Summary: finding, why user authority is needed.",
   "- progress: you stopped before finishing for another reason. Summary: what is done, what remains, why you stopped.",
+  "End a done or blocked summary with \"Next steps\": one numbered list of 1-3 things the user could ask for next (for blocked, the options to choose from), marking the one you recommend. Use no other numbered list in the summary.",
   "After the command succeeds, end your turn. If it fails, include the error in your final message.",
 ];
 
@@ -136,7 +137,7 @@ function deliveryPrompt(message) {
   };
   const section = (title, body) => ["", `## ${title}`, body];
   const reportInstruction = payload.backend === "paseo"
-    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman."
+    ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. For done and blocked, end the summary with \"Next steps\": one numbered list of 1-3 things the user could ask for next (for blocked, the options to choose from), marking the one you recommend, and use no other numbered list. Do not call foreman report; Paseo returns this final response to Foreman."
     : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
   const claimList = (claims) => (claims || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
   const followUpReport = payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");

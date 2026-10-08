@@ -314,6 +314,7 @@ test("Paseo continue collects the finished report first, then sends the next rou
     assert.match(prompt, /Do step 1 from your report\./);
     assert.match(prompt, /return exactly one JSON object/i);
     assert.doesNotMatch(prompt, /làm 1 đi/);
+    assert.match(prompt, /end the summary with "Next steps"/);
     // The worker is now running, so a second round without interrupt is refused.
     assert.throws(() => continueTask({ roots: f.roots, taskId: task.id, text: "Again.", original: "again", adapter: f.adapter }), /still running/);
     f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Added the key." }));
