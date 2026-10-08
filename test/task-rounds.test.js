@@ -9,7 +9,7 @@ const coordination = require("../src/coordination");
 
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, listMessages,
-  adoptExistingWorker, promoteScout, recoverDeadWorker, HerdrAdapter,
+  adoptExistingWorker, promoteScout, recoverDeadWorker, continueTask, createDecision, renderUserReport, listTasks, HerdrAdapter,
 } = core;
 
 function fixture() {
@@ -177,4 +177,200 @@ test("long round reports are truncated and only the five latest rounds are kept"
 
 function sent(f) { return f.sent; }
 
-module.exports = { fixture, dispatch, report };
+function idle(f, assignment) { f.workers.get(assignment.endpoint).status = "idle"; }
+
+function rounds(f, taskId) { return coordination.listRounds({ roots: f.roots, taskId }); }
+
+function proceed(f, taskId, options = {}) {
+  return continueTask({ roots: f.roots, taskId, text: "Do step 1 from your last report.", original: "T-1 làm 1 đi, bảo nó chạy test", adapter: f.adapter, ...options });
+}
+
+test("continue sends the rewritten text to the same worker and keeps the user's words out of the prompt", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "found it\n\nNext steps:\n1. add a key");
+    idle(f, assignment);
+    const result = proceed(f, task.id);
+    assert.equal(result.task.status, "working");
+    assert.equal(result.task.round, 2);
+    assert.equal(result.task.completionReport, null);
+    assert.equal(result.task.endpoint, assignment.endpoint);
+    assert.equal(result.task.generation, 1);
+    const prompt = f.sent.at(-1).text;
+    assert.equal(f.sent.at(-1).endpoint, assignment.endpoint);
+    assert.match(prompt, /^Foreman task T-\d+ \| project app \| ship \| round 2 \| generation 1\nAllowed resources: workspace\/app \(exclusive\)\n\n## User request \(round 2\)\nDo step 1 from your last report\.\n\n## Report/);
+    assert.doesNotMatch(prompt, /T-1 làm 1 đi|original/i);
+    assert.equal(listMessages({ roots: f.roots }).filter((item) => item.kind === "task-update").length, 1);
+    const [record] = rounds(f, task.id);
+    assert.deepEqual([record.round, record.status, record.sent, record.original, record.mode, record.supersedes], [2, "delivered", "Do step 1 from your last report.", "T-1 làm 1 đi, bảo nó chạy test", "ship", null]);
+    assert.equal(record.messageId, result.message.messageId);
+  } finally { f.cleanup(); }
+});
+
+test("continue can attach the original words for reference when asked", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "done");
+    idle(f, assignment);
+    proceed(f, task.id, { withOriginal: true });
+    assert.match(f.sent.at(-1).text, /## User's original words \(reference\)\nT-1 làm 1 đi, bảo nó chạy test/);
+  } finally { f.cleanup(); }
+});
+
+test("continue answers a blocked report and a progress report, and its report is tagged with the new round", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "blocked", "need a column");
+    idle(f, assignment);
+    proceed(f, task.id);
+    assert.equal(f.meta(task.id).status, "working");
+    idle(f, assignment);
+    const second = report(f, assignment, "progress", "half way");
+    assert.match(fs.readFileSync(second.file, "utf8"), /^ROUND: 2$/m);
+    proceed(f, task.id, { text: "Keep going.", original: "tiếp đi" });
+    assert.equal(f.meta(task.id).round, 3);
+    assert.deepEqual(rounds(f, task.id).map((item) => item.round), [2, 3]);
+  } finally { f.cleanup(); }
+});
+
+test("continue refuses a task that is not waiting for the user", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    assert.throws(() => proceed(f, task.id), /still running/);
+    idle(f, assignment);
+    assert.throws(() => proceed(f, task.id), /stopped without reporting/);
+    f.workers.get(assignment.endpoint).status = "mystery";
+    assert.throws(() => proceed(f, task.id, { interrupt: true }), /unknown/);
+    f.workers.get(assignment.endpoint).status = "idle";
+    report(f, assignment, "blocked", "which db?");
+    createDecision({ roots: f.roots, taskId: task.id, finding: "db", why: "needs product call", options: ["a", "b"] });
+    assert.throws(() => proceed(f, task.id), /waiting for a human decision/);
+    assert.throws(() => proceed(f, task.id, { text: " ", original: "x" }), /non-empty instruction/);
+    assert.throws(() => proceed(f, task.id, { original: "" }), /original wording/);
+    const queued = createTask({ roots: f.roots, projectId: "app", brief: "later" });
+    assert.throws(() => proceed(f, queued.id), /only a task with an assigned worker/);
+    assert.equal(rounds(f, task.id).length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("continue with interrupt stops a running worker, marks the replaced round, and tells the worker", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "first");
+    f.workers.get(assignment.endpoint).status = "idle";
+    proceed(f, task.id);
+    f.workers.get(assignment.endpoint).status = "working";
+    const result = proceed(f, task.id, { text: "Only change the handler.", original: "dừng, chỉ sửa handler", interrupt: true });
+    assert.deepEqual(f.interrupts, [assignment.endpoint]);
+    assert.equal(result.interrupted, true);
+    assert.equal(result.round.round, 3);
+    assert.equal(result.round.supersedes, 2);
+    assert.match(f.sent.at(-1).text, /This replaces round 2, which was interrupted before you reported\. Inspect the workspace/);
+  } finally { f.cleanup(); }
+});
+
+test("interrupt does not send ctrl-c to a worker that already stopped", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "first");
+    idle(f, assignment);
+    const result = proceed(f, task.id, { interrupt: true });
+    assert.deepEqual(f.interrupts, []);
+    assert.equal(result.interrupted, false);
+    assert.equal(result.round.supersedes, null);
+  } finally { f.cleanup(); }
+});
+
+test("switching a scout to ship raises the lease, and back to scout keeps the write lease", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    assert.deepEqual(f.meta(task.id).resourceLease.resources, [{ key: "workspace/app", mode: "read" }]);
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    const shipped = proceed(f, task.id, { type: "ship" });
+    assert.equal(shipped.task.type, "ship");
+    assert.deepEqual(shipped.task.resourceLease.resources, [{ key: "workspace/app", mode: "exclusive" }]);
+    assert.notEqual(shipped.task.resourceLease.leaseId, assignment.resourceLease.leaseId);
+    assert.deepEqual([shipped.task.resourceLease.taskId, shipped.task.resourceLease.generation, shipped.task.resourceLease.owner], [task.id, 1, "worker"]);
+    assert.match(f.sent.at(-1).text, /\| ship \| round 2 .*\nAllowed resources: workspace\/app \(exclusive\) \(changed from workspace\/app \(read\)\)/s);
+    idle(f, assignment);
+    report(f, assignment, "blocked", "needs a table");
+    idle(f, assignment);
+    const back = proceed(f, task.id, { type: "scout", text: "Assess the table option. Change no more code.", original: "đừng sửa gì thêm" });
+    assert.equal(back.task.type, "scout");
+    assert.equal(back.task.everShip, true);
+    assert.deepEqual(back.task.resourceLease.resources, [{ key: "workspace/app", mode: "exclusive" }]);
+    assert.equal(back.task.resourceLease.leaseId, shipped.task.resourceLease.leaseId);
+    assert.match(f.sent.at(-1).text, /\| scout \(read-only for this round\) \| round 3 /);
+    assert.doesNotMatch(f.sent.at(-1).text, /changed from/);
+    assert.equal(back.round.mode, "scout");
+  } finally { f.cleanup(); }
+});
+
+test("a scout that never shipped cannot be given write resources", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    assert.throws(() => proceed(f, task.id, { resources: [{ key: "file/src/**", mode: "write" }] }), /Scout tasks may only claim read resources/);
+    assert.equal(rounds(f, task.id).length, 0);
+    assert.equal(f.meta(task.id).status, "review-ready");
+  } finally { f.cleanup(); }
+});
+
+test("raising the lease warns about overlapping leases instead of refusing", () => {
+  const f = fixture();
+  try {
+    const scout = dispatch(f, { type: "scout" });
+    const other = createTask({ roots: f.roots, projectId: "app", brief: "other work" });
+    assignTask({ roots: f.roots, taskId: other.id, owner: "other", adapter: f.adapter, resources: [{ key: "file/src/cart.js", mode: "write" }] });
+    report(f, scout.assignment, "done", "investigated");
+    idle(f, scout.assignment);
+    const result = proceed(f, scout.task.id, { type: "ship", resources: [{ key: "file/src/**", mode: "write" }] });
+    assert.deepEqual(result.task.resourceLease.conflicts.map((item) => item.taskId), [other.id]);
+    assert.equal(result.task.status, "working");
+  } finally { f.cleanup(); }
+});
+
+test("a failed send marks the round failed, restores mode and lease, and a retry reuses the round number", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    const before = f.meta(task.id);
+    f.state.failSend = true;
+    assert.throws(() => proceed(f, task.id, { type: "ship" }), /delivery failed/);
+    const [failed] = rounds(f, task.id);
+    assert.deepEqual([failed.round, failed.status], [2, "failed"]);
+    assert.deepEqual(f.meta(task.id), before);
+    f.state.failSend = false;
+    const retry = proceed(f, task.id, { type: "ship" });
+    assert.equal(retry.round.round, 2);
+    assert.deepEqual(rounds(f, task.id).map((item) => [item.round, item.status]), [[2, "delivered"]]);
+    assert.equal(f.meta(task.id).round, 2);
+  } finally { f.cleanup(); }
+});
+
+test("status lines show the round and the first line of the latest instruction", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { brief: "Investigate the double fee." });
+    report(f, assignment, "done", "root cause found");
+    assert.match(renderUserReport({ tasks: listTasks({ roots: f.roots }) }, f.roots), /`T-\d+` Investigate the double fee\. — Theo @worker: chờ duyệt/);
+    idle(f, assignment);
+    proceed(f, task.id, { text: "Add the idempotency key.\nKeep the UI as is.", original: "làm 1" });
+    report(f, assignment, "blocked", "needs a column");
+    assert.match(renderUserReport({ tasks: listTasks({ roots: f.roots }) }, f.roots), /`T-\d+` \(vòng 2\) Add the idempotency key\. — Theo @worker: worker báo bị chặn/);
+  } finally { f.cleanup(); }
+});
+
+module.exports = { fixture, dispatch, report, idle, rounds, proceed };

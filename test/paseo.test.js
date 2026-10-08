@@ -18,6 +18,7 @@ const {
   listTasks,
   fleetStatus,
   sendWorkerMessage,
+  continueTask,
   createDecision,
   answerDecision,
   deliverDecision,
@@ -292,6 +293,34 @@ test("Paseo progress, blocked, follow-up, and decision delivery use the correct 
     f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "progress", summary: "Applied the human decision conceptually." }));
     collectPaseoReports({ roots: f.roots, adapter: f.adapter });
     assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.lastReport.status, "progress");
+  } finally { f.cleanup(); }
+});
+
+test("Paseo continue collects the finished report first, then sends the next round after the new cursor", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f, "Investigate the fee bug; do not edit files.");
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Cause found.\n\nNext steps:\n1. Add a key" }));
+    // The report is on the timeline but has not been collected yet.
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.status, "working");
+    const result = continueTask({ roots: f.roots, taskId: task.id, text: "Do step 1 from your report.", original: "làm 1 đi", type: "ship", adapter: f.adapter });
+    assert.equal(result.task.status, "working");
+    assert.equal(result.task.round, 2);
+    assert.equal(result.task.type, "ship");
+    assert.deepEqual(result.task.resourceLease.resources, [{ key: "workspace/fixture", mode: "exclusive" }]);
+    assert.equal(result.task.paseoCursor.seq, 1);
+    const prompt = f.adapter.sent.at(-1).prompt;
+    assert.match(prompt, /round 2/);
+    assert.match(prompt, /Do step 1 from your report\./);
+    assert.match(prompt, /return exactly one JSON object/i);
+    assert.doesNotMatch(prompt, /làm 1 đi/);
+    // The worker is now running, so a second round without interrupt is refused.
+    assert.throws(() => continueTask({ roots: f.roots, taskId: task.id, text: "Again.", original: "again", adapter: f.adapter }), /still running/);
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Added the key." }));
+    collectPaseoReports({ roots: f.roots, adapter: f.adapter });
+    const reports = fs.readdirSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "reports")).sort();
+    assert.equal(reports.length, 2);
+    assert.match(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "reports", reports[1]), "utf8"), /^ROUND: 2$/m);
   } finally { f.cleanup(); }
 });
 

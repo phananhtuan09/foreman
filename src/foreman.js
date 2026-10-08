@@ -1438,29 +1438,117 @@ function reconstructTask({ roots, taskId }) {
   return { id: taskId, brief: fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8"), meta, lastReport: read(meta.lastReport?.file), report: read(meta.completionReport) };
 }
 
+// Persists the message, records the prompt time and Paseo cursor, then submits it; throws DeliveryError when the runtime does not accept it.
+function deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend }) {
+  if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
+  const message = coordination.createMessageUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: { ...payload, backend } });
+  const promptAt = now();
+  if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
+  const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
+  atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
+  let result;
+  try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
+  catch (error) { result = { delivered: false, error: error.message }; }
+  const delivered = result !== false && result?.delivered !== false;
+  const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
+  if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+  return { message: updated, promptAt, paseoCursor };
+}
+
 // A Foreman prompt reopens a blocked or review-ready task so the worker's next report is expected.
 function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const backend = assertAdapterBackend(meta, adapter, "messaging its worker");
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
-    if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
-    const messagePayload = { ...payload, backend };
-    const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: messagePayload });
-    const promptAt = now();
-    if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
-    const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
-    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
-    let result;
-    try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
-    catch (error) { result = { delivered: false, error: error.message }; }
-    const delivered = result !== false && result?.delivered !== false;
-    const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
-    if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+    const { message, promptAt, paseoCursor } = deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend });
     const reopened = ["blocked", "review-ready"].includes(meta.status) ? { status: "working", completionReport: null } : {};
     const next = { ...meta, ...reopened, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
-    return { message: updated, task: next };
+    return { message, task: next };
+  });
+}
+
+// What the runtime says the worker is doing right now: "running", "idle", or "unknown" for anything that is not clear evidence.
+function endpointActivity(adapter, meta) {
+  let inspection;
+  try { inspection = adapter.inspect(meta.endpoint); } catch (_) { return "unknown"; }
+  if (!inspection) return "unknown";
+  const state = coordination.classifyRuntime(meta, inspection);
+  if (state === "working" || (state === "idle" && inspection.activeTurn)) return "running";
+  return state === "idle" ? "idle" : "unknown";
+}
+
+function sameClaims(left, right) {
+  const key = (claims) => JSON.stringify([...claims].map(({ key: resource, mode }) => [resource, mode]).sort());
+  return key(left) === key(right);
+}
+
+/**
+ * Starts the next round of a task with the same worker.
+ * `text` is the instruction sent to the worker and `original` is the user's own wording; both are stored.
+ * The lease follows the round's mode, but a task that was ever a ship keeps write access until acceptance.
+ */
+function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter }) {
+  if (typeof text !== "string" || !text.trim()) throw new ValidationError("A round needs non-empty instruction text");
+  if (typeof original !== "string" || !original.trim()) throw new ValidationError("A round needs the user's original wording");
+  const requestedType = type === undefined ? undefined : normalizeTaskType(type);
+  initHome(roots);
+  // A report that already finished must be on disk before the task is judged to be waiting for the user.
+  if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    const backend = assertAdapterBackend(meta, adapter, "continuing it");
+    if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
+    if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
+    if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
+    if (typeof adapter.inspect !== "function") throw new DeliveryError("A runtime adapter is required to continue a task");
+    const activity = endpointActivity(adapter, meta);
+    if (activity === "unknown") throw new ValidationError(`Worker state of ${taskId} is unknown; run status before continuing`);
+    // An instruction still in flight is one that has not been answered by a report.
+    const awaiting = meta.status !== "working" || coordination.reportedSincePrompt(meta);
+    if (activity === "running" && !interrupt) throw new ValidationError(`Worker of ${taskId} is still running; wait for its report or pass --interrupt`);
+    if (activity === "idle" && !awaiting && !interrupt) throw new ValidationError(`Worker of ${taskId} stopped without reporting; ask it to report with task message, or pass --interrupt to replace its instruction`);
+    if (activity === "running" && typeof adapter.interrupt !== "function") throw new DeliveryError("Runtime adapter cannot interrupt a worker");
+
+    const project = findProject(roots.foremanHome, meta.projectId);
+    const mode = requestedType || meta.type;
+    const everShip = Boolean(meta.everShip) || meta.type === "ship" || mode === "ship";
+    const previousClaims = meta.resourceLease?.resources || meta.resources || [];
+    let claims;
+    if (resources !== undefined) claims = normalizeResourceClaims(resources);
+    else if (mode !== meta.type && mode === "ship") claims = [{ key: `workspace/${project.id}`, mode: "exclusive" }];
+    else claims = previousClaims;
+    if (mode === "scout" && !everShip && claims.some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
+    const leaseChanged = !sameClaims(claims, previousClaims);
+    const lease = leaseChanged
+      ? claimResourcesUnlocked({ roots, taskId, generation: meta.generation, owner: meta.owner, resources: claims, ignoreLeaseId: meta.resourceLease?.leaseId, allowConflicts: true })
+      : meta.resourceLease;
+
+    const round = (meta.round || 1) + 1;
+    const supersedes = interrupt && !awaiting ? (meta.round || 1) : null;
+    const record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode, resources: lease?.resources || claims, previousResources: previousClaims, supersedes, messageId: null, status: "pending" };
+    coordination.writeRoundUnlocked({ roots, record });
+
+    if (activity === "running") adapter.interrupt(meta.endpoint);
+    const prospective = { ...meta, type: mode, everShip, round: meta.round || 1, resources: lease?.resources || claims, resourceLease: lease };
+    const payload = {
+      taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint,
+      round, mode, resources: record.resources, ...(leaseChanged ? { previousResources: previousClaims } : {}),
+      supersedes, request: text, ...(withOriginal ? { original } : {}),
+    };
+    let delivery;
+    try { delivery = deliverWorkerMessageUnlocked({ roots, meta: prospective, kind: "task-update", payload, adapter, backend }); }
+    catch (error) {
+      // Nothing reached the worker, so the round, mode and lease go back to what they were.
+      coordination.writeRoundUnlocked({ roots, record: { ...record, status: "failed", failedAt: now(), failure: error.message } });
+      atomicJson(metaFile(roots.foremanHome, taskId), meta);
+      throw error;
+    }
+    coordination.writeRoundUnlocked({ roots, record: { ...record, status: "delivered", deliveredAt: now(), messageId: delivery.message.messageId } });
+    const next = { ...prospective, status: "working", completionReport: null, round, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
+    atomicJson(metaFile(roots.foremanHome, taskId), next);
+    return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: activity === "running" };
   });
 }
 
@@ -1652,8 +1740,15 @@ function dispatchReadyTasks({ roots, adapter, ownerForTask, maxConcurrency = Inf
   return results;
 }
 
+// The first line of the instruction the worker is working on: the latest delivered round, else the task brief.
 function taskBriefLine(roots, taskId) {
-  try { return fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8").split(/\r?\n/)[0].trim(); }
+  try {
+    const rounds = coordination.listRounds({ roots, taskId, statuses: ["delivered"] });
+    const latest = rounds.at(-1);
+    const text = latest ? latest.sent : fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+    const line = text.split(/\r?\n/)[0].trim();
+    return latest ? `(vòng ${latest.round}) ${line}` : line;
+  }
   catch (_) { return taskId; }
 }
 
@@ -1774,7 +1869,7 @@ module.exports = {
   registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
-  sendWorkerMessage, createDecision, answerDecision, deliverDecision, promoteScout,
+  sendWorkerMessage, continueTask, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,

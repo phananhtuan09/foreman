@@ -138,8 +138,23 @@ function deliveryPrompt(message) {
   const reportInstruction = payload.backend === "paseo"
     ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. Do not call foreman report; Paseo returns this final response to Foreman."
     : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
+  const claimList = (claims) => (claims || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+  const followUpReport = payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
+  if (message.kind === "task-update") {
+    // A scout round that still holds a write lease reads only; the lease stays because earlier rounds changed the workspace.
+    const readOnly = payload.mode === "scout" && (payload.resources || []).some((claim) => claim.mode !== "read");
+    const mode = readOnly ? "scout (read-only for this round)" : (payload.mode || "ship");
+    return [
+      `Foreman task ${message.taskId} | project ${message.projectId} | ${mode} | round ${payload.round} | generation ${message.generation}`,
+      `Allowed resources: ${claimList(payload.resources)}${payload.previousResources ? ` (changed from ${claimList(payload.previousResources)})` : ""}`,
+      ...(payload.supersedes ? ["", `This replaces round ${payload.supersedes}, which was interrupted before you reported. Inspect the workspace for what it already changed before continuing.`] : []),
+      ...section(`User request (round ${payload.round})`, String(payload.request || "")),
+      ...(payload.original ? section("User's original words (reference)", String(payload.original)) : []),
+      ...section("Report", followUpReport),
+    ].join("\n");
+  }
   if (message.kind === "task-brief") {
-    const resources = (payload.resources || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+    const resources = claimList(payload.resources);
     return [
       `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
       `Workspace: ${payload.cwd}`,
@@ -155,7 +170,7 @@ function deliveryPrompt(message) {
     `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
     "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
-    ...section("Report", payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n")),
+    ...section("Report", followUpReport),
   ].join("\n");
 }
 
