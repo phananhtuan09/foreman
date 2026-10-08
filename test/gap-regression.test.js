@@ -7,7 +7,7 @@ const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask,
   listMessages, createDecision, answerDecision, recordReport, ValidationError, HerdrAdapter,
-  recoverDeadWorker, buildHandoff, migrateJsonRecord, fleetStatus,
+  recoverDeadWorker, buildHandoff, migrateJsonRecord, fleetStatus, promoteScout,
   findProject, listResourceLeases, withHomeLock, HomeLock, HomeLockError,
 } = require("../src/foreman");
 
@@ -88,6 +88,39 @@ test("dead recovery carries prior-generation decisions into the successor handof
     assert.equal(replacement.generation, 2);
     assert.deepEqual(replacement.handoff.decisions.map((item) => item.generation), [1]);
     assert.equal(listMessages({ roots: f.roots }).find((item) => item.kind === "task-brief" && item.generation === 2).payload.handoff.decisions[0].humanResponse, "A");
+  } finally { f.cleanup(); }
+});
+
+test("a second decision is refused while one is still active so the first stays answerable", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "two questions" });
+    assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
+    const first = createDecision({ roots: f.roots, taskId: task.id, finding: "first", why: "authority", options: ["A", "B"] });
+    assert.throws(() => createDecision({ roots: f.roots, taskId: task.id, finding: "second", why: "authority", options: ["C", "D"] }), new RegExp(`active decision ${first.decisionId}`));
+    assert.equal(answerDecision({ roots: f.roots, taskId: task.id, decisionId: first.decisionId, response: "A" }).humanResponse, "A");
+    assert.throws(() => createDecision({ roots: f.roots, taskId: task.id, finding: "second", why: "authority", options: ["C", "D"] }), ValidationError);
+  } finally { f.cleanup(); }
+});
+
+test("promotion keeps the user's words as the brief and passes the scout report as Foreman notes", () => {
+  const f = fixture();
+  try {
+    const promote = (brief) => {
+      const scout = createTask({ roots: f.roots, projectId: "fixture", type: "scout", brief: "checkout is slow; find why" });
+      const assigned = assignTask({ roots: f.roots, taskId: scout.id, owner: `scout-${scout.id}`, adapter: f.adapter, resources: [] });
+      recordReport({ roots: f.roots, paneId: assigned.paneId, status: "done", summary: "N+1 query in cart totals" });
+      const ship = promoteScout({ roots: f.roots, taskId: scout.id, brief });
+      const read = (name) => fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", ship.id, name), "utf8");
+      return { scout, brief: read("brief.md"), notes: read("notes.md") };
+    };
+    const inherited = promote(undefined);
+    assert.equal(inherited.brief, "checkout is slow; find why");
+    assert.match(inherited.notes, new RegExp(`scout ${inherited.scout.id}`));
+    assert.match(inherited.notes, /N\+1 query in cart totals/);
+    const explicit = promote("fix the cart totals query only");
+    assert.equal(explicit.brief, "fix the cart totals query only");
+    assert.match(explicit.notes, /N\+1 query in cart totals/);
   } finally { f.cleanup(); }
 });
 

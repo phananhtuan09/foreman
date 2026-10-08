@@ -1458,6 +1458,10 @@ function createDecision({ roots, taskId, finding, why, options, impact, evidence
   if (!finding || !why || !Array.isArray(options) || options.length < 2) throw new ValidationError("Decision Package requires finding, rationale, and at least two options");
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
+    // Replacing meta.decisionId would orphan an undelivered decision of the current generation.
+    const activeFile = meta.decisionId ? path.join(taskDir(roots.foremanHome, taskId), "decisions", `${meta.decisionId}.json`) : null;
+    const active = activeFile && fs.existsSync(activeFile) ? readJson(activeFile) : null;
+    if (active && active.status !== "delivered" && active.generation === meta.generation) throw new ValidationError(`Task ${taskId} already has active decision ${active.decisionId}; answer and deliver it first`);
     const id = `D-${crypto.randomBytes(10).toString("hex")}`;
     const record = { schemaVersion: 1, decisionId: id, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, finding, whyHumanDecisionRequired: why, options, impact: impact || null, evidence: evidence || null, recommendation: recommendation === undefined ? "none available" : recommendation, blocker: Boolean(blocker), status: "pending", createdAt: now(), answeredAt: null, deliveredAt: null, humanResponse: null };
     const dir = path.join(taskDir(roots.foremanHome, taskId), "decisions");
@@ -1524,14 +1528,17 @@ function promoteScout({ roots, taskId, brief, dependencies = [], routingRunner }
     const scout = readMeta(roots.foremanHome, taskId);
     if (scout.type !== "scout" || scout.status !== "review-ready") throw new ValidationError("Only a review-ready scout can be promoted; promote it before accepting it");
     const sourceReport = fs.readFileSync(scout.completionReport, "utf8");
-    const text = brief || `Implement reviewed findings from scout ${taskId}.\n\nScout report:\n${sourceReport}`;
+    // The brief carries only the user's words; the scout's verbatim report travels as Foreman notes.
+    const text = brief || fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
+    const notes = `Promoted from scout ${taskId}. Scout report:\n${sourceReport}`;
     const normalized = normalizeDependencies(dependencies);
     validateDependenciesUnlocked({ home: roots.foremanHome, projectId: scout.projectId, dependencies: normalized });
     const id = allocateTaskId(roots.foremanHome);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), text);
+    atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
     const backend = scout.backend || "herdr";
     atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
-    return { id, projectId: scout.projectId, type: "ship", promotedFrom: taskId, dependencies: normalized, brief: text, backend };
+    return { id, projectId: scout.projectId, type: "ship", promotedFrom: taskId, dependencies: normalized, brief: text, notes, backend };
   });
   return { ...promoted, routing: routeTask({ roots, taskId: promoted.id, routingRunner }) };
 }

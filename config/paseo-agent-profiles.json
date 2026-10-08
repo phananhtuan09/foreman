@@ -50,7 +50,7 @@
     "provider": "claude",
     "model": "claude-sonnet-5-5",
     "modeId": "bypassPermissions",
-    "thinkingOptionId": "high",
+    "thinkingOptionId": "medium",
     "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use when Claude is explicitly requested or the preferred Codex profile is inactive."
   },
   {
@@ -59,7 +59,7 @@
     "provider": "claude",
     "model": "claude-opus-5-5",
     "modeId": "bypassPermissions",
-    "thinkingOptionId": "high",
+    "thinkingOptionId": "medium",
     "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for architecture, migration, concurrency, or security work."
   }
 ]

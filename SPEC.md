@@ -322,6 +322,7 @@ Decision records live under `data/tasks/<id>/decisions/` and preserve the origin
 Each Decision Package contains the finding, why human authority is required, concrete options, impact, evidence, and either the worker recommendation or an explicit statement that no recommendation is available.
 
 Decision lifecycle is `pending`, `answered`, and `delivered`.
+A task holds at most one undelivered decision for its current generation; a new decision is refused until that one is delivered.
 Foreman does not resume authority-blocked work until the selected runtime accepts delivery to the current assignment generation; that delivery returns the task to `working`.
 
 ### 7.10 Task types and dependencies
@@ -332,6 +333,7 @@ Every task has one immutable type:
 - `scout` investigates, audits, diagnoses, or researches and produces a report without modifying production code.
 
 Promoting a scout result creates a new ship task from its report while the scout is review-ready; do this before accepting the scout because acceptance deletes its report.
+The promoted brief is the user's new wording when given, otherwise the scout's original brief verbatim; the scout report travels verbatim in the new task's Foreman notes.
 A scout may use read-only resource claims and must not receive write or exclusive project leases.
 
 A task may declare dependencies by stable task ID.
