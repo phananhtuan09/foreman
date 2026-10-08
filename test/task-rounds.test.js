@@ -9,10 +9,10 @@ const coordination = require("../src/coordination");
 
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, listMessages,
-  adoptExistingWorker, promoteScout, recoverDeadWorker, continueTask, createDecision, renderUserReport, listTasks, HerdrAdapter,
+  adoptExistingWorker, promoteScout, recoverDeadWorker, continueTask, reassignWorker, createDecision, renderUserReport, listTasks, HerdrAdapter,
 } = core;
 
-function fixture() {
+function fixture({ routing = false } = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-rounds-"));
   const project = path.join(base, "project");
   fs.mkdirSync(project, { recursive: true });
@@ -22,6 +22,10 @@ function fixture() {
   fs.writeFileSync(path.join(project, "README.md"), "fixture\n");
   execFileSync("git", ["-C", project, "add", "README.md"]);
   execFileSync("git", ["-C", project, "commit", "-m", "fixture"], { stdio: "pipe" });
+  if (routing) {
+    fs.mkdirSync(path.join(project, "config"), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, "../config/model-routing.json"), path.join(project, "config", "model-routing.json"));
+  }
   const roots = resolveRoots({ foremanRoot: project, foremanHome: path.join(base, "home") });
   initHome(roots);
   registerProject({ roots, id: "app", root: project });
@@ -31,7 +35,7 @@ function fixture() {
   const state = { spawned: 0, failSend: false };
   const transport = {
     verifyCompatibility: () => ({ compatible: true, protocol: 22, endpointProtocolGeneration: 1 }),
-    capabilities: () => ({ agentKind: true, model: false, reasoningEffort: false }),
+    capabilities: () => ({ agentKind: true, tool: true, command: true, model: true, reasoningEffort: true }),
     spawn(request) {
       state.spawned += 1;
       const endpoint = `worker-${state.spawned}`;
@@ -55,7 +59,7 @@ function fixture() {
     stop(endpoint) { workers.delete(endpoint); return { stopped: true }; },
   };
   return {
-    base, project, roots, workers, sent, interrupts, state, adapter: new HerdrAdapter({ transport }),
+    base, project, roots, routing, workers, sent, interrupts, state, adapter: new HerdrAdapter({ transport }),
     meta(taskId) { return JSON.parse(fs.readFileSync(path.join(roots.foremanHome, "data", "tasks", taskId, "meta.json"), "utf8")); },
     file(taskId, name) { return path.join(roots.foremanHome, "data", "tasks", taskId, name); },
     cleanup() { fs.rmSync(base, { recursive: true, force: true }); },
@@ -63,9 +67,10 @@ function fixture() {
 }
 
 function dispatch(f, options = {}) {
-  const { brief = "build it", type = "ship", ...rest } = options;
-  const task = createTask({ roots: f.roots, projectId: "app", brief, type, ...rest });
-  const assignment = assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
+  const { brief = "build it", type = "ship", resources, owner = "worker", ...rest } = options;
+  const task = createTask({ roots: f.roots, projectId: "app", brief, type, ...(f.routing ? { routingRunner: () => ({ profile: "codex-luna" }) } : {}), ...rest });
+  if (f.routing) core.confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "codex-luna" });
+  const assignment = assignTask({ roots: f.roots, taskId: task.id, owner, adapter: f.adapter, resources });
   return { task, assignment };
 }
 
@@ -373,4 +378,126 @@ test("status lines show the round and the first line of the latest instruction",
   } finally { f.cleanup(); }
 });
 
-module.exports = { fixture, dispatch, report, idle, rounds, proceed };
+function reassign(f, taskId, options = {}) { return reassignWorker({ roots: f.roots, taskId, adapter: f.adapter, ...options }); }
+
+test("reassign gives a review-ready task to a new worker that reads every round and only reports", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { brief: "Investigate the double fee." });
+    report(f, assignment, "done", "root cause: webhook retry\n\nNext steps:\n1. add a key");
+    idle(f, assignment);
+    proceed(f, task.id);
+    idle(f, assignment);
+    report(f, assignment, "done", "added the key");
+    idle(f, assignment);
+    const before = f.meta(task.id);
+    const result = reassign(f, task.id);
+    assert.equal(result.generation, 2);
+    assert.equal(result.status, "working");
+    assert.notEqual(result.endpoint, assignment.endpoint);
+    assert.equal(f.workers.has(assignment.endpoint), false);
+    assert.equal(result.owner, "app-t-" + task.id.slice(2).toLowerCase() + "-r2");
+    assert.equal(result.round, 2);
+    assert.equal(result.recoveryAttempts, before.recoveryAttempts || 0);
+    assert.equal(result.handoff.reason, "human-reassign");
+    assert.deepEqual(result.handoff.roundReports.map((item) => [item.round, item.status]), [[1, "done"], [2, "done"]]);
+    const prompt = f.sent.at(-1).text;
+    assert.equal(f.sent.at(-1).endpoint, result.endpoint);
+    assert.match(prompt, /Investigate the double fee\./);
+    assert.match(prompt, /root cause: webhook retry/);
+    assert.match(prompt, /Do not change anything yet/);
+    assert.doesNotMatch(prompt, /nextRequest/);
+    assert.throws(() => recordReport({ roots: f.roots, paneId: assignment.paneId, status: "done", summary: "from the old pane" }), /not bound to an active Foreman task/);
+    assert.deepEqual(rounds(f, task.id).map((item) => item.round), [2]);
+    assert.deepEqual(result.resourceLease.resources, [{ key: "workspace/app", mode: "exclusive" }]);
+    assert.equal(result.resourceLease.generation, 2);
+  } finally { f.cleanup(); }
+});
+
+test("reassign with a request records a new round and sends it after the handoff", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "blocked", "which store?");
+    idle(f, assignment);
+    const result = reassign(f, task.id, { text: "Use the payment_events table.", original: "dùng bảng riêng đi" });
+    assert.equal(result.roundRecord.round, 2);
+    assert.deepEqual([result.roundRecord.generation, result.roundRecord.status, result.roundRecord.sent, result.roundRecord.original], [2, "delivered", "Use the payment_events table.", "dùng bảng riêng đi"]);
+    assert.equal(f.meta(task.id).round, 2);
+    const prompt = f.sent.at(-1).text;
+    assert.match(prompt, /## Previous work and handoff[\s\S]*Inspect the workspace first, then carry out nextRequest\.[\s\S]*## User request \(round 2\)\nUse the payment_events table\.\n\n## Report/);
+    assert.equal(prompt.match(/Use the payment_events table\./g).length, 1);
+    assert.deepEqual(rounds(f, task.id).map((item) => [item.round, item.status]), [[2, "delivered"]]);
+  } finally { f.cleanup(); }
+});
+
+test("reassign is not limited by the recovery attempt bound", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "done", "first");
+    for (let generation = 2; generation <= 6; generation += 1) {
+      const current = f.meta(task.id);
+      idle(f, { endpoint: current.endpoint });
+      const result = reassign(f, task.id);
+      assert.equal(result.generation, generation);
+      idle(f, { endpoint: result.endpoint });
+      report(f, { paneId: result.paneId }, "done", `report ${generation}`);
+    }
+    assert.equal(f.meta(task.id).recoveryAttempts || 0, 0);
+  } finally { f.cleanup(); }
+});
+
+test("reassign refuses tasks it cannot move safely", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f);
+    report(f, assignment, "blocked", "which db?");
+    createDecision({ roots: f.roots, taskId: task.id, finding: "db", why: "product call", options: ["a", "b"] });
+    assert.throws(() => reassign(f, task.id), /waiting for a human decision/);
+    const other = dispatch(f, { brief: "second", owner: "second", resources: [{ key: "file/other", mode: "write" }] });
+    assert.throws(() => reassign(f, other.task.id, { text: "x" }), /needs both/);
+    assert.throws(() => reassign(f, other.task.id, { text: "x", original: " " }), /non-empty/);
+    f.workers.get(other.assignment.endpoint).status = "dead";
+    assert.throws(() => reassign(f, other.task.id), /unknown|use task recover/);
+    f.workers.get(other.assignment.endpoint).status = "mystery";
+    assert.throws(() => reassign(f, other.task.id), /run status/);
+    const queued = createTask({ roots: f.roots, projectId: "app", brief: "later" });
+    assert.throws(() => reassign(f, queued.id), /only a task with an assigned worker/);
+    assert.equal(f.meta(other.task.id).generation, 1);
+  } finally { f.cleanup(); }
+});
+
+test("reassign can change the worker profile and the mode in the same step", () => {
+  const f = fixture({ routing: true });
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    assert.throws(() => reassign(f, task.id, { profile: "codex-sol" }), /inactive/);
+    assert.throws(() => reassign(f, task.id, { profile: "invented" }), /Unknown worker profile/);
+    assert.equal(f.meta(task.id).generation, 1);
+    const result = reassign(f, task.id, { profile: "claude-opus", type: "ship", text: "Add the key.", original: "sửa đi" });
+    assert.equal(result.dispatchProfile.name, "claude-opus");
+    assert.equal(f.workers.get(result.endpoint).dispatchProfile.model, "claude-opus-5-5");
+    assert.equal(result.type, "ship");
+    assert.deepEqual(result.resourceLease.resources, [{ key: "workspace/app", mode: "exclusive" }]);
+    assert.match(f.sent.at(-1).text, /\| ship \| generation 2/);
+    assert.equal(result.roundRecord.mode, "ship");
+  } finally { f.cleanup(); }
+});
+
+test("a failed reassignment leaves the requested mode undone", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    f.state.failSend = true;
+    assert.throws(() => reassign(f, task.id, { type: "ship", text: "Add the key.", original: "sửa đi" }), /did not confirm brief delivery|delivery/);
+    assert.equal(f.meta(task.id).type, "scout");
+    assert.equal(rounds(f, task.id).length, 0);
+  } finally { f.cleanup(); }
+});
+
+module.exports = { fixture, dispatch, report, idle, rounds, proceed, reassign };

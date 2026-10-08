@@ -106,6 +106,7 @@ const usage = [
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
   "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original]",
+  "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE] [--type ship|scout] [--resources JSON]",
   "  task message --task ID (--text TEXT|--text-file FILE)",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT",
@@ -244,6 +245,14 @@ function main() {
     if (!original) throw new Error("task continue requires --original or --original-file");
     const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter() });
     warnResourceConflicts(result.task);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "reassign") {
+    assertSelectedTaskBackend(arg("--task"));
+    const textFile = arg("--text-file");
+    const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims() });
+    warnResourceConflicts(result);
     output(result);
     return;
   }

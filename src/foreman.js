@@ -660,18 +660,22 @@ function needsProfileConfirmation(meta) {
 }
 
 // Records the human's choice of worker profile; a routed task cannot dispatch before it.
-function confirmTaskProfile({ roots, taskId, profile }) {
+// The active routing profile the human named, for the task's own backend.
+function resolveWorkerProfile({ roots, backend, profile }) {
   if (typeof profile !== "string" || !profile) throw new ValidationError("A worker profile name is required");
-  const metaForBackend = readMeta(roots.foremanHome, taskId);
-  const config = metaForBackend.backend === "paseo"
+  const config = backend === "paseo"
     ? paseoRouting.loadPaseoRoutingConfig(roots.foremanRoot, { required: true }).config
     : loadRoutingConfig(roots.foremanRoot, { required: true });
   if (config.inactiveProfiles.includes(profile)) throw new ValidationError(`Worker profile is inactive: ${profile}`);
   if (!config.profiles[profile]) throw new ValidationError(`Unknown worker profile: ${profile}`);
+  return config.profiles[profile];
+}
+
+function confirmTaskProfile({ roots, taskId, profile }) {
+  const selected = resolveWorkerProfile({ roots, backend: readMeta(roots.foremanHome, taskId).backend, profile });
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     if (!["queued", "pending"].includes(meta.status) || meta.endpoint) throw new ValidationError(`Only an unassigned queued task can have its worker profile confirmed: ${taskId}`);
-    const selected = config.profiles[profile];
     const dispatchProfile = materializeDispatchProfile(meta.backend || "herdr", selected, profile);
     const confirmed = { ...meta, dispatchProfile, profileConfirmedAt: now() };
     atomicJson(metaFile(roots.foremanHome, taskId), confirmed);
@@ -754,9 +758,9 @@ function dependencySatisfied(meta) {
   return ["accepted", "cleaned"].includes(meta.status);
 }
 
-function assertTaskDispatchable(home, taskId, { allowWaitingDecision = false } = {}) {
+function assertTaskDispatchable(home, taskId, { allowWaitingDecision = false, allowReviewReady = false } = {}) {
   const meta = readMeta(home, taskId);
-  if (["accepted", "review-ready", "cleaned"].includes(meta.status)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
+  if (["accepted", "cleaned"].includes(meta.status) || (meta.status === "review-ready" && !allowReviewReady)) throw new ValidationError(`Task is terminal and cannot be dispatched: ${taskId}`);
   if (meta.status === "waiting-decision" && !allowWaitingDecision) throw new ValidationError(`Task is waiting for a human decision: ${taskId}`);
   for (const dependency of meta.dependencies || []) {
     if (!fs.existsSync(metaFile(home, dependency)) || !dependencySatisfied(readMeta(home, dependency))) throw new ValidationError(`Task is blocked by dependency: ${dependency}`);
@@ -790,11 +794,11 @@ function assertIdleEndpointReusable({ roots, adapter, endpoint, workspace, owner
   return { inspection, holders };
 }
 
-function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint, allowResourceConflicts = false }) {
+function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, projectId, resources, preflight, dispatchProfile, fallbackDispatchProfile, handoff, reuseEndpoint, allowResourceConflicts = false, allowReviewReady = false }) {
   return withHomeLock(roots.foremanHome, () => {
     initHome(roots);
     const brief = fs.readFileSync(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), "utf8");
-    const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId) });
+    const prior = assertTaskDispatchable(roots.foremanHome, taskId, { allowWaitingDecision: Boolean(handoff?.handoffId), allowReviewReady });
     const backend = prior.backend || "herdr";
     const adapterBackend = adapter?.backend || "herdr";
     if (backend !== adapterBackend) throw new ValidationError(`Task backend is ${backend}; select bin/foreman-${backend} before changing its worker`);
@@ -1469,14 +1473,35 @@ function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, a
   });
 }
 
-// What the runtime says the worker is doing right now: "running", "idle", or "unknown" for anything that is not clear evidence.
-function endpointActivity(adapter, meta) {
+// The runtime's own word on one worker, classified like a status check; any failure to read it is "unknown".
+function endpointState(adapter, meta) {
   let inspection;
   try { inspection = adapter.inspect(meta.endpoint); } catch (_) { return "unknown"; }
   if (!inspection) return "unknown";
   const state = coordination.classifyRuntime(meta, inspection);
-  if (state === "working" || (state === "idle" && inspection.activeTurn)) return "running";
-  return state === "idle" ? "idle" : "unknown";
+  return state === "idle" && inspection.activeTurn ? "working" : state;
+}
+
+// What the worker is doing right now: "running", "idle", or "unknown" for anything that is not clear evidence.
+function endpointActivity(adapter, meta) {
+  const state = endpointState(adapter, meta);
+  return state === "working" ? "running" : (state === "idle" ? "idle" : "unknown");
+}
+
+/**
+ * The mode and lease a new round runs under.
+ * Without an explicit claim list, only a switch to ship widens the lease; a task that has ever shipped keeps the write lease it holds.
+ */
+function planRoundMode({ meta, project, type, resources }) {
+  const mode = type === undefined ? meta.type : normalizeTaskType(type);
+  const everShip = Boolean(meta.everShip) || meta.type === "ship" || mode === "ship";
+  const previousClaims = meta.resourceLease?.resources || meta.resources || [];
+  let claims;
+  if (resources !== undefined) claims = normalizeResourceClaims(resources);
+  else if (mode !== meta.type && mode === "ship") claims = [{ key: `workspace/${project.id}`, mode: "exclusive" }];
+  else claims = previousClaims;
+  if (mode === "scout" && !everShip && claims.some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
+  return { mode, everShip, claims, previousClaims, leaseChanged: !sameClaims(claims, previousClaims) };
 }
 
 function sameClaims(left, right) {
@@ -1512,15 +1537,7 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     if (activity === "running" && typeof adapter.interrupt !== "function") throw new DeliveryError("Runtime adapter cannot interrupt a worker");
 
     const project = findProject(roots.foremanHome, meta.projectId);
-    const mode = requestedType || meta.type;
-    const everShip = Boolean(meta.everShip) || meta.type === "ship" || mode === "ship";
-    const previousClaims = meta.resourceLease?.resources || meta.resources || [];
-    let claims;
-    if (resources !== undefined) claims = normalizeResourceClaims(resources);
-    else if (mode !== meta.type && mode === "ship") claims = [{ key: `workspace/${project.id}`, mode: "exclusive" }];
-    else claims = previousClaims;
-    if (mode === "scout" && !everShip && claims.some((claim) => claim.mode !== "read")) throw new ValidationError("Scout tasks may only claim read resources");
-    const leaseChanged = !sameClaims(claims, previousClaims);
+    const { mode, everShip, claims, previousClaims, leaseChanged } = planRoundMode({ meta, project, type: requestedType, resources });
     const lease = leaseChanged
       ? claimResourcesUnlocked({ roots, taskId, generation: meta.generation, owner: meta.owner, resources: claims, ignoreLeaseId: meta.resourceLease?.leaseId, allowConflicts: true })
       : meta.resourceLease;
@@ -1657,6 +1674,36 @@ function recoveryOwnerName(meta) {
   return `${prefix}${suffix}`;
 }
 
+/**
+ * Hands the task to a new worker: persists the handoff, then assigns under the next generation.
+ * Recovery counts against the bounded attempt limit; a reassignment the user asked for does not.
+ */
+function replaceWorker({ roots, taskId, adapter, owner, reason, extraHandoff = {}, countAttempt, maxRecoveryAttempts = 3, assignOptions = {} }) {
+  const handoff = { ...buildHandoff({ roots, taskId, reason }), ...extraHandoff };
+  let meta;
+  withHomeLock(roots.foremanHome, () => {
+    meta = readMeta(roots.foremanHome, taskId);
+    const attempts = Number(meta.recoveryAttempts || 0);
+    if (countAttempt && attempts >= Math.max(1, Number(maxRecoveryAttempts) || 3)) throw new ValidationError("Worker recovery attempt limit is exhausted");
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, ...(countAttempt ? { recoveryAttempts: attempts + 1 } : {}), handoffPending: handoff.handoffId });
+    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`);
+  });
+  let assignment;
+  try {
+    // The replaced assignment was human-requested, so leases that overlapped it do not block its replacement.
+    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff, allowResourceConflicts: true, ...assignOptions });
+  } catch (error) {
+    if (countAttempt) {
+      withHomeLock(roots.foremanHome, () => {
+        const current = readMeta(roots.foremanHome, taskId);
+        atomicJson(metaFile(roots.foremanHome, taskId), { ...current, recoveryAttempts: Math.max(Number(current.recoveryAttempts || 0), Number(meta.recoveryAttempts || 0) + 1), handoffPending: handoff.handoffId });
+      });
+    }
+    throw error;
+  }
+  return { ...assignment, handoff };
+}
+
 function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts = 3 }) {
   initHome(roots);
   const initial = readMeta(roots.foremanHome, taskId);
@@ -1664,27 +1711,61 @@ function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts 
   const fleet = coordination.reconcileFleet({ roots, adapter });
   const item = fleet.tasks.find((entry) => entry.taskId === taskId);
   if (!item || !["dead", "missing"].includes(item.state)) throw new ValidationError("Recovery requires confirmed dead or missing runtime evidence");
-  const handoff = buildHandoff({ roots, taskId, reason: item.state });
-  let meta;
+  return replaceWorker({ roots, taskId, adapter, owner, reason: item.state, countAttempt: true, maxRecoveryAttempts });
+}
+
+/**
+ * Moves a task to a new worker because the user asked, not because the old one died.
+ * The successor reads every round and reports the workspace state; with `text` it then carries out that new round.
+ */
+function reassignWorker({ roots, taskId, adapter, profile, owner, text, original, type, resources }) {
+  if ((text === undefined) !== (original === undefined)) throw new ValidationError("A reassignment request needs both the instruction text and the user's original wording");
+  if (text !== undefined && (typeof text !== "string" || !text.trim() || typeof original !== "string" || !original.trim())) throw new ValidationError("A reassignment request needs non-empty instruction text and original wording");
+  if (profile !== undefined && (typeof profile !== "string" || !profile)) throw new ValidationError("A worker profile name is required");
+  initHome(roots);
+  // The latest report must be on disk before it travels in the handoff.
+  if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
+  const initial = readMeta(roots.foremanHome, taskId);
+  assertAdapterBackend(initial, adapter, "reassigning it");
+  if (initial.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it before changing its worker`);
+  if (!["working", "blocked", "review-ready"].includes(initial.status)) throw new ValidationError(`Task ${taskId} is ${initial.status}; only a task with an assigned worker can be reassigned`);
+  if (!initial.endpoint || !initial.owner) throw new DeliveryError("Task has no active worker endpoint");
+  if (typeof adapter.inspect !== "function" || typeof adapter.stop !== "function") throw new DeliveryError("A runtime adapter that can inspect and stop workers is required");
+  const state = endpointState(adapter, initial);
+  if (["dead", "missing"].includes(state)) throw new ValidationError(`Worker of ${taskId} is ${state}; use task recover`);
+  if (!["working", "idle", "waiting-input"].includes(state)) throw new ValidationError(`Worker state of ${taskId} is ${state}; run status before changing its worker`);
+  const dispatchProfile = profile === undefined ? undefined : materializeDispatchProfile(initial.backend || "herdr", resolveWorkerProfile({ roots, backend: initial.backend, profile }), profile);
+  const project = findProject(roots.foremanHome, initial.projectId);
+  const plan = planRoundMode({ meta: initial, project, type, resources });
+  const round = (initial.round || 1) + 1;
+  const extraHandoff = text === undefined
+    ? { instruction: "A new worker replaces the previous one at the user's request. Read every round and report above, inspect the workspace, then report its current state to Foreman. Do not change anything yet." }
+    : { instruction: "A new worker replaces the previous one at the user's request. Inspect the workspace first, then carry out nextRequest.", nextRequest: { round, mode: plan.mode, text } };
   withHomeLock(roots.foremanHome, () => {
-    meta = readMeta(roots.foremanHome, taskId);
-    const attempts = Number(meta.recoveryAttempts || 0);
-    if (attempts >= Math.max(1, Number(maxRecoveryAttempts) || 3)) throw new ValidationError("Worker recovery attempt limit is exhausted");
-    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, recoveryAttempts: attempts + 1, handoffPending: handoff.handoffId });
-    atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`);
+    const meta = readMeta(roots.foremanHome, taskId);
+    if (plan.mode !== meta.type || plan.everShip !== Boolean(meta.everShip)) atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, type: plan.mode, everShip: plan.everShip });
   });
   let assignment;
   try {
-    // The replaced assignment was human-requested, so leases that overlapped it do not block its recovery.
-    assignment = assignTask({ roots, taskId, owner: owner || recoveryOwnerName(meta), adapter, workspacePath: meta.workspace, resources: meta.resources, handoff, allowResourceConflicts: true });
+    assignment = replaceWorker({ roots, taskId, adapter, owner, reason: "human-reassign", extraHandoff, countAttempt: false, assignOptions: { resources: plan.claims, dispatchProfile, allowReviewReady: true } });
   } catch (error) {
     withHomeLock(roots.foremanHome, () => {
       const current = readMeta(roots.foremanHome, taskId);
-      atomicJson(metaFile(roots.foremanHome, taskId), { ...current, recoveryAttempts: Math.max(Number(current.recoveryAttempts || 0), Number(meta.recoveryAttempts || 0) + 1), handoffPending: handoff.handoffId });
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...current, type: initial.type, ...(initial.everShip === undefined ? {} : { everShip: initial.everShip }) });
     });
     throw error;
   }
-  return { ...assignment, handoff };
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    let record = null;
+    if (text !== undefined) {
+      record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: meta.resources || plan.claims, previousResources: plan.previousClaims, supersedes: null, messageId: meta.briefMessageId || null, status: "delivered", deliveredAt: now() };
+      coordination.writeRoundUnlocked({ roots, record });
+    }
+    const next = { ...meta, round: text !== undefined ? round : (meta.round || 1) };
+    atomicJson(metaFile(roots.foremanHome, taskId), next);
+    return { ...assignment, ...next, handoff: assignment.handoff, roundRecord: record };
+  });
 }
 
 function listTasks({ roots, projectId, statuses } = {}) {
@@ -1870,7 +1951,7 @@ module.exports = {
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, continueTask, createDecision, answerDecision, deliverDecision, promoteScout,
-  recoverDeadWorker, buildHandoff,
+  recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,

@@ -155,6 +155,8 @@ function deliveryPrompt(message) {
   }
   if (message.kind === "task-brief") {
     const resources = claimList(payload.resources);
+    // A reassignment may carry the next round; it reads as a request, not as handoff history.
+    const { nextRequest, ...handoffRest } = payload.handoff || {};
     return [
       `Foreman task ${message.taskId} | project ${message.projectId} | ${payload.taskType || "ship"} | generation ${message.generation}`,
       `Workspace: ${payload.cwd}`,
@@ -162,7 +164,8 @@ function deliveryPrompt(message) {
       `Allowed resources: ${resources}`,
       ...section("User request", String(payload.brief || "")),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
-      ...(payload.handoff ? section("Previous work and handoff", plainText(payload.handoff)) : []),
+      ...(payload.handoff ? section("Previous work and handoff", plainText(handoffRest)) : []),
+      ...(nextRequest ? section(`User request (round ${nextRequest.round})`, String(nextRequest.text)) : []),
       ...section("Report", reportInstruction),
     ].join("\n");
   }
