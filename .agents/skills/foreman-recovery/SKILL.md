@@ -14,3 +14,4 @@ Read `data/tasks/<task>/handoff.json` after recovery and tell the user what the 
 The successor must inspect the bound workspace, branch, lease, latest report, evidence, unresolved checks, and accepted decisions before changing files.
 A recovery increments generation and binds a new runtime endpoint; Herdr uses a pane ID and Paseo uses an agent ID plus workspace ID.
 Stop after the persisted recovery attempt bound and report the exhausted recovery to the user.
+Recovery is only for a dead or missing worker. When the user asks for a new worker or model while the old one is healthy, use `task reassign` instead; it is not bounded by the recovery attempt limit.

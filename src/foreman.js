@@ -1527,7 +1527,7 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
     if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
-    if (typeof adapter.inspect !== "function") throw new DeliveryError("A runtime adapter is required to continue a task");
+    if (!adapter || typeof adapter.inspect !== "function") throw new DeliveryError("A runtime adapter is required to continue a task");
     const activity = endpointActivity(adapter, meta);
     if (activity === "unknown") throw new ValidationError(`Worker state of ${taskId} is unknown; run status before continuing`);
     // An instruction still in flight is one that has not been answered by a report.

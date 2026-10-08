@@ -13,7 +13,8 @@ Use the active backend wrapper (`bin/foreman-herdr` or `bin/foreman-paseo`) for 
    No block with a working hook means nothing new.
 2. Read every new worker report from the file path the context gives.
    A `done` report makes the task review-ready: summarize the outcome, evidence, and gaps for the user without accepting it.
-   A `blocked` report needs Foreman: return a technical blocker with `bin/foreman task message`, or create a Decision Package when only the user has the authority.
+   A `blocked` report needs the user: show what the worker needs and its "Next steps", then answer with a new round through `bin/foreman task continue` once the user replies and agrees.
+   Create a Decision Package only when you yourself see a choice that needs the user's authority.
    A `progress` report means the worker stopped before finishing: decide whether to send a follow-up.
 3. Act on each anomaly:
    - `worker.idle-without-report`: in Herdr mode, ask the worker with `bin/foreman-herdr task message` to continue or report with the Herdr report command; in Paseo mode, ask it to return the required JSON report in its next turn.

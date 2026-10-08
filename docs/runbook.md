@@ -45,10 +45,13 @@ Use the selected backend wrapper for each Foreman command:
 bin/foreman-herdr init
 bin/foreman-herdr routing show
 bin/foreman-herdr project register --id app --root /path/to/app
-bin/foreman-herdr task create --project app --brief-file brief.md [--notes-file notes.md]
+bin/foreman-herdr task create --project app --brief-file brief.md --original "the user's own words" [--notes-file notes.md]
+bin/foreman-herdr task brief --task T-000001 --text "Corrected instruction"
 bin/foreman-herdr task confirm --task T-000001 --profile claude-sonnet
 bin/foreman-herdr task dispatch --task T-000001
-bin/foreman-herdr task message --task T-000001 --text "Please add tests."
+bin/foreman-herdr task continue --task T-000001 --text "Add tests for step 1." --original "làm 1, thêm test"
+bin/foreman-herdr task reassign --task T-000001 --profile claude-opus
+bin/foreman-herdr task message --task T-000001 --text "Please report your status."
 bin/foreman-herdr task adopt --worker worker --task T-000001
 bin/foreman-herdr task promote --task T-000001
 bin/foreman-herdr task recover --task T-000001
@@ -83,9 +86,10 @@ Confirmation is allowed only while the task is unassigned; `status` lists unconf
 
 `task dispatch` names the worker `<project>-<task>` in lowercase, such as `app-t-000001`, and uses that name as the Herdr workspace label; pass `--owner` only to override it.
 Without `--resources`, a ship task claims the project workspace exclusively.
-When the claim overlaps a lease another task holds, `task dispatch`, `task adopt`, and `task recover` still assign the task, print a `foreman: warning:` line per overlap, and record the overlaps under `resourceLease.conflicts`.
+When the claim overlaps a lease another task holds, `task dispatch`, `task adopt`, `task recover`, `task reassign`, and a `task continue` round that changes the lease still assign the task, print a `foreman: warning:` line per overlap, and record the overlaps under `resourceLease.conflicts`.
 `task schedule` does not make that choice for the human: it leaves an overlapping task `pending`.
-`--brief` holds the user's request verbatim; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
+`--brief` holds the instruction for the worker, which Foreman may rewrite from the user's words and the task's reports; `--original` holds the user's own words verbatim and is what the router reads.
+`task brief` replaces the brief of a task that has no worker yet; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
 Foreman adds the resources and backend-specific report instructions to every worker prompt, so a brief does not repeat them; the prompt has no separate rules section.
 
 A Herdr worker reports from its own pane:
@@ -111,7 +115,17 @@ The `status` must be `done`, `blocked`, or `progress`, and `summary` must be non
 Foreman collects finished responses with `bin/foreman-paseo task collect`, verifies the Paseo agent, workspace, assignment generation, and turn, then stores the original response verbatim under the task reports directory.
 Paseo workers do not invoke `foreman report` or rely on the Herdr stop hook.
 
-`task message` sends a free-form request to the worker; a `blocked` or `review-ready` task returns to `working`.
+A task is a series of rounds with the same worker.
+`task continue --task ID --text TEXT --original TEXT` answers a report with the next round: it needs the instruction and the user's words, requires a task in `review-ready` or `blocked` (or `working` once the worker has reported), and refuses a task waiting for a decision.
+A worker that is still running is refused unless `--interrupt` is given; an unreadable (`unknown`) state is always refused.
+`--interrupt` sends Ctrl-C only to a worker that is running, and the new round records which round it replaces.
+`--type ship|scout` switches mode at the round boundary: switching to ship claims the project workspace exclusively unless `--resources` is given, and a task that has ever shipped keeps its write lease for later investigating rounds.
+`--with-original` also shows the worker the user's words for reference; by default it receives only the instruction.
+If the worker does not accept the prompt, the round is recorded as failed and the mode and lease are restored.
+Each round is stored under `data/tasks/<id>/rounds/round-NNN.json` and reports from round two on carry a `ROUND:` header.
+`task reassign --task ID [--profile NAME] [--text TEXT --original TEXT] [--type ship|scout]` moves a `working`, `blocked`, or `review-ready` task to a new worker at the user's request; without `--text` the successor reads every round and report, checks the workspace, and reports before doing anything.
+It is not counted against the recovery attempt limit and refuses a task waiting for a decision or a worker whose state cannot be read.
+`task message` sends a free-form question from Foreman to the worker; a `blocked` or `review-ready` task returns to `working`.
 `decision deliver` sends the answered decision to the worker and returns the task to `working`.
 
 `task accept` is the final task action.

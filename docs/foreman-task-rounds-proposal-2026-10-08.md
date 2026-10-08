@@ -4,6 +4,7 @@ Ngày: 2026-10-08 · Dựa trên `phananhtuan09/foreman` tại `da91e00` · Thay
 Cập nhật cùng ngày: Foreman **viết lại** yêu cầu trước khi gửi worker, thay cho quy tắc gửi nguyên văn. Lời gốc vẫn được lưu.
 Cập nhật lần 2 (sau review): chốt flow `blocked`, hành vi `reassign`, lease khi đổi chế độ; đổi cách lưu vòng sang file JSON riêng; ghi rõ các chi tiết implement. Xem mục "Quyết định đã chốt".
 Cập nhật lần 3: bản viết lại phải được bạn **xác nhận trước khi gửi**, thay cho "gửi ngay rồi hiện".
+Trạng thái: đã implement trên nhánh `claude/task-rounds` (`task continue`, `task reassign`, `task brief`, `original.md`, `rounds/`). Chỗ khác với bản đề xuất: lệnh trả về `roundRecord` thay vì `round` trong `task reassign`, và lời nhắc "thay thế vòng N" do template prompt thêm, không do bản viết lại.
 
 ## Ý chính
 
