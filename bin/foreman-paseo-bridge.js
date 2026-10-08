@@ -39,8 +39,8 @@ function daemonUrl(env = process.env) {
   if (!status.home || comparableHome(status.home) !== comparableHome(selectedPaseoHome(env))) {
     throw new Error(`Paseo daemon home mismatch: expected ${selectedPaseoHome(env)}, found ${status.home || "unknown"}`);
   }
-  if (typeof status.daemonVersion !== "string" || !/^0\.10\./.test(status.daemonVersion)) {
-    throw new Error(`Paseo SDK adapter requires daemon 0.10.x; found ${status.daemonVersion || "unknown"}`);
+  if (typeof status.daemonVersion !== "string" || !/^0\.1[01]\./.test(status.daemonVersion)) {
+    throw new Error(`Paseo SDK adapter requires daemon 0.10.x or 0.11.x; found ${status.daemonVersion || "unknown"}`);
   }
   const listen = String(status.listen);
   if (/^wss?:\/\//.test(listen)) return listen.endsWith("/ws") ? listen : `${listen.replace(/\/$/, "")}/ws`;
