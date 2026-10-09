@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createPaseoClient } = require("@getpaseo/client");
@@ -9,6 +10,17 @@ const { createPaseoClient } = require("@getpaseo/client");
 function readInput() {
   try { return JSON.parse(fs.readFileSync(0, "utf8") || "{}"); }
   catch (error) { throw new Error(`Invalid bridge request JSON: ${error.message}`); }
+}
+
+// Foreman passes stored image files, not bytes; each is checked against its digest before it reaches the agent.
+function inlineImages(images) {
+  return (images || []).map((image) => {
+    let buffer;
+    try { buffer = fs.readFileSync(image.file); }
+    catch (error) { throw new Error(`Image cannot be read for Paseo delivery: ${image.id || image.file}: ${error.code || error.message}`); }
+    if (crypto.createHash("sha256").update(buffer).digest("hex") !== image.sha256) throw new Error(`Image does not match its digest: ${image.id || image.file}`);
+    return { data: buffer.toString("base64"), mimeType: image.mimeType };
+  });
 }
 
 function paseoArgs(env = process.env) {
@@ -301,7 +313,9 @@ async function main(action, input) {
         };
       }
       if (action === "send") {
-        await agent.send(input.prompt, input.messageId ? { messageId: input.messageId } : undefined);
+        const images = inlineImages(input.images);
+        const options = { ...(input.messageId ? { messageId: input.messageId } : {}), ...(images.length ? { images } : {}) };
+        await agent.send(input.prompt, Object.keys(options).length ? options : undefined);
         return { delivered: true, accepted: true, endpoint: input.endpoint };
       }
       if (action === "archive") {
@@ -329,6 +343,7 @@ if (require.main === module) {
 
 module.exports = {
   actualFeatureValues,
+  inlineImages,
   profileDifferences,
   profileLaunchSnapshot,
   resolveDaemonProfile,

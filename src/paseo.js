@@ -54,7 +54,8 @@ class PaseoAdapter {
 
   send(endpoint, message, options = {}) {
     const prompt = String(message);
-    return this._call("send", { endpoint, prompt, messageId: options.messageId });
+    const images = (options.images || []).map(({ id, file, sha256, mimeType }) => ({ id, file, sha256, mimeType }));
+    return this._call("send", { endpoint, prompt, messageId: options.messageId, ...(images.length ? { images } : {}) });
   }
 
   interrupt(endpoint) { return this._call("interrupt", { endpoint }); }

@@ -78,6 +78,11 @@ function notesText() {
   const notesFile = arg("--notes-file");
   return notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : arg("--notes");
 }
+// Each --image is a staged image ID from `image stage` or an image file path; none means undefined.
+function imageSources(home) {
+  const values = args("--image");
+  return values.length ? core.resolveImageArgs({ roots: home, values }) : undefined;
+}
 function resourceClaims() {
   const raw = arg("--resources");
   if (raw === undefined) return undefined;
@@ -94,7 +99,8 @@ const usage = [
   "  routing route --task ID",
   "  profiles sync [--dry-run]   (Paseo: sync repo-owned profiles into the selected Paseo home)",
   "  project register --id ID --root PATH [--name NAME]",
-  "  task create --project ID (--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID]",
+  "  image stage [--transcript FILE]   (copy the images of the user's latest message into the Foreman inbox; prints their IDs)",
+  "  task create --project ID (--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID] [--image ID|FILE]...",
   "  task list [--project ID] [--json]",
   "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
@@ -105,12 +111,12 @@ const usage = [
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
-  "  task brief --task ID (--text TEXT|--text-file FILE)   (replace the brief of a task that has no worker yet)",
-  "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original]",
-  "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE] [--type ship|scout] [--resources JSON]",
-  "  task message --task ID (--text TEXT|--text-file FILE)",
+  "  task brief --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...   (replace the brief of a task that has no worker yet; --image replaces round one's images)",
+  "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...",
+  "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE [--image ID|FILE]...] [--type ship|scout] [--resources JSON]",
+  "  task message --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
-  "  decision answer --task ID --decision ID --response TEXT",
+  "  decision answer --task ID --decision ID --response TEXT [--image ID|FILE]...",
   "  decision deliver --task ID --decision ID",
   "  status [--project ID] [--json]",
   "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
@@ -149,7 +155,7 @@ function main() {
       const payload = hookPayload();
       const backend = sessionBackend();
       const adapter = backend ? runtimeAdapter(backend) : null;
-      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd });
+      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
     } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
@@ -170,6 +176,11 @@ function main() {
     output(paseoRouting.syncPaseoProfiles({ foremanRoot: home.foremanRoot, dryRun: flag("--dry-run") }));
     return;
   }
+  if (command === "image" && action === "stage") {
+    const transcript = arg("--transcript");
+    output(core.stageImages({ roots: home, transcriptPath: transcript ? path.resolve(transcript) : undefined }));
+    return;
+  }
   if (command === "routing" && action === "init") { output(core.initRoutingConfig({ roots: home, backend: selectedBackend() })); return; }
   if (command === "routing" && action === "show") { output(core.initRoutingConfig({ roots: home, backend: selectedBackend() }).config); return; }
   if (command === "routing" && action === "route") {
@@ -183,7 +194,7 @@ function main() {
   }
   if (command === "task" && action === "create") {
     core.initRoutingConfig({ roots: home, backend: selectedBackend() });
-    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), original: originalText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend() }));
+    output(core.createTask({ roots: home, projectId: arg("--project"), brief: briefText(), original: originalText(), notes: notesText(), type: arg("--type", "ship"), dependencies: args("--dependency"), backend: selectedBackend(), images: imageSources(home) }));
     return;
   }
   if (command === "task" && action === "list") {
@@ -242,7 +253,7 @@ function main() {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task brief requires --text or --text-file");
-    output(core.replaceTaskBrief({ roots: home, taskId: arg("--task"), text }));
+    output(core.replaceTaskBrief({ roots: home, taskId: arg("--task"), text, images: imageSources(home) }));
     return;
   }
   if (command === "task" && action === "continue") {
@@ -252,7 +263,7 @@ function main() {
     if (!text) throw new Error("task continue requires --text or --text-file");
     const original = originalText();
     if (!original) throw new Error("task continue requires --original or --original-file");
-    const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter() });
+    const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home) });
     warnResourceConflicts(result.task);
     output(result);
     return;
@@ -260,7 +271,7 @@ function main() {
   if (command === "task" && action === "reassign") {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
-    const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims() });
+    const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims(), images: imageSources(home) });
     warnResourceConflicts(result);
     output(result);
     return;
@@ -270,7 +281,7 @@ function main() {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task message requires --text or --text-file");
-    output(core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter() }));
+    output(core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter(), images: imageSources(home) }));
     return;
   }
   if (command === "decision" && action === "create") {
@@ -280,7 +291,7 @@ function main() {
   }
   if (command === "decision" && action === "answer") {
     assertSelectedTaskBackend(arg("--task"));
-    output(core.answerDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), response: arg("--response") }));
+    output(core.answerDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), response: arg("--response"), images: imageSources(home) }));
     return;
   }
   if (command === "decision" && action === "deliver") {
