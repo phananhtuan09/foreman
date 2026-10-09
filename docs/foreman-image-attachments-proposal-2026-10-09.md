@@ -1,7 +1,8 @@
 # Proposal: Gửi ảnh dán trong phiên Foreman tới worker
 
 Ngày: 2026-10-09 · Dựa trên `phananhtuan09/foreman` tại `b1d8fbb` · Đối ứng issue #2.
-Trạng thái: plan, chưa implement. Các mục "Cần chốt" ở cuối cần bạn quyết trước khi bắt đầu.
+Trạng thái: đã implement trên nhánh `claude/image-attachments`, với các option đã chốt: ảnh trong `.foreman/attachments/<taskId>/` cộng `info/exclude`; Paseo nhận cả file lẫn ảnh inline; giới hạn 5 MB/ảnh và 10 ảnh/request.
+Khác với plan: lớp tự động là lệnh `image stage` (chạy ngay trong lượt user dán ảnh, trả về ID `A-…`) và `--image <ID|PATH>`, thay cho `--image pasted`. Lý do: skill bắt xác nhận trước khi gửi, nên lúc chạy lệnh thì tin nhắn mới nhất của user thường là "ok", không còn ảnh.
 
 ## Ý chính
 

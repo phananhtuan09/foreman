@@ -101,6 +101,7 @@ Foreman does not retain accepted task history.
 The user's own words and human decisions are persisted verbatim before anything is sent to a worker.
 Foreman may rewrite a request into a clear instruction for the worker, using only the user's words, the task's earlier rounds, and worker reports; it adds no technical decision, drops no constraint, and changes the scope in neither direction.
 Both versions are persisted, the user confirms the rewritten text before it is sent, text the user put in quotation marks is sent verbatim, and the answer to a Decision Package is never rewritten.
+Images the user sends with a request are part of the user's words: they are persisted with the task before delivery, reach the worker as images rather than a description, and stay tied to the round, message, or decision they were sent with.
 Worker reports are persisted verbatim before Foreman summarizes them.
 Summaries never replace the original report.
 
@@ -222,7 +223,9 @@ Task records live under `data/tasks/<id>/` until user acceptance or explicit dis
 data/tasks/T-000123/
 ├── brief.md          the round-one instruction sent to the worker
 ├── original.md       the user's own words for round one, when given
-├── rounds/           append-only records of later rounds (instruction sent, the user's words, mode, resources, status)
+├── rounds/           append-only records of later rounds (instruction sent, the user's words, mode, resources, image references, status)
+├── attachments/      images the user sent, named by content digest
+├── attachments.json  versioned image manifest and round one's image IDs
 ├── notes.md          optional Foreman context for the worker, kept apart from the user's words
 ├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
 ├── decisions/        versioned Decision Packages and verbatim human responses
@@ -238,10 +241,12 @@ data/
 ├── projects.json     project registry
 ├── sequence.json     next task ID
 ├── tasks/            task records
-└── messages/         durable Foreman-to-worker outbox and message lifecycle
+├── messages/         durable Foreman-to-worker outbox and message lifecycle
+├── inbox/            images staged from the Foreman session, kept seven days
+└── sessions/         the Foreman session transcript path recorded by the prompt hook
 ```
 
-Acceptance removes the task directory and its task messages.
+Acceptance removes the task directory, its task messages, and the task's image copies in the workspace.
 The project workspace stays on disk.
 `foreman task discard --task ID` removes a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, or an assigned task whose worker a runtime status check confirms `dead` or `missing`; it refuses `unknown` or live workers and any task another task depends on.
 Discard runs under the home lock, refuses if the assignment generation or endpoint changed since the status check, stops a `dead` worker's endpoint, releases the resource lease, and removes the task directory and its task-scoped messages, decisions, and reports without archiving them.
@@ -287,6 +292,8 @@ The same outbox is used for task briefs, round updates, steering, follow-up requ
 The worker receives a concise text prompt containing the task brief and only the operational details needed to work within its lease.
 Every worker prompt is rendered by one fixed template.
 A task brief has a header line with task, project, type, and generation, then workspace, branch, and allowed resources, followed by the sections `User request`, optional `Foreman notes`, optional `Previous work and handoff`, and `Report`.
+When a message carries images, an `Images` section with their workspace paths follows the request it belongs to; a message without images has no such section.
+The payload records image references and workspace paths, never image bytes, so the payload digest covers the images.
 The prompt carries no rules section; Git and resource limits are not restated to the worker.
 A follow-up message or human decision has a header line naming its kind, task, and project, then the verbatim text and the same `Report` section.
 A round update (`task-update`) has a header line with task, project, mode, round, and generation, then the allowed resources (marking a change), a note when it replaces an interrupted round, the instruction for that round, optionally the user's original words for reference, and the `Report` section.
@@ -432,6 +439,7 @@ The dispatched brief includes:
 - the user's request as the instruction for the current round, rewritten only as section 5.6 allows;
 - Foreman notes, kept separate from the user's words, may add supporting context such as related report paths but must not reinterpret the request or add requirements, limits, or rules;
 - accepted follow-up decisions verbatim;
+- the images sent with the current request, and the image paths of earlier rounds and decisions for a replacement worker;
 - the earlier rounds and the last report of each recent round, for a replacement worker;
 - canonical workspace, current branch, and project boundary;
 - resource lease IDs and the declared resource claims;
@@ -557,6 +565,7 @@ Recovery attempts are bounded; exhaustion is reported instead of relaunching for
 
 Acceptance does not commit, merge, reset, or remove project files.
 The client controls any Git operation and can inspect the retained workspace after the task record is gone.
+The only files Foreman writes in a workspace are image copies under `.foreman/attachments/<taskId>/`, which Foreman keeps out of Git through the repository's local `info/exclude` and removes at acceptance or discard.
 
 ### 11.9 Scout completion and promotion
 
@@ -753,6 +762,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - The handoff contains the user's original wording, every delivered round, the last report of each recent round, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions; the brief itself reaches the successor as its request.
 - Decision Packages, verbatim human responses, decision delivery that resumes the task, `task message`, and scout-to-ship promotion are implemented.
 - Task rounds are implemented: `task continue`, `task reassign`, and `task brief`, with the instruction and the user's words stored per round, mode and lease changes at round boundaries, and per-round handoff.
+- Image attachments are implemented for both backends: `image stage` reads pasted images from the Claude Code or Codex session transcript, `--image` attaches staged IDs or files to task creation, rounds, messages, and decision answers, Herdr and Paseo workers read copies in the workspace, and Paseo also receives the current images inline.
 - Adoption is an explicit request.
 - It verifies an active runtime worker, project and cwd identity, and that the worker is not already assigned, then binds a new generation and the backend-specific endpoint; Paseo adoption sends the persisted brief before reports can be collected.
 - A scout receives read-only resource claims; its brief has no separate instruction not to modify production files.
@@ -802,6 +812,8 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Herdr profiles with `isActive: false` are excluded from routing; `isActive` defaults to `true`, the `default` profile must be active, and existing task routing records keep their selected profile.
 - Paseo maps every shared routing profile to a repo-owned provider profile; `isActive` only controls Foreman's selection; profile synchronization is explicit and is never triggered by initialization or task creation.
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
+- `image stage` reads Claude Code session JSONL and Codex rollout files, which are not public APIs; the parser is covered by fixtures, not by a live capture, and `--image FILE` remains the fallback when a client stores pasted images elsewhere.
+- A worker whose model cannot read images still receives the image paths; Foreman does not route by vision support.
 - Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 
 ### OpenCode V2 tool dispatch within Herdr
