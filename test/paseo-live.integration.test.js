@@ -42,7 +42,7 @@ test("isolated Paseo daemon runs a scout through report collection, status, and 
   for (const file of ["model-routing.json", "paseo-agent-profiles.json"]) fs.copyFileSync(path.join(sourceRoot, "config", file), path.join(foremanRoot, "config", file));
   const routingFile = path.join(foremanRoot, "config", "model-routing.json");
   const routing = JSON.parse(fs.readFileSync(routingFile, "utf8"));
-  routing.default = "codex-luna";
+  routing.default = "claude-sonnet";
   for (const profile of Object.values(routing.profiles)) profile.isActive = true;
   fs.writeFileSync(routingFile, `${JSON.stringify(routing, null, 2)}\n`);
 
@@ -75,9 +75,9 @@ test("isolated Paseo daemon runs a scout through report collection, status, and 
       type: "scout",
       backend: "paseo",
       brief: "Read only README.md in this temporary project, do not edit any file, and report a short observation using Foreman's required JSON report format.",
-      routingRunner: () => ({ profile: "codex-luna", reason: "Use the configured test profile." }),
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
     });
-    core.confirmTaskProfile({ roots, taskId: task.id, profile: "codex-luna" });
+    core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
     assigned = core.assignTask({ roots, taskId: task.id, adapter });
     assert.equal(assigned.backend, "paseo");
     assert.ok(assigned.workspaceId);
