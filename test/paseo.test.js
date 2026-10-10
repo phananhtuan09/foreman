@@ -31,7 +31,7 @@ const {
 const { syncPaseoProfiles, planPaseoProfileSync, loadPaseoRoutingConfig } = require("../src/paseo-routing");
 
 function fixture() {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-"));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-")));
   const projectRoot = path.join(base, "project");
   fs.mkdirSync(projectRoot, { recursive: true });
   execFileSync("git", ["init", "-b", "main", projectRoot], { stdio: "ignore" });

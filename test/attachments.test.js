@@ -30,7 +30,7 @@ function gitRepo(dir) {
 }
 
 function fixture({ git = true } = {}) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-images-"));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-images-")));
   const project = path.join(base, "project");
   if (git) gitRepo(project);
   else fs.mkdirSync(project, { recursive: true });
