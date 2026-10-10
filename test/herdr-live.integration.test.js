@@ -5,7 +5,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  resolveRoots, initHome, registerProject, createTask, assignTask, acceptTask,
+  resolveRoots, initHome, registerProject, createTask, confirmTaskProfile, assignTask, acceptTask,
 } = require("../src/foreman");
 const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 
@@ -29,13 +29,18 @@ test("live Herdr runtime dispatches a real worker and acceptance removes its tas
     execFileSync("git", ["-C", project, "add", "README.md"]);
     execFileSync("git", ["-C", project, "commit", "-m", "fixture"], { stdio: "pipe" });
 
-    const roots = resolveRoots({ foremanRoot: project, foremanHome: home });
+    // The fixture project is not a Foreman checkout, so it borrows the real routing config for profile confirmation.
+    const foremanRoot = path.join(base, "foreman");
+    fs.mkdirSync(path.join(foremanRoot, "config"), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, "..", "config", "model-routing.json"), path.join(foremanRoot, "config", "model-routing.json"));
+    const roots = resolveRoots({ foremanRoot, foremanHome: home });
     initHome(roots);
     registerProject({ roots, id: "live", root: project });
     const owner = `liveworker${process.pid}`.slice(0, 30).replace(/[^a-z0-9_-]/g, "");
     adapter = new HerdrAdapter({ transport: new HerdrCliTransport({ command: "herdr", agentKind: process.env.FOREMAN_AGENT_KIND || "codex" }) });
     assert.equal(adapter.verifyCompatibility(), true);
     const task = createTask({ roots, projectId: "live", brief: `Create file/live-artifact.txt in the current workspace with exactly one line: foreman-live-ok. Then run this command exactly once: ${reportCommand(roots, "done")} "artifact created". Do not commit, switch branches, reset, clean, merge, or edit any other file.` });
+    confirmTaskProfile({ roots, taskId: task.id, profile: "codex-luna" });
     assignment = assignTask({ roots, taskId: task.id, owner, adapter, resources: [{ key: "file/live-artifact.txt", mode: "write" }] });
     assert.equal(assignment.owner, owner);
     assert.equal(assignment.workspace, fs.realpathSync(project));
@@ -78,6 +83,7 @@ test("live scout reports from the current repository workspace without editing i
     initHome(roots);
     registerProject({ roots, id: "foreman", root: project });
     const task = createTask({ roots, projectId: "foreman", type: "scout", brief: `Do not modify any repository file. Run this command exactly once, then stop: ${reportCommand(roots, "done")} "scout connected".` });
+    confirmTaskProfile({ roots, taskId: task.id, profile: "codex-luna" });
     assignment = assignTask({ roots, taskId: task.id, owner, adapter, resources: [{ key: "workspace/foreman", mode: "read" }] });
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {

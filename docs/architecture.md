@@ -48,11 +48,16 @@ The private outbox retains message identity and payload; delivered prompts are n
 After submission, Foreman inspects the endpoint without interrupting the worker and records the result as runtime evidence.
 An uncertain task-brief submission keeps the endpoint for inspection.
 
+Images the user pastes travel as part of the user's words.
+`src/attachments.js` validates them from their bytes, stores them under `data/tasks/<taskId>/attachments/` with a versioned `attachments.json`, and gives task records and messages only references (ID, digest, type, size).
+`image stage` reads them from the Foreman session transcript recorded by the prompt hook into `data/inbox/`.
+Before a message that carries images is created, Foreman copies them into `<workspace>/.foreman/attachments/<taskId>/`, excluded through the repository's local `info/exclude`, so workers on both backends read them inside their lease without touching `data/`; the message payload records the workspace paths.
+The Paseo bridge additionally sends the images of the current message inline after checking each digest.
 A task runs as rounds with one worker: `task continue` appends a round record, may switch the mode and claim a new lease in place, and sends a `task-update` message to the same endpoint and generation; a failed send restores the mode and lease.
 Task ownership changes create a new generation.
 A confirmed dead or missing worker is replaced through `task recover`, and a healthy one at the user's request through `task reassign`, both with a durable handoff containing the original wording, every delivered round, the last report of each recent round, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
 Only recovery counts against the attempt limit.
 Acceptance is the terminal user action.
-It stops and verifies the worker endpoint, releases the resource lease, and deletes task-specific Foreman records and coordination state.
+It stops and verifies the worker endpoint, releases the resource lease, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
 An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, or assigned to a worker a status check confirms dead or missing.

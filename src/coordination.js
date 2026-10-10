@@ -79,6 +79,7 @@ function validateRoundRecord(record, taskId, round) {
   if (!Number.isInteger(record.round) || record.round < 2 || (round !== undefined && record.round !== round)) throw new SchemaValidationError(`Round identity is invalid: ${taskId} round ${round ?? record.round}`);
   if (!["pending", "delivered", "failed"].includes(record.status)) throw new SchemaValidationError(`Round lifecycle is invalid: ${taskId} round ${record.round}`);
   if (typeof record.sent !== "string" || !record.sent || typeof record.original !== "string") throw new SchemaValidationError(`Round text is invalid: ${taskId} round ${record.round}`);
+  if (record.images !== undefined && (!Array.isArray(record.images) || record.images.some((image) => !image?.id || !image.sha256 || !image.mimeType))) throw new SchemaValidationError(`Round images are invalid: ${taskId} round ${record.round}`);
   return record;
 }
 
@@ -140,6 +141,8 @@ function deliveryPrompt(message) {
     ? "At the end of this turn, return exactly one JSON object with fields status and summary. status must be done, blocked, or progress. The summary must describe outcome, changed files, verification evidence, unresolved checks, and risks. For done and blocked, end the summary with \"Next steps\": one numbered list of 1-3 things the user could ask for next (for blocked, the options to choose from), marking the one you recommend, and use no other numbered list. Do not call foreman report; Paseo returns this final response to Foreman."
     : ["When you finish, get blocked, or stop, report to Foreman from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
   const claimList = (claims) => (claims || []).map((claim) => `${claim.key} (${claim.mode})`).join(", ");
+  // Images are listed only when the message carries some, so a message without images reads as it always did.
+  const imageSection = (title, images) => (images?.length ? section(title, ["Open each image before you act on this; the user sent them with it.", ...images.map((image) => `- ${image.path}`)].join("\n")) : []);
   const followUpReport = payload.backend === "paseo" ? reportInstruction : ["When you have handled this, report to Foreman again from this pane with exactly one command:", "", ...REPORT_COMMAND].join("\n");
   if (message.kind === "task-update") {
     // A scout round that still holds a write lease reads only; the lease stays because earlier rounds changed the workspace.
@@ -150,6 +153,7 @@ function deliveryPrompt(message) {
       `Allowed resources: ${claimList(payload.resources)}${payload.previousResources ? ` (changed from ${claimList(payload.previousResources)})` : ""}`,
       ...(payload.supersedes ? ["", `This replaces round ${payload.supersedes}, which was interrupted before you reported. Inspect the workspace for what it already changed before continuing.`] : []),
       ...section(`User request (round ${payload.round})`, String(payload.request || "")),
+      ...imageSection(`Images for this request (round ${payload.round})`, payload.images),
       ...(payload.original ? section("User's original words (reference)", String(payload.original)) : []),
       ...section("Report", followUpReport),
     ].join("\n");
@@ -164,9 +168,11 @@ function deliveryPrompt(message) {
       `Branch: ${payload.branch || "current checkout"}`,
       `Allowed resources: ${resources}`,
       ...section("User request", String(payload.brief || "")),
+      ...imageSection("Images for this request", payload.images),
       ...(payload.notes ? section("Foreman notes", String(payload.notes)) : []),
       ...(payload.handoff ? section("Previous work and handoff", plainText(handoffRest)) : []),
       ...(nextRequest ? section(`User request (round ${nextRequest.round})`, String(nextRequest.text)) : []),
+      ...(nextRequest ? imageSection(`Images for this request (round ${nextRequest.round})`, nextRequest.images) : []),
       ...section("Report", reportInstruction),
     ].join("\n");
   }
@@ -174,6 +180,7 @@ function deliveryPrompt(message) {
     `${MESSAGE_TITLES[message.kind] || message.kind} for task ${message.taskId} | project ${message.projectId}`,
     "",
     typeof payload === "string" ? payload : (payload.response || payload.request || plainText(payload)),
+    ...imageSection("Images", typeof payload === "string" ? null : payload.images),
     ...section("Report", followUpReport),
   ].join("\n");
 }
@@ -416,7 +423,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
     if (decision.taskId !== taskId || decision.projectId !== meta.projectId || typeof decision.generation !== "number" || decision.generation > meta.generation) throw new SchemaValidationError(`Decision identity is stale: ${name}`);
     return decision;
   }) : [];
-  const rounds = listRounds({ roots, taskId, statuses: ["delivered"] }).map((round) => ({ round: round.round, mode: round.mode, sent: round.sent, original: round.original, supersedes: round.supersedes ?? null }));
+  const rounds = listRounds({ roots, taskId, statuses: ["delivered"] }).map((round) => ({ round: round.round, mode: round.mode, sent: round.sent, original: round.original, supersedes: round.supersedes ?? null, ...(round.images?.length ? { images: round.images } : {}) }));
   const roundReports = collectRoundReports(dir);
   const evidenceFile = path.join(dir, "evidence.json");
   const unresolvedFile = path.join(dir, "unresolved-checks.json");
@@ -450,7 +457,7 @@ function buildHandoffPackage({ roots, taskId, reason = "recovery" }) {
 module.exports = {
   CoordinationError, MessageValidationError, SchemaValidationError, SUPPORTED_SCHEMA_VERSION,
   assertSchemaVersion, validateTaskMetaRecord, validateMessageRecord,
-  digest, initCoordination, coordinationDirs, taskDir, metaFile, roundsDir, roundFile, listRounds, writeRoundUnlocked, validateRoundRecord, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
+  digest, atomicWrite, atomicJson, readJson, initCoordination, coordinationDirs, taskDir, metaFile, roundsDir, roundFile, listRounds, writeRoundUnlocked, validateRoundRecord, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
 };

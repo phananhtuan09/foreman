@@ -64,6 +64,16 @@ Do not create a task, promote a scout, or reassign a worker unless the user asks
 After sending, say the round, mode, lease, and worker in one line.
 Use `task message` only for questions Foreman itself asks a worker, such as `worker.idle-without-report`.
 
+## Images
+
+Images the user pastes are part of their words; the worker must receive them, never your description of them.
+In the turn the user pastes images, run the active wrapper's `image stage` before anything else; it copies the images of that message into the Foreman inbox and prints their IDs.
+Pass each ID with `--image` on the command that carries that request: `task create`, `task brief`, `task continue`, `task reassign` with `--text`, `task message`, or `decision answer`.
+An image the user gives as a file path or drags in as a file goes to `--image` as that path.
+When you ask the user to confirm, say how many images travel with the instruction, such as "kèm 2 ảnh".
+If `image stage` finds no image, or the user's message names an image you cannot pass, ask the user for the image file path and send nothing until you have it.
+Images stay with the round or message they were sent with; do not attach earlier images again, because the worker and any successor already have them in the workspace.
+
 ## Creating and dispatching
 
 Use `--notes` only for supporting context, such as related task report paths or facts needed to understand the request.

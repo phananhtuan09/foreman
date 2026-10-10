@@ -45,7 +45,8 @@ Use the selected backend wrapper for each Foreman command:
 bin/foreman-herdr init
 bin/foreman-herdr routing show
 bin/foreman-herdr project register --id app --root /path/to/app
-bin/foreman-herdr task create --project app --brief-file brief.md --original "the user's own words" [--notes-file notes.md]
+bin/foreman-herdr image stage
+bin/foreman-herdr task create --project app --brief-file brief.md --original "the user's own words" [--notes-file notes.md] [--image A-3f9c2e1a7b04]
 bin/foreman-herdr task brief --task T-000001 --text "Corrected instruction"
 bin/foreman-herdr task confirm --task T-000001 --profile claude-sonnet
 bin/foreman-herdr task dispatch --task T-000001
@@ -126,6 +127,20 @@ Each round is stored under `data/tasks/<id>/rounds/round-NNN.json` and reports f
 `task reassign --task ID [--profile NAME] [--text TEXT --original TEXT] [--type ship|scout]` moves a `working`, `blocked`, or `review-ready` task to a new worker at the user's request; without `--text` the successor reads every round and report, checks the workspace, and reports before doing anything.
 It is not counted against the recovery attempt limit and refuses a task waiting for a decision or a worker whose state cannot be read.
 `task message` sends a free-form question from Foreman to the worker; a `blocked` or `review-ready` task returns to `working`.
+
+### Images
+
+`image stage [--transcript FILE]` reads the user's latest message from the Foreman session transcript and copies its images into `data/inbox/`, printing one ID per image (`A-` and 12 hex digits).
+The session prompt hook records the transcript path in `data/sessions/current.json` on every non-`DEV` prompt, so `image stage` needs no argument inside a Claude Code or Codex Foreman session; `--transcript` reads another file.
+Run it in the turn the user pastes the images, because a later "ok" becomes the latest message.
+`--image ID|FILE`, repeatable, attaches images to `task create`, `task brief` (replacing round one's images), `task continue`, `task reassign` with `--text`, `task message`, and `decision answer`.
+Only PNG, JPEG, GIF, and WebP are accepted, checked from the bytes, at most 5 MB each and 10 per request; the same image given twice counts once.
+Foreman stores the images under `data/tasks/<id>/attachments/` with `attachments.json` before anything is sent, and the round, message, or decision records only their IDs and digests.
+Before sending, Foreman copies them to `<workspace>/.foreman/attachments/<taskId>/` and adds `/.foreman/` to the repository's local `info/exclude`, so they are never committed; the prompt gains an `Images` section with their paths.
+Paseo workers also receive the images of the current message inline through the SDK; Herdr workers open the files.
+A replacement worker's handoff lists the image paths of every earlier round and decision.
+Acceptance and discard remove the task's workspace copies and report `imageCleanupError` if that fails.
+To check a delivery, open the paths listed in the message under `data/messages/` and confirm `git status` in the workspace shows nothing under `.foreman/`.
 `decision deliver` sends the answered decision to the worker and returns the task to `working`.
 
 `task accept` is the final task action.

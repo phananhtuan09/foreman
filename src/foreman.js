@@ -6,6 +6,7 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const { HerdrAdapter } = require("./herdr");
 const coordination = require("./coordination");
 const paseoRouting = require("./paseo-routing");
+const attachments = require("./attachments");
 
 class ForemanError extends Error {}
 class HomeLockError extends ForemanError {}
@@ -14,6 +15,26 @@ class StaleGenerationError extends ForemanError {}
 class CleanupRefusedError extends ForemanError {}
 class DeliveryError extends ForemanError {}
 class ResourceBusyError extends ForemanError {}
+
+// Image problems found before anything is stored are input errors.
+function prepareImages(sources) {
+  try { return attachments.prepareImages(sources); }
+  catch (error) { throw error instanceof attachments.AttachmentError ? new ValidationError(error.message) : error; }
+}
+
+// Copies images into the worker's workspace; a failure stops the message before it is created.
+function materializeImagesUnlocked({ roots, meta, refs }) {
+  if (!refs?.length) return [];
+  try {
+    const vcs = projectVcs(findProject(roots.foremanHome, meta.projectId));
+    return attachments.materializeImagesUnlocked({ roots, taskId: meta.taskId, workspace: meta.workspace, vcs, refs });
+  } catch (error) { throw error instanceof attachments.AttachmentError ? new DeliveryError(error.message) : error; }
+}
+
+// Adapter options for one prompt; images appear only when the prompt carries some.
+function sendOptions(roots, taskId, messageId, refs) {
+  return { messageId, ...(refs?.length ? { images: attachments.transportImages(roots, taskId, refs) } : {}) };
+}
 
 const SUPPORTED_SCHEMA_VERSION = 1;
 const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode"]);
@@ -729,13 +750,14 @@ function validateDependenciesUnlocked({ home, projectId, dependencies }) {
   for (const dependency of dependencies) visit(dependency);
 }
 
-function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], backend = "herdr" }) {
+function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], backend = "herdr", images }) {
   if (typeof brief !== "string" || !brief) throw new ValidationError("Task brief must be non-empty verbatim text");
   if (notes != null && (typeof notes !== "string" || !notes)) throw new ValidationError("Foreman notes must be non-empty text when given");
   if (original != null && (typeof original !== "string" || !original)) throw new ValidationError("Original user wording must be non-empty text when given");
   if (!new Set(["herdr", "paseo"]).has(backend)) throw new ValidationError(`Unsupported task backend: ${backend}`);
   const normalizedType = normalizeTaskType(taskType || type);
   const normalizedDependencies = normalizeDependencies(dependencies);
+  const prepared = prepareImages(images);
   initHome(roots);
   const project = findProject(roots.foremanHome, projectId);
   validateDependenciesUnlocked({ home: roots.foremanHome, projectId: project.id, dependencies: normalizedDependencies });
@@ -743,12 +765,14 @@ function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "
   atomicWrite(path.join(taskDir(roots.foremanHome, id), "brief.md"), brief);
   if (original) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), original);
   if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
+  const imageRefs = attachments.storeTaskImagesUnlocked({ roots, taskId: id, images: prepared });
+  if (imageRefs.length) attachments.setBriefImagesUnlocked({ roots, taskId: id, refs: imageRefs });
   atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
-  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, original: original || null, notes: notes || null };
+  return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, original: original || null, notes: notes || null, ...(imageRefs.length ? { attachments: imageRefs } : {}) };
 }
 
-function createTask({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr" }) {
-  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, original, notes, type, taskType, dependencies, backend }));
+function createTask({ roots, projectId, brief, original, notes, type = "ship", taskType, dependencies = [], routingRunner, backend = "herdr", images }) {
+  const task = withHomeLock(roots.foremanHome, () => createTaskUnlocked({ roots, projectId, brief, original, notes, type, taskType, dependencies, backend, images }));
   const routing = routeTask({ roots, taskId: task.id, routingRunner });
   return { ...task, routing };
 }
@@ -929,14 +953,17 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       }
       const notesFile = path.join(taskDir(roots.foremanHome, taskId), "notes.md");
       const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : null;
-      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, backend, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, notes, taskType, dispatchProfile: profile, handoff: handoff || prior.handoff || null };
+      const briefRefs = attachments.briefImages(roots, taskId);
+      const delivery = handoffImagesUnlocked({ roots, meta: { taskId, projectId: project.id, workspace: workspace.path }, handoff: handoff || prior.handoff || null });
+      const images = materializeImagesUnlocked({ roots, meta: { taskId, projectId: project.id, workspace: workspace.path }, refs: briefRefs });
+      const messagePayload = { taskId, projectId: project.id, owner, generation, endpoint, backend, cwd: workspace.path, branch: workspace.branch, resources: resourceLease.resources, resourceLeaseId: resourceLease.leaseId, workspaceMode, gitAuthority: "client", brief, notes, taskType, dispatchProfile: profile, handoff: delivery.handoff, ...(images.length ? { images } : {}) };
       const message = coordination.createMessageUnlocked({ roots, taskId, projectId: project.id, worker: owner, generation, endpoint, kind: "task-brief", payload: messagePayload, explicitId: `M-${taskId}-${generation}-brief` });
       createdBriefMessageId = message.messageId;
       const promptAt = now();
       Object.assign(pending, { endpoint, workspaceId: assignedWorkspaceId, paseoCursor, lastPromptAt: promptAt });
       atomicJson(metaFile(roots.foremanHome, taskId), pending);
       promptAttempted = true;
-      const delivered = adapter.send(endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId });
+      const delivered = adapter.send(endpoint, coordination.deliveryPrompt(message), sendOptions(roots, taskId, message.messageId, [...briefRefs, ...delivery.nextImages]));
       coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: delivered !== false && delivered?.delivered !== false, evidence: delivered });
       if (delivered === false || delivered?.delivered === false) {
         promptAttempted = false;
@@ -994,6 +1021,24 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       throw error;
     }
   });
+}
+
+/**
+ * The handoff as the worker reads it: every image of an earlier round, decision, or the next request becomes a workspace path.
+ * The stored handoff keeps image references; only the delivered copy names files.
+ */
+function handoffImagesUnlocked({ roots, meta, handoff }) {
+  if (!handoff) return { handoff: null, nextImages: [] };
+  const paths = (refs) => materializeImagesUnlocked({ roots, meta, refs }).map((image) => image.path);
+  const withPaths = (item) => (item?.images?.length ? { ...item, images: paths(item.images) } : item);
+  const nextImages = handoff.nextRequest?.images || [];
+  const delivered = {
+    ...handoff,
+    ...(Array.isArray(handoff.rounds) ? { rounds: handoff.rounds.map(withPaths) } : {}),
+    ...(Array.isArray(handoff.decisions) ? { decisions: handoff.decisions.map(withPaths) } : {}),
+    ...(handoff.nextRequest ? { nextRequest: { ...handoff.nextRequest, ...(nextImages.length ? { images: materializeImagesUnlocked({ roots, meta, refs: nextImages }) } : {}) } } : {}),
+  };
+  return { handoff: delivered, nextImages };
 }
 
 /**
@@ -1280,8 +1325,9 @@ function acceptTask({ roots, taskId, adapter }) {
     coordination.purgeTaskRecordsUnlocked({ roots, taskId });
 
     const workspace = meta.workspace || null;
+    const imageCleanupError = attachments.removeWorkspaceImages({ workspace, taskId });
     fs.rmSync(taskDir(roots.foremanHome, taskId), { recursive: true, force: true });
-    return { taskId, accepted: true, deleted: true, workerStopped, workspaceRetained: workspace, acceptedAt: meta.acceptedAt };
+    return { taskId, accepted: true, deleted: true, workerStopped, workspaceRetained: workspace, acceptedAt: meta.acceptedAt, ...(imageCleanupError ? { imageCleanupError } : {}) };
   });
 }
 
@@ -1317,8 +1363,9 @@ function discardTask({ roots, taskId, adapter }) {
     }
     const workerStopped = workerState === "dead" ? stopEndpointForAcceptance({ roots, meta, adapter }) : false;
     coordination.purgeTaskRecordsUnlocked({ roots, taskId });
+    const imageCleanupError = attachments.removeWorkspaceImages({ workspace: meta.workspace, taskId });
     fs.rmSync(taskDir(roots.foremanHome, taskId), { recursive: true, force: true });
-    return { taskId, discarded: true, deleted: true, ...(workerState ? { workerState, workerStopped } : {}) };
+    return { taskId, discarded: true, deleted: true, ...(workerState ? { workerState, workerStopped } : {}), ...(imageCleanupError ? { imageCleanupError } : {}) };
   });
 }
 
@@ -1440,12 +1487,20 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, original, 
         taskType,
         dispatchProfile: null,
       };
+      const briefRefs = attachments.briefImages(roots, id);
+      // An image that cannot reach the workspace leaves the brief undelivered, like any other failed submission.
+      let delivery;
+      try {
+        const images = materializeImagesUnlocked({ roots, meta: assigned, refs: briefRefs });
+        if (images.length) payload.images = images;
+      } catch (error) { delivery = { delivered: false, error: error.message }; }
       const message = coordination.createMessageUnlocked({ roots, taskId: id, projectId: prior.projectId, worker: assignmentOwner, generation, endpoint, kind: "task-brief", payload, explicitId: `M-${id}-${generation}-brief` });
       const promptAt = now();
       atomicJson(metaFile(roots.foremanHome, id), { ...assigned, lastPromptAt: promptAt, briefMessageId: message.messageId });
-      let delivery;
-      try { delivery = adapter.send(endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
-      catch (error) { delivery = { delivered: false, error: error.message }; }
+      if (!delivery) {
+        try { delivery = adapter.send(endpoint, coordination.deliveryPrompt(message), sendOptions(roots, id, message.messageId, briefRefs)); }
+        catch (error) { delivery = { delivered: false, error: error.message }; }
+      }
       coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: delivery !== false && delivery?.delivered !== false, evidence: delivery });
       const adopted = { ...assigned, lastPromptAt: promptAt, briefMessageId: message.messageId, ...(delivery === false || delivery?.delivered === false ? { deliveryUnverified: delivery?.error || "Paseo did not confirm adoption brief delivery" } : {}) };
       atomicJson(metaFile(roots.foremanHome, id), adopted);
@@ -1462,33 +1517,37 @@ function reconstructTask({ roots, taskId }) {
 }
 
 // Persists the message, records the prompt time and Paseo cursor, then submits it; throws DeliveryError when the runtime does not accept it.
-function deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend }) {
+function deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend, images = [] }) {
   if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to message a worker");
-  const message = coordination.createMessageUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: { ...payload, backend } });
+  const delivered = materializeImagesUnlocked({ roots, meta, refs: images });
+  const message = coordination.createMessageUnlocked({ roots, taskId: meta.taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind, payload: { ...payload, backend, ...(delivered.length ? { images: delivered } : {}) } });
   const promptAt = now();
   if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before messaging");
   const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
   atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
   let result;
-  try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
+  try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), sendOptions(roots, meta.taskId, message.messageId, images)); }
   catch (error) { result = { delivered: false, error: error.message }; }
-  const delivered = result !== false && result?.delivered !== false;
-  const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered, evidence: result });
-  if (!delivered) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
+  const accepted = result !== false && result?.delivered !== false;
+  const updated = coordination.markMessageDeliveryUnlocked({ roots, messageId: message.messageId, delivered: accepted, evidence: result });
+  if (!accepted) throw new DeliveryError(`Worker message delivery failed: ${message.messageId}`);
   return { message: updated, promptAt, paseoCursor };
 }
 
 // A Foreman prompt reopens a blocked or review-ready task so the worker's next report is expected.
-function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter }) {
+function sendWorkerMessage({ roots, taskId, kind = "foreman-message", payload, adapter, images }) {
+  const prepared = prepareImages(images);
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const backend = assertAdapterBackend(meta, adapter, "messaging its worker");
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
-    const { message, promptAt, paseoCursor } = deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend });
+    // The images are part of the task record before the message that carries them exists.
+    const refs = attachments.storeTaskImagesUnlocked({ roots, taskId, images: prepared });
+    const { message, promptAt, paseoCursor } = deliverWorkerMessageUnlocked({ roots, meta, kind, payload, adapter, backend, images: refs });
     const reopened = ["blocked", "review-ready"].includes(meta.status) ? { status: "working", completionReport: null } : {};
     const next = { ...meta, ...reopened, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
-    return { message, task: next };
+    return { message, task: next, ...(refs.length ? { attachments: refs } : {}) };
   });
 }
 
@@ -1535,9 +1594,10 @@ function sameClaims(left, right) {
  * `text` is the instruction sent to the worker and `original` is the user's own wording; both are stored.
  * The lease follows the round's mode, but a task that was ever a ship keeps write access until acceptance.
  */
-function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter }) {
+function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter, images }) {
   if (typeof text !== "string" || !text.trim()) throw new ValidationError("A round needs non-empty instruction text");
   if (typeof original !== "string" || !original.trim()) throw new ValidationError("A round needs the user's original wording");
+  const prepared = prepareImages(images);
   const requestedType = type === undefined ? undefined : normalizeTaskType(type);
   initHome(roots);
   // A report that already finished must be on disk before the task is judged to be waiting for the user.
@@ -1569,7 +1629,8 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
 
     const round = (meta.round || 1) + 1;
     const supersedes = interrupt && !awaiting ? (meta.round || 1) : null;
-    const record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode, resources: lease?.resources || claims, previousResources: previousClaims, supersedes, messageId: null, status: "pending" };
+    const imageRefs = attachments.storeTaskImagesUnlocked({ roots, taskId, images: prepared });
+    const record = { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode, resources: lease?.resources || claims, previousResources: previousClaims, supersedes, ...(imageRefs.length ? { images: imageRefs } : {}), messageId: null, status: "pending" };
     coordination.writeRoundUnlocked({ roots, record });
 
     const failRound = (error) => coordination.writeRoundUnlocked({ roots, record: { ...record, status: "failed", failedAt: now(), failure: error.message } });
@@ -1591,7 +1652,7 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
       supersedes, request: text, ...(withOriginal ? { original } : {}),
     };
     let delivery;
-    try { delivery = deliverWorkerMessageUnlocked({ roots, meta: prospective, kind: "task-update", payload, adapter, backend }); }
+    try { delivery = deliverWorkerMessageUnlocked({ roots, meta: prospective, kind: "task-update", payload, adapter, backend, images: imageRefs }); }
     catch (error) {
       // The new round never reached the worker, so the round, mode and lease go back to what they were.
       failRound(error);
@@ -1612,13 +1673,18 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
 }
 
 // Replaces the worker-facing brief of a task that has no worker yet, so the user can correct a rewrite before round one is sent.
-function replaceTaskBrief({ roots, taskId, text }) {
+function replaceTaskBrief({ roots, taskId, text, images }) {
   if (typeof text !== "string" || !text.trim()) throw new ValidationError("A task brief must be non-empty text");
+  const prepared = prepareImages(images);
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     if (!["routing", "queued", "pending"].includes(meta.status) || meta.endpoint || meta.owner) throw new ValidationError(`Task ${taskId} already has a worker; send a new round with task continue`);
     atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), text);
-    return { taskId, brief: text, status: meta.status };
+    // Without new images, round one keeps the ones it has.
+    if (images === undefined) return { taskId, brief: text, status: meta.status };
+    const refs = attachments.storeTaskImagesUnlocked({ roots, taskId, images: prepared });
+    attachments.setBriefImagesUnlocked({ roots, taskId, refs });
+    return { taskId, brief: text, status: meta.status, attachments: refs };
   });
 }
 
@@ -1640,8 +1706,9 @@ function createDecision({ roots, taskId, finding, why, options, impact, evidence
   });
 }
 
-function answerDecision({ roots, taskId, decisionId, response }) {
+function answerDecision({ roots, taskId, decisionId, response, images }) {
   if (typeof response !== "string" || !response) throw new ValidationError("Human decision must preserve non-empty verbatim text");
+  const prepared = prepareImages(images);
   return withHomeLock(roots.foremanHome, () => {
     const file = path.join(taskDir(roots.foremanHome, taskId), "decisions", `${decisionId}.json`);
     if (!fs.existsSync(file)) throw new ValidationError(`Unknown decision: ${decisionId}`);
@@ -1649,7 +1716,8 @@ function answerDecision({ roots, taskId, decisionId, response }) {
     if (record.status !== "pending") throw new ValidationError("Decision is not awaiting a human response");
     const meta = readMeta(roots.foremanHome, taskId);
     if (record.schemaVersion !== 1 || record.decisionId !== decisionId || record.taskId !== taskId || record.projectId !== meta.projectId || record.generation !== meta.generation || record.worker !== meta.owner || meta.decisionId !== decisionId || meta.status !== "waiting-decision") throw new StaleGenerationError("Decision does not match the current assignment");
-    const next = { ...record, status: "answered", answeredAt: now(), humanResponse: response };
+    const refs = attachments.storeTaskImagesUnlocked({ roots, taskId, images: prepared });
+    const next = { ...record, status: "answered", answeredAt: now(), humanResponse: response, ...(refs.length ? { images: refs } : {}) };
     atomicJson(file, next);
     return next;
   });
@@ -1668,14 +1736,15 @@ function deliverDecision({ roots, taskId, decisionId, adapter }) {
     if (!adapter || typeof adapter.send !== "function") throw new DeliveryError("A runtime adapter is required to deliver a decision");
     if (decision.generation !== meta.generation || decision.worker !== meta.owner || !meta.endpoint) throw new StaleGenerationError("Decision belongs to a stale assignment");
     if (meta.status !== "waiting-decision" || meta.decisionId !== decisionId) throw new ValidationError("Decision is not the active decision for this task");
-    const payload = { decisionId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, response: decision.humanResponse, backend };
+    const images = materializeImagesUnlocked({ roots, meta, refs: decision.images });
+    const payload = { decisionId, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, response: decision.humanResponse, backend, ...(images.length ? { images } : {}) };
     const message = coordination.createMessageUnlocked({ roots, taskId, projectId: meta.projectId, worker: meta.owner, generation: meta.generation, endpoint: meta.endpoint, kind: "human-decision", payload, explicitId: `M-${decisionId}` });
     const promptAt = now();
     if (backend === "paseo" && typeof adapter.cursor !== "function") throw new DeliveryError("Paseo adapter cannot capture a timeline cursor before decision delivery");
     const paseoCursor = backend === "paseo" ? adapter.cursor(meta.endpoint) : meta.paseoCursor;
     atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, lastPromptAt: promptAt, ...(backend === "paseo" ? { paseoCursor } : {}) });
     let result;
-    try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), { messageId: message.messageId }); }
+    try { result = adapter.send(meta.endpoint, coordination.deliveryPrompt(message), sendOptions(roots, taskId, message.messageId, decision.images)); }
     catch (error) {
       coordination.failMessageUnlocked({ roots, messageId: message.messageId, reason: `decision prompt submission is uncertain: ${error.message}` });
       throw error;
@@ -1771,10 +1840,12 @@ function recoverDeadWorker({ roots, taskId, adapter, owner, maxRecoveryAttempts 
  * Moves a task to a new worker because the user asked, not because the old one died.
  * The successor reads every round and reports the workspace state; with `text` it then carries out that new round.
  */
-function reassignWorker({ roots, taskId, adapter, profile, owner, text, original, type, resources }) {
+function reassignWorker({ roots, taskId, adapter, profile, owner, text, original, type, resources, images }) {
   if ((text === undefined) !== (original === undefined)) throw new ValidationError("A reassignment request needs both the instruction text and the user's original wording");
+  if (text === undefined && images?.length) throw new ValidationError("Images travel with a reassignment request; pass --text and --original with them");
   if (text !== undefined && (typeof text !== "string" || !text.trim() || typeof original !== "string" || !original.trim())) throw new ValidationError("A reassignment request needs non-empty instruction text and original wording");
   if (profile !== undefined && (typeof profile !== "string" || !profile)) throw new ValidationError("A worker profile name is required");
+  const prepared = prepareImages(images);
   initHome(roots);
   // The latest report must be on disk before it travels in the handoff.
   if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
@@ -1797,7 +1868,9 @@ function reassignWorker({ roots, taskId, adapter, profile, owner, text, original
   withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     // The user's words are on disk before the new worker is spawned; the brief that carries them marks the round delivered.
-    if (text !== undefined) coordination.writeRoundUnlocked({ roots, record: { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: plan.claims, previousResources: plan.previousClaims, supersedes: null, messageId: null, status: "pending" } });
+    const imageRefs = attachments.storeTaskImagesUnlocked({ roots, taskId, images: prepared });
+    if (imageRefs.length) extraHandoff.nextRequest.images = imageRefs;
+    if (text !== undefined) coordination.writeRoundUnlocked({ roots, record: { schemaVersion: 1, taskId, round, generation: meta.generation, createdAt: now(), sent: text, original, mode: plan.mode, resources: plan.claims, previousResources: plan.previousClaims, supersedes: null, ...(imageRefs.length ? { images: imageRefs } : {}), messageId: null, status: "pending" } });
     if (plan.mode !== meta.type || plan.everShip !== Boolean(meta.everShip)) atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, type: plan.mode, everShip: plan.everShip });
   });
   let assignment;
@@ -1932,11 +2005,13 @@ function renderUserReport(status, roots) {
  * Reports listed here are marked read because they reached the Foreman session.
  * A session whose cwd is outside the Foreman checkout is not a Foreman session.
  */
-function sessionContext({ roots, adapter, prompt = "", cwd }) {
+function sessionContext({ roots, adapter, prompt = "", cwd, transcriptPath, sessionId }) {
   if (/^\s*DEV\b/.test(String(prompt))) return null;
   if (cwd) {
     try { if (!isWithin(roots.foremanRoot, canonical(cwd))) return null; } catch (_) { return null; }
   }
+  // `image stage` reads pasted images from this transcript later in the same turn.
+  try { attachments.recordSession({ roots, sessionId, transcriptPath, cwd }); } catch (_) {}
   if (!fs.existsSync(path.join(roots.foremanHome, "data", "tasks"))) return null;
   let status = null;
   let runtimeError = null;
@@ -2009,6 +2084,8 @@ module.exports = {
   listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,
   canonical, gitBranch, gitTop, gitCommonDir, projectVcs, workspaceBelongsToProject,
+  stageImages: attachments.stageImages,
+  resolveImageArgs: attachments.resolveImageArgs,
   listMessages: coordination.listMessages,
   coordinationDirs: coordination.coordinationDirs,
 };

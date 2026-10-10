@@ -31,7 +31,7 @@ const {
 const { syncPaseoProfiles, planPaseoProfileSync, loadPaseoRoutingConfig } = require("../src/paseo-routing");
 
 function fixture() {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-"));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-")));
   const projectRoot = path.join(base, "project");
   fs.mkdirSync(projectRoot, { recursive: true });
   execFileSync("git", ["init", "-b", "main", projectRoot], { stdio: "ignore" });
@@ -413,4 +413,63 @@ test("Paseo recovery uses confirmed missing evidence and mixed-backend status st
     collectPaseoReports({ roots: f.roots, adapter: f.adapter });
     assert.equal(acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter }).deleted, true);
   } finally { f.cleanup(); }
+});
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const pngImage = (label) => Buffer.concat([PNG_SIGNATURE, Buffer.from(label)]);
+const sha256 = (buffer) => require("node:crypto").createHash("sha256").update(buffer).digest("hex");
+
+test("Paseo receives images inline and as workspace files, round by round", () => {
+  const f = fixture();
+  try {
+    const mockup = pngImage("mockup");
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Build the page in the mockup.", type: "ship", backend: "paseo", images: [{ buffer: mockup }], routingRunner: () => ({ profile: "codex-luna", reason: "test" }) });
+    confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "codex-luna" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    const [image] = task.attachments;
+    const brief = f.adapter.sent.at(-1);
+    assert.equal(brief.options.messageId, assignment.briefMessageId);
+    assert.deepEqual(brief.options.images.map(({ id, sha256: digest, mimeType }) => ({ id, sha256: digest, mimeType })), [{ id: image.id, sha256: sha256(mockup), mimeType: "image/png" }]);
+    assert.equal(sha256(fs.readFileSync(brief.options.images[0].file)), sha256(mockup));
+    const copy = path.join(f.projectRoot, ".foreman", "attachments", task.id, `${image.id}.png`);
+    assert.equal(sha256(fs.readFileSync(copy)), sha256(mockup));
+    assert.ok(brief.prompt.includes(`## Images for this request\nOpen each image before you act on this; the user sent them with it.\n- ${copy}`));
+    assert.doesNotMatch(execFileSync("git", ["-C", f.projectRoot, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" }), /\.foreman/);
+
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Built." }));
+    const error = pngImage("error");
+    const result = continueTask({ roots: f.roots, taskId: task.id, text: "Fix this error.", original: "sửa lỗi này", images: [{ buffer: error }], adapter: f.adapter });
+    const round = f.adapter.sent.at(-1);
+    // Only the images of the new round travel inline; earlier ones stay in the workspace.
+    assert.deepEqual(round.options.images.map((item) => item.sha256), [sha256(error)]);
+    assert.equal(round.options.messageId, result.message.messageId);
+    assert.match(round.prompt, /## Images for this request \(round 2\)/);
+
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "progress", summary: "Halfway." }));
+    collectPaseoReports({ roots: f.roots, adapter: f.adapter });
+    const plain = sendWorkerMessage({ roots: f.roots, taskId: task.id, payload: { request: "Continue." }, adapter: f.adapter });
+    assert.equal(f.adapter.sent.at(-1).options.images, undefined);
+    assert.equal(plain.message.payload.images, undefined);
+  } finally { f.cleanup(); }
+});
+
+test("the Paseo adapter forwards stored image files and the bridge checks them before sending", () => {
+  const { PaseoAdapter } = require("../src/paseo");
+  const { inlineImages } = require("../bin/foreman-paseo-bridge");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-paseo-images-"));
+  try {
+    const bytes = pngImage("inline");
+    const file = path.join(base, "A-1.png");
+    fs.writeFileSync(file, bytes);
+    const calls = [];
+    const adapter = new PaseoAdapter({ runner: (action, payload) => { calls.push({ action, payload }); return { delivered: true }; } });
+    adapter.send("agent-1", "prompt", { messageId: "M-1", images: [{ id: "A-1", file, sha256: sha256(bytes), mimeType: "image/png", path: "/workspace/copy.png" }] });
+    adapter.send("agent-1", "plain", { messageId: "M-2" });
+    assert.deepEqual(calls[0].payload, { endpoint: "agent-1", prompt: "prompt", messageId: "M-1", images: [{ id: "A-1", file, sha256: sha256(bytes), mimeType: "image/png" }] });
+    assert.deepEqual(calls[1].payload, { endpoint: "agent-1", prompt: "plain", messageId: "M-2" });
+    assert.deepEqual(inlineImages(calls[0].payload.images), [{ data: bytes.toString("base64"), mimeType: "image/png" }]);
+    assert.deepEqual(inlineImages(undefined), []);
+    assert.throws(() => inlineImages([{ id: "A-1", file, sha256: "0".repeat(64), mimeType: "image/png" }]), /does not match its digest: A-1/);
+    assert.throws(() => inlineImages([{ id: "A-2", file: path.join(base, "missing.png"), sha256: "x", mimeType: "image/png" }]), /cannot be read for Paseo delivery: A-2/);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
