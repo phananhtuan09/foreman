@@ -61,3 +61,15 @@ Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
 An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, or assigned to a worker a status check confirms dead or missing.
+
+## Read-only task summary and the Paseo dashboard
+
+`taskSummaries({ roots })` in `src/foreman.js` is the only read path built for external viewers, exposed as `foreman task list --json --summary`.
+Unlike `listTasks`, it never calls `initHome`, never migrates a record through `ensureVersionedRecord`, and never takes the home lock.
+A record without a schema version is validated as version 1 in memory and left untouched; a malformed record is skipped and listed under `skipped`.
+It returns `{ tasks, skipped }` for every task except `accepted` and `cleaned`, with only the fields a board shows: ID, project, type, round, status, backend, endpoint, dispatch and routing profile, `needsProfileConfirmation`, a one-line title by the `taskBriefLine` rule, and the user's own wording of the task: `original.md` (else `brief.md`) plus the `original` of each delivered round.
+A missing home yields an empty result and creates nothing.
+
+`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that renders this summary and the app's cached agent state.
+Its daemon side keeps one in-memory snapshot, rebuilt only when a throttled `stat` of `data/tasks/` shows a change, and runs the summary command without a shell.
+It is local tooling over durable state, not a relay channel or a runtime backend, and it sends nothing to workers or the Foreman session.

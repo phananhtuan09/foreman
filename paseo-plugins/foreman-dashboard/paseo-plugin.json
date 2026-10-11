@@ -1,0 +1,9 @@
+{
+  "id": "foreman-dashboard",
+  "name": "Foreman",
+  "description": "Read-only board of Foreman workers and tasks.",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.11.1"
+  }
+}

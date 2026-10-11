@@ -102,6 +102,7 @@ const usage = [
   "  image stage [--transcript FILE]   (copy the images of the user's latest message into the Foreman inbox; prints their IDs)",
   "  task create --project ID (--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID] [--image ID|FILE]...",
   "  task list [--project ID] [--json]",
+  "  task list --json --summary   (read-only dashboard summary of non-accepted tasks; never initializes, migrates or locks the home; includes the user wording of each round)",
   "  task confirm --task ID --profile NAME   (the human's choice of worker profile, required before dispatch)",
   "  task dispatch --task ID [--owner OWNER] [--workspace PATH] [--resources JSON] [--reuse-endpoint ENDPOINT]",
   "  task schedule [--owner OWNER] [--max N] [--project-limit ID=N]",
@@ -168,6 +169,11 @@ function main() {
     const summaryFile = arg("--summary-file");
     const summary = summaryFile ? fs.readFileSync(path.resolve(summaryFile), "utf8") : (arg("--summary") ?? readStdin());
     output(core.recordReport({ roots: roots(), paneId: process.env.HERDR_PANE_ID, status: arg("--status"), summary }));
+    return;
+  }
+  if (command === "task" && action === "list" && flag("--summary")) {
+    const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
+    output(core.taskSummaries({ roots: { foremanHome: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome } }));
     return;
   }
   const home = roots();

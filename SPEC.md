@@ -61,6 +61,8 @@ The first production release does not include:
 - automatic model or quota optimization before the P3 dispatch-profile phase;
 - direct production-code implementation by Foreman.
 
+The optional `paseo-plugins/foreman-dashboard/` plugin is local tooling that only reads durable state through the read-only summary; it is not a relay channel or a runtime backend, and it never sends to a worker, mutates Foreman state, or takes the home lock.
+
 These capabilities may be designed later only when the core lifecycle and recovery invariants are already proven.
 
 ## 5. Core invariants
@@ -144,6 +146,8 @@ foreman/
 ├── config/paseo-agent-profiles.json  repo-owned Paseo agent runtime profile mappings
 ├── bin/                       deterministic helpers and runtime adapters
 ├── hooks/                     coding-agent hook scripts for worker reports and the Foreman session
+├── paseo-plugins/
+│   └── foreman-dashboard/     optional read-only Paseo plugin: running workers and open tasks
 ├── adapters/
 │   └── herdr/                 Herdr-specific mechanics and compatibility checks
 ├── test/                      state, recovery, report, and adapter proof
@@ -205,6 +209,8 @@ Rules:
 There is no separate backlog file.
 The fleet task list is the set of task metadata records under `data/tasks/`.
 `foreman status` and `foreman task list` render it from those records.
+`foreman task list --json --summary` is the read-only view for external tooling: it lists every task except `accepted` and `cleaned` with the fields a board shows and the user's own wording of each round, and it never initializes the home, migrates a record, or takes the home lock.
+A malformed record is skipped and reported instead of failing the list.
 
 Task IDs are globally unique across projects:
 

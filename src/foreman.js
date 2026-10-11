@@ -1959,6 +1959,63 @@ function taskBriefLine(roots, taskId) {
   catch (_) { return taskId; }
 }
 
+// Legacy records have no schema version yet; they are validated as version 1 in memory and never rewritten.
+function readSummaryRecord(file) {
+  const record = readJson(file);
+  return record && typeof record === "object" && (record.schemaVersion === undefined || record.schemaVersion === 0) ? { ...record, schemaVersion: SUPPORTED_SCHEMA_VERSION } : record;
+}
+
+// The user's own wording: round one is original.md when the task has it, else the brief; later rounds are the delivered round originals.
+function summaryTexts(home, taskId) {
+  const dir = taskDir(home, taskId);
+  const rounds = [];
+  const roundsPath = path.join(dir, "rounds");
+  if (fs.existsSync(roundsPath)) {
+    for (const name of fs.readdirSync(roundsPath).filter((entry) => /^round-\d+\.json$/.test(entry)).sort()) {
+      try {
+        const record = coordination.validateRoundRecord(readSummaryRecord(path.join(roundsPath, name)), taskId, Number(name.slice(6, -5)));
+        if (record.status === "delivered") rounds.push({ round: record.round, sent: record.sent, text: record.original });
+      } catch (_) { /* a damaged round never hides the task */ }
+    }
+  }
+  const originalFile = path.join(dir, "original.md");
+  const brief = fs.readFileSync(fs.existsSync(originalFile) ? originalFile : path.join(dir, "brief.md"), "utf8");
+  const latest = rounds.at(-1);
+  const line = (latest ? latest.sent : fs.readFileSync(path.join(dir, "brief.md"), "utf8")).split(/\r?\n/)[0].trim();
+  return { title: latest ? `(vòng ${latest.round}) ${line}` : line, brief, rounds: rounds.map(({ round, text }) => ({ round, text })) };
+}
+
+/**
+ * Read-only task summary for dashboards: never initializes the home, migrates a record or takes the lock.
+ * A malformed task is skipped and reported instead of failing the whole list.
+ */
+function taskSummaries({ roots }) {
+  const home = roots.foremanHome;
+  const tasksRoot = path.join(home, "data", "tasks");
+  const tasks = [];
+  const skipped = [];
+  if (!fs.existsSync(tasksRoot)) return { tasks, skipped };
+  for (const taskId of fs.readdirSync(tasksRoot).sort()) {
+    const file = metaFile(home, taskId);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const meta = coordination.validateTaskMetaRecord(readSummaryRecord(file), taskId);
+      if (["accepted", "cleaned"].includes(meta.status)) continue;
+      let texts;
+      try { texts = summaryTexts(home, taskId); } catch (_) { texts = { title: taskId, brief: "", rounds: [] }; }
+      tasks.push({
+        taskId, projectId: meta.projectId, type: meta.type, round: meta.round || 1, status: meta.status,
+        backend: meta.backend || "herdr", endpoint: meta.endpoint || null,
+        profile: meta.dispatchProfile?.name || null, routingProfile: meta.routingProfile || null,
+        needsProfileConfirmation: needsProfileConfirmation(meta), ...texts,
+      });
+    } catch (error) {
+      skipped.push({ taskId, reason: error.message });
+    }
+  }
+  return { tasks, skipped };
+}
+
 function renderUserReport(status, roots) {
   const tasks = status?.tasks || [];
   const groups = { approve: [], decide: [], profile: [], anomaly: [] };
@@ -2080,7 +2137,7 @@ module.exports = {
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, reassignWorker, buildHandoff,
-  listTasks, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
+  listTasks, taskSummaries, fleetStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
   listResourceLeases, normalizeResourceClaims,
   findProject, validateWorkspace, isWithin, assertRealWithin,
   canonical, gitBranch, gitTop, gitCommonDir, projectVcs, workspaceBelongsToProject,
