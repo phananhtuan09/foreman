@@ -7,3 +7,4 @@
 /data/
 /state/
 /projects/
+/paseo-plugins/*/node_modules/

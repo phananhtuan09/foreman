@@ -192,6 +192,7 @@ Use `routing route --task <id>` to resume a task left in `routing` after an inte
 `status` lists the selected runtime once and prints the grouped Vietnamese report; `status --json` and `task list --json` keep the machine-readable record.
 `status --project <id>` filters the same snapshot.
 It never interrupts a worker or starts recovery.
+For read-only tooling, `task list --json --summary` prints the non-accepted tasks without initializing the home, migrating records, or taking the lock.
 Paseo report collection is an explicit durable write, so run `task collect` before status during Paseo supervision.
 It flags `worker.idle-without-report`, `worker.waiting-input`, `worker.dead`, `worker.missing`, `worker.mismatch`, and workspace, branch, lease, or pane mismatches.
 No background process runs; supervision happens only when Foreman handles a prompt.
@@ -203,3 +204,10 @@ Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handof
 
 Do not delete `data/` while work is active.
 Pull-request delivery, remote homes, relay channels, additional runtime backends, and merge authority are deferred.
+
+## Paseo dashboard plugin
+
+`paseo-plugins/foreman-dashboard/` is an optional, read-only Paseo plugin that shows running workers and open tasks in the Paseo sidebar.
+Install it once per Paseo daemon with `paseo plugin install <abs path>`, then set `foremanRoot` (and `foremanHome` when different) in its settings.
+It runs only `task list --json --summary`, so it never initializes, migrates, locks, or marks anything in the home.
+The plugin has its own tests: `npm test` inside the plugin folder; the root `npm test` does not run them.
