@@ -26,7 +26,8 @@ test("worker status: runtime states of a Paseo agent", () => {
   assert.equal(workerStatus(task({}), agent({ attentionReason: "error" })), "error");
   assert.equal(workerStatus(task({}), agent({ status: "running" })), "working");
   assert.equal(workerStatus(task({}), agent({ status: "idle" })), "idle");
-  assert.equal(workerStatus(task({}), null), "working");
+  assert.equal(workerStatus(task({}), null), "missing");
+  assert.equal(workerStatus(task({ status: "blocked" }), null), "blocked");
 });
 
 test("worker status: a Herdr task is marked as reported by Foreman", () => {

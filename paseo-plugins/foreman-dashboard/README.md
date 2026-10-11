@@ -44,7 +44,8 @@ Clients read the snapshot every ~5 s on the screen and ~15 s in the sidebar; a f
 
 Workers are the tasks that have an `endpoint` and are `working`, `blocked`, `waiting-decision`, or `review-ready`.
 Paseo workers are matched to their agent by that endpoint, which is the Paseo agent ID.
-Task states that need you take precedence over the agent's runtime state; Herdr workers are shown as reported by Foreman.
+Task states that need you take precedence over the agent's runtime state.
+A Paseo worker whose agent is not in the app's cached agent state (closed, archived or unknown) shows "Không thấy agent" instead of claiming it is working; Herdr workers are shown as reported by Foreman.
 
 ## Simplified from the mockup
 
