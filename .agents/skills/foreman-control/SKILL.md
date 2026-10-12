@@ -49,7 +49,9 @@ For round one, run `task create` (it queues the task and asks the router for a p
 If the user edits the text instead of choosing, rewrite it again, store it with `task brief --task ID --text ...` while the task has no worker, and ask again.
 For every later round, show one line (round, mode, lease, worker, whether it interrupts) and the rewritten text, then ask whether to send; run the command only after the user agrees.
 If the user changes or adds to it, rewrite and ask again; if the user declines, send nothing.
-Skip the question when the instruction to send is the user's words unchanged, including text that is entirely quoted.
+Always write the instruction yourself and ask before sending, even when the user's message is short or already clear; do not forward the user's words unchanged just because they are usable.
+When the request contains a mistake, contradiction, or gap you notice, point it out in the confirmation message instead of silently fixing or widening it.
+Skip the question only when the user put the entire instruction in quotation marks.
 Confirmation lives only in the conversation; if the session was cleared before the user agreed, nothing was sent, so ask the user to say it again.
 
 ## Rounds
