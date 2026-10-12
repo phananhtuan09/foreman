@@ -34,7 +34,7 @@ The daemon needs `node` on its `PATH` to run `bin/foreman`.
 - **Sidebar header item**: worker count and one peg per running worker (task number, status-colored bar).
   Pressing it opens the screen; "Mở Foreman" in the Command Center does the same.
 - **Screen**: the workers board and the task list, ordered with tasks that need you first.
-  Clicking a task row opens a detail modal: a status-colored strip, the status stamp, round dots, project and agent profile tags, the current request as the main card, and the earlier rounds collapsed on a timeline that ends at the original request.
+  Clicking a task row opens a detail modal: a status-colored strip, the status stamp and current round, project and agent profile tags, the current request as the main card, and the earlier rounds collapsed on a timeline that ends at the original request.
 
 Agent profile labels come from the Paseo app's cached agent state through `useAgent`, so it costs no RPC or polling.
 Task data comes from one daemon-side RPC that returns an in-memory snapshot.

@@ -10,8 +10,6 @@ import { stampColor } from "./theme";
 type Theme = PluginHostProps["theme"];
 type Request = { round: number; text: string };
 
-const MAX_DOTS = 8;
-
 function Tag({ theme, label, strong }: { theme: Theme; label: string; strong?: boolean }) {
   const c = theme.colors;
   return (
@@ -25,33 +23,11 @@ function SectionLabel({ theme, children }: { theme: Theme; children: string }) {
   return <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, letterSpacing: 0.6, textTransform: "uppercase" }}>{children}</Text>;
 }
 
-// One dot per round; the current round is large and solid, past rounds are small and faded.
-function RoundDots({ theme, rounds, current, color, onPick }: { theme: Theme; rounds: number[]; current: number; color: string; onPick(round: number): void }) {
-  const c = theme.colors;
-  const shown = rounds.length > MAX_DOTS ? [rounds[0], ...rounds.slice(-(MAX_DOTS - 1))] : rounds;
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      {shown.map((round, index) => {
-        const isCurrent = round === current;
-        const size = isCurrent ? 14 : 8;
-        return (
-          <View key={round} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            {index === 1 && rounds.length > MAX_DOTS ? <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>…</Text> : null}
-            <Pressable accessibilityRole="button" accessibilityLabel={`Vòng ${round}`} onPress={() => onPick(round)} hitSlop={6}>
-              <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: isCurrent ? color : c.border }} />
-            </Pressable>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
 // The current request is the one heavy block of the modal.
 function CurrentCard({ theme, color, item, isOnly }: { theme: Theme; color: string; item: Request; isOnly: boolean }) {
   const c = theme.colors;
   return (
-    <View style={{ gap: 10, padding: 16, paddingLeft: 18, borderWidth: 1, borderStyle: "dashed", borderColor: c.border, borderLeftWidth: 4, borderLeftColor: color, borderRadius: 10, backgroundColor: c.surface1 }}>
+    <View style={{ gap: 10, padding: 16, paddingLeft: 18, borderWidth: 1, borderColor: c.border, borderLeftWidth: 4, borderLeftColor: color, borderRadius: 10, backgroundColor: c.surface1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <SectionLabel theme={theme}>{isOnly ? "Yêu cầu" : "Yêu cầu hiện tại"}</SectionLabel>
         {isOnly ? null : (
@@ -60,7 +36,7 @@ function CurrentCard({ theme, color, item, isOnly }: { theme: Theme; color: stri
           </View>
         )}
       </View>
-      <Text selectable style={{ color: c.foreground, fontSize: 16, lineHeight: 24 }}>{item.text}</Text>
+      <Text selectable style={{ color: c.foreground, fontSize: 15, lineHeight: 23 }}>{item.text}</Text>
     </View>
   );
 }
@@ -123,7 +99,6 @@ export function TaskDetail({ task, theme, onClose }: { task: TaskSummary; theme:
     ...(hasOriginalRow ? [{ item: original, label: "Ban đầu", original: true }] : []),
   ];
   const allOpen = rows.length > 0 && rows.every((row) => expanded.has(row.item.round));
-  const roundNumbers = [1, ...later.map((item) => item.round)];
   const metaTags = [task.projectId, task.type, `${profile}${task.backend === "herdr" ? " (Herdr)" : ""}`];
   return (
     <Modal title={`T-${taskNumber(task.taskId)}`} open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -134,13 +109,11 @@ export function TaskDetail({ task, theme, onClose }: { task: TaskSummary; theme:
             <View style={{ paddingHorizontal: 12, paddingVertical: 5, borderWidth: 2, borderColor: color, borderRadius: 6 }}>
               <Text style={{ color, fontSize: 15, fontWeight: "800" }}>{STAMP_LABEL[stamp]}</Text>
             </View>
-            {task.round > 1 ? <Text style={{ color: c.foregroundMuted, fontSize: 13, fontVariant: ["tabular-nums"] }}>vòng {task.round}</Text> : null}
+            {later.length > 0 ? <Text style={{ color: c.foregroundMuted, fontSize: 13, fontVariant: ["tabular-nums"] }}>{`Vòng ${current.round}`}</Text> : null}
           </View>
-          {task.title ? <Text selectable style={{ color: c.foregroundMuted, fontSize: 14 }}>{task.title}</Text> : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {metaTags.map((label, index) => <Tag key={`${index}-${label}`} theme={theme} label={label} strong={index === 0} />)}
           </View>
-          {roundNumbers.length > 1 ? <RoundDots theme={theme} rounds={roundNumbers} current={current.round} color={color} onPick={toggle} /> : null}
         </View>
         <CurrentCard theme={theme} color={color} item={current} isOnly={later.length === 0} />
         {rows.length > 0 ? (
