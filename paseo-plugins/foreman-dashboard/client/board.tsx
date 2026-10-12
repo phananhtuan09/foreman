@@ -15,7 +15,7 @@ const NUMERAL: TextStyle = { fontWeight: "800", fontVariant: ["tabular-nums"] };
 
 export function useWorkerLook(task: TaskSummary, theme: Props["theme"]) {
   const agent = useAgentView(task);
-  const status = workerStatus(task, agent);
+  const status = workerStatus(task);
   return { status, agent, lamp: lampColor(theme, status) };
 }
 
@@ -47,10 +47,7 @@ export function WorkerTag({ task, theme, layout }: Props & { task: TaskSummary }
       Object.assign(box, { backgroundColor: c.statusSuccess, borderColor: c.statusSuccess });
       numberColor = on; textColor = on; break;
     }
-    case "input": Object.assign(box, { borderWidth: 3, borderColor: c.statusWarning }); textColor = c.foreground; ring = true; break;
-    case "error": Object.assign(box, { borderColor: c.statusDanger, borderLeftWidth: 8 }); numberColor = c.statusDanger; textColor = c.statusDanger; break;
     case "working": Object.assign(box, { borderTopWidth: 7, borderTopColor: c.accent }); textColor = c.accent; break;
-    case "idle": case "missing": Object.assign(box, { borderStyle: "dashed", borderColor: c.foregroundMuted, backgroundColor: "transparent" }); faded = true; hollow = true; break;
     case "herdr": Object.assign(box, { backgroundColor: "transparent" }); italic = true; hollow = true; break;
   }
   const lampColorFinal = status === "review" ? onColor(c.statusSuccess) : status === "blocked" ? c.statusDanger : status === "decide" ? c.statusWarning : lamp;

@@ -21,8 +21,8 @@ export function onColor(background: string): string {
 export function lampColor(theme: Theme, status: WorkerStatus): string {
   const c = theme.colors;
   switch (status) {
-    case "blocked": case "error": return c.statusDanger;
-    case "decide": case "input": return c.statusWarning;
+    case "blocked": return c.statusDanger;
+    case "decide": return c.statusWarning;
     case "review": return c.statusSuccess;
     case "working": return c.accent;
     case "herdr": return c.accent;

@@ -8,7 +8,7 @@ export interface AgentView {
   routingProfile: string | null;
 }
 
-export type WorkerStatus = "blocked" | "decide" | "review" | "input" | "error" | "working" | "idle" | "missing" | "herdr";
+export type WorkerStatus = "blocked" | "decide" | "review" | "working" | "herdr";
 export type StampKey = "blocked" | "decide" | "review" | "choose-model" | "working" | "routing" | "waiting";
 
 const ACTIVE_WORKER_STATUSES = ["working", "blocked", "waiting-decision", "review-ready"];
@@ -22,29 +22,19 @@ export function isRunningWorker(task: TaskSummary): boolean {
   return Boolean(task.endpoint) && ACTIVE_WORKER_STATUSES.includes(task.status);
 }
 
-// Task states that need the user win over the runtime state of the agent.
-export function workerStatus(task: TaskSummary, agent: AgentView | null): WorkerStatus {
+// A worker's status is the Foreman task state; the Paseo agent cache is not reliable enough to infer idle or gone.
+export function workerStatus(task: TaskSummary): WorkerStatus {
   if (task.status === "blocked") return "blocked";
   if (task.status === "waiting-decision") return "decide";
   if (task.status === "review-ready") return "review";
-  if (task.backend !== "paseo") return "herdr";
-  // The app's agent cache has no such agent (closed, archived or unknown): never claim it is working.
-  if (!agent) return "missing";
-  if (agent.attentionReason === "permission") return "input";
-  if (agent.status === "error" || agent.attentionReason === "error") return "error";
-  if (agent.status === "idle" || agent.status === "closed") return "idle";
-  return "working";
+  return task.backend === "paseo" ? "working" : "herdr";
 }
 
 export const WORKER_STATUS_LABEL: Record<Exclude<WorkerStatus, "herdr">, string> = {
   blocked: "Chờ bạn: bị chặn",
   decide: "Chờ bạn: cần quyết",
   review: "Xong, chờ duyệt",
-  input: "Chờ input trong Paseo",
-  error: "Lỗi runtime",
   working: "Đang làm",
-  idle: "Rảnh",
-  missing: "Không thấy agent",
 };
 
 export function herdrStatusLabel(task: TaskSummary): string {

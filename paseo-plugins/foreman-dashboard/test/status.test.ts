@@ -13,25 +13,12 @@ test("task number drops the prefix and zero padding", () => {
   assert.equal(taskNumber("T-000040"), "40");
 });
 
-test("worker status: task states that need the user win over the runtime state", () => {
-  const permission = agent({ attentionReason: "permission" });
-  assert.equal(workerStatus(task({ status: "blocked" }), permission), "blocked");
-  assert.equal(workerStatus(task({ status: "waiting-decision" }), agent({ status: "error" })), "decide");
-  assert.equal(workerStatus(task({ status: "review-ready" }), agent({ status: "running" })), "review");
-});
-
-test("worker status: runtime states of a Paseo agent", () => {
-  assert.equal(workerStatus(task({}), agent({ attentionReason: "permission" })), "input");
-  assert.equal(workerStatus(task({}), agent({ status: "error" })), "error");
-  assert.equal(workerStatus(task({}), agent({ attentionReason: "error" })), "error");
-  assert.equal(workerStatus(task({}), agent({ status: "running" })), "working");
-  assert.equal(workerStatus(task({}), agent({ status: "idle" })), "idle");
-  assert.equal(workerStatus(task({}), null), "missing");
-  assert.equal(workerStatus(task({ status: "blocked" }), null), "blocked");
-});
-
-test("worker status: a Herdr task is marked as reported by Foreman", () => {
-  assert.equal(workerStatus(task({ backend: "herdr" }), null), "herdr");
+test("worker status follows the Foreman task state, not the agent cache", () => {
+  assert.equal(workerStatus(task({ status: "blocked" })), "blocked");
+  assert.equal(workerStatus(task({ status: "waiting-decision" })), "decide");
+  assert.equal(workerStatus(task({ status: "review-ready" })), "review");
+  assert.equal(workerStatus(task({})), "working");
+  assert.equal(workerStatus(task({ backend: "herdr" })), "herdr");
 });
 
 test("agent profile prefers the Paseo label, then the routing label, then the Foreman record", () => {
