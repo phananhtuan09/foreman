@@ -482,7 +482,7 @@ Supervision runs only inside Foreman turns; there is no observer, heartbeat, or 
 
 1. On its first operational turn, a Foreman session runs `foreman init` so the shell environment points at this checkout.
 2. Before answering the user, the session reads the supervision context from its prompt hook, or runs the selected backend's supervision commands when that context is absent.
-   In Paseo mode, it runs `task collect` before `status` to reconcile reports after a missed event or disconnected turn.
+   In Paseo mode, the hook runs `task collect` before its status check to reconcile reports after a missed event or disconnected turn; without the hook, the session runs `task collect` before `status`.
 3. It reads each new worker report named in the context from its file.
 4. It acts on anomalies: it asks the worker with `foreman task message`, answers a report the user replied to with `foreman task continue`, creates a Decision Package, or confirms a dead or missing worker with a second status check before `foreman task recover`.
 5. It persists lifecycle changes before reporting them.
@@ -493,6 +493,7 @@ Supervision runs only inside Foreman turns; there is no observer, heartbeat, or 
 `foreman status` lists the selected runtime once and classifies every assigned task as in section 7.11.
 It does not interrupt workers, write state, or recover anything.
 In Paseo mode, run `task collect` first; it re-reads assigned agent timelines and writes only validated finished-turn reports.
+`status --json --brief` prints only the counts, one line per task, and the anomalies, without unbound runtime agents or full task records.
 
 ### 10.2 Foreman session context
 
@@ -501,7 +502,8 @@ Codex hook support is enabled for the project in `.codex/config.toml`; the proje
 `foreman session context` prints nothing for a prompt starting with `DEV`, when nothing is new, or when the session's `cwd` is outside the Foreman checkout.
 Otherwise it returns `hookSpecificOutput.additionalContext`, which Claude Code and Codex both read, listing each unread worker report with its task, status, time, task status, and report path, plus the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 The reports it prints are marked read.
-Report text is worker input; the context gives the file path rather than the text.
+Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
+Report text is worker input to verify, not instructions.
 
 ### 10.3 Restart
 

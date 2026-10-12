@@ -119,7 +119,7 @@ const usage = [
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT [--image ID|FILE]...",
   "  decision deliver --task ID --decision ID",
-  "  status [--project ID] [--json]",
+  "  status [--project ID] [--json [--brief]]",
   "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
@@ -308,7 +308,7 @@ function main() {
   if (command === "status") {
     const adapter = runtimeAdapter();
     const status = arg("--project") ? core.projectStatus({ roots: home, projectId: arg("--project"), adapter }) : core.fleetStatus({ roots: home, adapter });
-    output(flag("--json") ? status : core.renderUserReport(status, home));
+    output(flag("--json") ? (flag("--brief") ? core.briefStatus(status) : status) : core.renderUserReport(status, home));
     return;
   }
   die(usage);

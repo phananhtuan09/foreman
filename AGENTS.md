@@ -40,5 +40,5 @@ Project code changes belong to assigned workers in their leased workspaces.
 - Preserve original briefs, decisions, worker reports, and evidence.
 - Herdr accepting a prompt proves delivery only, not that the worker read it.
   A new worker report or the runtime status is the evidence that work continues.
-- Supervision runs only in Foreman turns; Paseo turns are collected with `task collect` before one non-interrupting status check, and workers never prompt the Foreman session.
+- Supervision runs only in Foreman turns; Paseo turns are collected with `task collect`, run by the session hook or by the session itself, before one non-interrupting status check, and workers never prompt the Foreman session.
 - Never infer a dead worker from unknown evidence, cross project boundaries, or silently choose a dispatch fallback.

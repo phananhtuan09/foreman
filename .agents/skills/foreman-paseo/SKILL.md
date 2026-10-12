@@ -14,7 +14,7 @@ Do not set a backend value in a shell startup file.
 
 Paseo routing lives in `config/model-routing.json`; Paseo-specific provider, model, mode, thinking, feature, and notes fields live in the matching `foreman-<profile>` entries in `config/paseo-agent-profiles.json`.
 After changing profiles, run `bin/foreman-paseo profiles sync` to update the selected Paseo home; this preserves profiles created in Paseo and does not run automatically during `init` or task creation.
-Use `bin/foreman-paseo task collect` at each supervision turn before `status` so finished-turn reports are read from the agent timeline.
+The session prompt hook runs `task collect` and one status check on every Foreman prompt; without the hook, run `bin/foreman-paseo task collect` and then `status --json --brief` at each supervision turn so finished-turn reports are read from the agent timeline.
 Paseo workers report exactly one JSON object with `status: done|blocked|progress` and a non-empty `summary`; they do not run `foreman report` or use the Herdr stop hook.
 Treat idle state, prompt acceptance, permissions, errors, invalid reports, and timeline gaps as insufficient evidence of completion.
 For all task operations, keep using this Paseo entrypoint; never retry a Paseo task through Herdr.

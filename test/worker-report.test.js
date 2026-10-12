@@ -6,7 +6,7 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, acceptTask,
-  recordReport, workerStopHook, sessionContext, sendWorkerMessage, fleetStatus,
+  recordReport, workerStopHook, sessionContext, sendWorkerMessage, fleetStatus, briefStatus,
   createDecision, answerDecision, deliverDecision, ValidationError, HerdrAdapter,
 } = require("../src/foreman");
 const { detectShellStartupFile, installShellEnv, ShellEnvError } = require("../src/shell-env");
@@ -199,6 +199,11 @@ test("status finds a worker that stopped without reporting and a missing worker 
     assert.equal(f.lists, 1);
     assert.equal(f.sent.length, sentBefore);
     assert.deepEqual(status.anomalies.map((issue) => [issue.taskId, issue.type]), [[one.task.id, "worker.idle-without-report"], [two.task.id, "worker.missing"]]);
+    const brief = briefStatus(status);
+    assert.deepEqual(brief.tasks.map((item) => item.taskId), [one.task.id, two.task.id]);
+    assert.deepEqual(brief.anomalies, status.anomalies);
+    assert.equal(brief.workers, undefined);
+    assert.ok(JSON.stringify(brief).length < JSON.stringify(status).length);
     recordReport({ roots: f.roots, paneId: "w1:p1", status: "progress", summary: "waiting" });
     assert.equal(fleetStatus({ roots: f.roots, adapter: f.adapter }).anomalies.some((issue) => issue.taskId === one.task.id), false);
     assert.equal(fs.existsSync(path.join(f.roots.foremanHome, "data", "events")), false);
@@ -216,6 +221,8 @@ test("session context lists unread reports once, adds anomalies, and ignores DEV
     assert.equal(sessionContext({ roots: f.roots, adapter: f.adapter, prompt: "status?", cwd: path.join(f.base, "gone") }), null);
     const context = sessionContext({ roots: f.roots, adapter: f.adapter, prompt: "tình hình sao rồi?", cwd: f.project });
     assert.match(context, new RegExp(`${task.id} project app @worker generation 1: done at .+; task is review-ready; report: .+generation-1-001-done\\.md`));
+    assert.match(context, /\n  \| .*done/, "the report text is inlined under its entry");
+    assert.doesNotMatch(context, /TASK: /, "the identity header is not repeated");
     assert.ok(f.meta(task.id).lastReport.readAt);
     assert.equal(sessionContext({ roots: f.roots, adapter: f.adapter }), null);
     const other = dispatch(f, "other");

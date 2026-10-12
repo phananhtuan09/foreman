@@ -193,7 +193,8 @@ Use `routing route --task <id>` to resume a task left in `routing` after an inte
 `status --project <id>` filters the same snapshot.
 It never interrupts a worker or starts recovery.
 For read-only tooling, `task list --json --summary` prints the non-accepted tasks without initializing the home, migrating records, or taking the lock.
-Paseo report collection is an explicit durable write, so run `task collect` before status during Paseo supervision.
+Paseo report collection is an explicit durable write; the session prompt hook runs it before its status check, and without the hook run `task collect` before status during Paseo supervision.
+`status --json --brief` prints a compact status without unbound runtime agents or full task records.
 It flags `worker.idle-without-report`, `worker.waiting-input`, `worker.dead`, `worker.missing`, `worker.mismatch`, and workspace, branch, lease, or pane mismatches.
 No background process runs; supervision happens only when Foreman handles a prompt.
 Commands wait up to 5 seconds for the home lock before failing.
