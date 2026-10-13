@@ -45,6 +45,7 @@ Use the selected backend wrapper for each Foreman command:
 bin/foreman-herdr init
 bin/foreman-herdr routing show
 bin/foreman-herdr project register --id app --root /path/to/app
+bin/foreman-herdr project remove --id app
 bin/foreman-herdr image stage
 bin/foreman-herdr task create --project app --brief-file brief.md --original "the user's own words" [--notes-file notes.md] [--image A-3f9c2e1a7b04]
 bin/foreman-herdr task brief --task T-000001 --text "Corrected instruction"
@@ -67,6 +68,7 @@ For Paseo, sync repo-managed agent profiles when their source files change, then
 bin/foreman-paseo profiles sync
 bin/foreman-paseo routing show
 bin/foreman-paseo project register --id app --root /path/to/app
+bin/foreman-paseo project remove --id app
 bin/foreman-paseo task create --project app --type scout --brief "Inspect the API and report risks."
 bin/foreman-paseo task confirm --task T-000001 --profile codex-luna
 bin/foreman-paseo task dispatch --task T-000001
