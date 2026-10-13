@@ -461,7 +461,7 @@ Foreman collects Paseo reports using the persisted timeline cursor and current e
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form question from Foreman, and a request to a `blocked` or `review-ready` task returns it to `working`.
 `foreman task continue` answers a report with the next round to the same worker, storing the instruction and the user's words, and optionally switching mode, resources, or interrupting a running round.
 `foreman task reassign` moves the task to a new worker, with a new profile if the user names one, and is not limited by the recovery attempt bound.
-`foreman task brief` replaces the brief of a task that has no worker yet.
+`foreman task brief` replaces the brief of a task that has no worker yet, and the request of a pending handoff until its successor receives it; with `--original`, it appends the user's words to that pending round.
 Workers never edit the project registry or task metadata.
 
 ### 9.4 Scheduling and concurrency

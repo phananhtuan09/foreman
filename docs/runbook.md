@@ -90,7 +90,7 @@ Without `--resources`, a ship task claims the project workspace exclusively.
 When the claim overlaps a lease another task holds, `task dispatch`, `task adopt`, `task recover`, `task reassign`, and a `task continue` round that changes the lease still assign the task, print a `foreman: warning:` line per overlap, and record the overlaps under `resourceLease.conflicts`.
 `task schedule` does not make that choice for the human: it leaves an overlapping task `pending`.
 `--brief` holds the instruction for the worker, which Foreman may rewrite from the user's words and the task's reports; `--original` holds the user's own words verbatim and is what the router reads.
-`task brief` replaces the brief of a task that has no worker yet; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
+`task brief` replaces the brief of a task that has no worker yet, or the request of a pending handoff until its successor receives it; `--original` appends the user's words to that pending round; `--notes` holds optional Foreman context, such as related report paths, and reaches the worker as a separate `Foreman notes` section.
 Foreman adds the resources and backend-specific report instructions to every worker prompt, so a brief does not repeat them; the prompt has no separate rules section.
 
 A Herdr worker reports from its own pane:

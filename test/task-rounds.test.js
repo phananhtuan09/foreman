@@ -545,6 +545,26 @@ test("a failed reassignment keeps the requested round and handoff on the queued 
   } finally { f.cleanup(); }
 });
 
+test("a pending handoff's request can be corrected until its successor receives it", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = dispatch(f, { type: "scout" });
+    report(f, assignment, "done", "investigated");
+    idle(f, assignment);
+    f.state.failSend = true;
+    assert.throws(() => reassign(f, task.id, { type: "ship", text: "Add the key.", original: "sửa đi" }), /did not confirm brief delivery|delivery/);
+    const replaced = replaceTaskBrief({ roots: f.roots, taskId: task.id, text: "Check readiness first.", original: "kiểm tra trước đã" });
+    assert.deepEqual(replaced, { taskId: task.id, handoffRound: 2, nextRequest: "Check readiness first.", status: "queued" });
+    assert.equal(f.meta(task.id).handoff.nextRequest.text, "Check readiness first.");
+    assert.equal(JSON.parse(fs.readFileSync(f.file(task.id, "handoff.json"), "utf8")).nextRequest.text, "Check readiness first.");
+    assert.deepEqual(rounds(f, task.id).map((round) => [round.round, round.sent, round.original]), [[2, "Check readiness first.", "sửa đi\nkiểm tra trước đã"]]);
+    f.state.failSend = false;
+    assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter });
+    assert.match(f.sent.at(-1).text, /## User request \(round 2\)\nCheck readiness first\.\n\n## Report/);
+    assert.throws(() => replaceTaskBrief({ roots: f.roots, taskId: task.id, text: "Too late." }), /already has a worker; send a new round with task continue/);
+  } finally { f.cleanup(); }
+});
+
 test("a reassignment that fails before the old worker is stopped restores mode and marks the round failed", () => {
   const f = fixture();
   try {

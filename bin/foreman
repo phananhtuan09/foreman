@@ -112,7 +112,7 @@ const usage = [
   "  task recover --task ID [--owner OWNER]",
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
-  "  task brief --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...   (replace the brief of a task that has no worker yet; --image replaces round one's images)",
+  "  task brief --task ID (--text TEXT|--text-file FILE) [--original TEXT] [--image ID|FILE]...   (replace the brief of a task that has no worker yet, or the request of a pending handoff with --original for the user's words; --image replaces round one's images)",
   "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...",
   "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE [--image ID|FILE]...] [--type ship|scout] [--resources JSON]",
   "  task message --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...",
@@ -259,7 +259,7 @@ function main() {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task brief requires --text or --text-file");
-    output(core.replaceTaskBrief({ roots: home, taskId: arg("--task"), text, images: imageSources(home) }));
+    output(core.replaceTaskBrief({ roots: home, taskId: arg("--task"), text, images: imageSources(home), original: arg("--original") }));
     return;
   }
   if (command === "task" && action === "continue") {

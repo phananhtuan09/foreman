@@ -1673,11 +1673,15 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
 }
 
 // Replaces the worker-facing brief of a task that has no worker yet, so the user can correct a rewrite before round one is sent.
-function replaceTaskBrief({ roots, taskId, text, images }) {
+// A pending handoff whose successor has not received its next request is corrected the same way.
+function replaceTaskBrief({ roots, taskId, text, images, original }) {
   if (typeof text !== "string" || !text.trim()) throw new ValidationError("A task brief must be non-empty text");
+  if (original !== undefined && (typeof original !== "string" || !original.trim())) throw new ValidationError("Original wording must be non-empty text");
   const prepared = prepareImages(images);
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
+    if (isUndeliveredHandoff(meta)) return reviseHandoffRequestUnlocked({ roots, meta, text, original, images });
+    if (original !== undefined) throw new ValidationError("Original wording can only be corrected for a pending handoff");
     if (!["routing", "queued", "pending"].includes(meta.status) || meta.endpoint || meta.owner) throw new ValidationError(`Task ${taskId} already has a worker; send a new round with task continue`);
     atomicWrite(path.join(taskDir(roots.foremanHome, taskId), "brief.md"), text);
     // Without new images, round one keeps the ones it has.
@@ -1686,6 +1690,25 @@ function replaceTaskBrief({ roots, taskId, text, images }) {
     attachments.setBriefImagesUnlocked({ roots, taskId, refs });
     return { taskId, brief: text, status: meta.status, attachments: refs };
   });
+}
+
+// The handoff's request is undelivered while the task has no endpoint yet, because the successor only receives it at dispatch.
+function isUndeliveredHandoff(meta) {
+  return Boolean(meta.handoffPending) && Boolean(meta.handoff?.nextRequest) && !meta.endpoint && ["queued", "pending"].includes(meta.status);
+}
+
+// The round record and the handoff keep the same text, and the user's words for the round are appended in the order they were sent.
+function reviseHandoffRequestUnlocked({ roots, meta, text, original, images }) {
+  if (images !== undefined) throw new ValidationError("Images of a pending handoff cannot be replaced by task brief");
+  const { round } = meta.handoff.nextRequest;
+  const record = readJson(coordination.roundFile(roots.foremanHome, meta.taskId, round));
+  if (record.status !== "pending") throw new ValidationError(`Round ${round} of ${meta.taskId} is ${record.status}; its request can no longer be corrected`);
+  const originalText = original === undefined ? record.original : `${record.original}\n${original}`;
+  coordination.writeRoundUnlocked({ roots, record: { ...record, sent: text, original: originalText } });
+  const handoff = { ...meta.handoff, nextRequest: { ...meta.handoff.nextRequest, text } };
+  atomicWrite(path.join(taskDir(roots.foremanHome, meta.taskId), "handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`);
+  atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...meta, handoff });
+  return { taskId: meta.taskId, handoffRound: round, nextRequest: text, status: meta.status };
 }
 
 function createDecision({ roots, taskId, finding, why, options, impact, evidence, recommendation, blocker = false }) {
