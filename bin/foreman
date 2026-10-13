@@ -99,6 +99,7 @@ const usage = [
   "  routing route --task ID",
   "  profiles sync [--dry-run]   (Paseo: sync repo-owned profiles into the selected Paseo home)",
   "  project register --id ID --root PATH [--name NAME]",
+  "  project remove --id ID   (refused while the project has task records; the project workspace stays on disk)",
   "  image stage [--transcript FILE]   (copy the images of the user's latest message into the Foreman inbox; prints their IDs)",
   "  task create --project ID (--brief TEXT|--brief-file FILE) [--original TEXT|--original-file FILE] [--notes TEXT|--notes-file FILE] [--type ship|scout] [--dependency ID] [--image ID|FILE]...",
   "  task list [--project ID] [--json]",
@@ -196,6 +197,10 @@ function main() {
   }
   if (command === "project" && action === "register") {
     output(core.registerProject({ roots: home, id: arg("--id"), name: arg("--name", arg("--id")), root: arg("--root") }));
+    return;
+  }
+  if (command === "project" && action === "remove") {
+    output(core.removeProject({ roots: home, id: arg("--id") }));
     return;
   }
   if (command === "task" && action === "create") {

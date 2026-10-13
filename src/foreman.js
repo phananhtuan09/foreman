@@ -384,6 +384,18 @@ function registerProject({ roots, id, name = id, root, deliveryMode = "local-onl
   });
 }
 
+function removeProject({ roots, id }) {
+  return withHomeLock(roots.foremanHome, () => {
+    initHome(roots);
+    const projects = loadProjects(roots.foremanHome);
+    const project = projects.find((item) => item.id === id);
+    if (!project) throw new ValidationError(`Unknown project: ${id}`);
+    if (listTasks({ roots, projectId: id }).length) throw new ValidationError(`Project has task records and cannot be removed: ${id}`);
+    atomicJson(projectFile(roots.foremanHome), { schemaVersion: 1, version: 1, projects: projects.filter((item) => item !== project) });
+    return project;
+  });
+}
+
 function routingConfigFile(root) { return path.join(root, "config", "model-routing.json"); }
 
 function parseCommandString(value) {
@@ -2162,7 +2174,7 @@ function validateDispatchProfile(profile, capabilities = {}) {
 module.exports = {
   ForemanError, HomeLockError, ValidationError, StaleGenerationError, CleanupRefusedError, DeliveryError, ResourceBusyError,
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
-  registerProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
+  registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, REPORT_STATUSES,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,

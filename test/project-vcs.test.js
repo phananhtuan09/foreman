@@ -5,7 +5,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
-  resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, acceptTask,
+  resolveRoots, initHome, registerProject, removeProject, createTask, assignTask, recordReport, acceptTask,
   fleetStatus, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
 
@@ -54,6 +54,23 @@ function report(f, assignment, status, summary) {
 function dispatch(f, task, resources) {
   return assignTask({ roots: f.roots, taskId: task.id, owner: "worker", adapter: f.adapter, resources });
 }
+
+test("removal drops the registry entry only when the project has no task records", () => {
+  const f = fixture();
+  try {
+    const plain = plainProject(f.base, "plain");
+    const other = plainProject(f.base, "other");
+    registerProject({ roots: f.roots, id: "plain", root: plain });
+    registerProject({ roots: f.roots, id: "other", root: other });
+    createTask({ roots: f.roots, projectId: "plain", brief: "keep history" });
+    assert.throws(() => removeProject({ roots: f.roots, id: "plain" }), /task records/);
+    assert.throws(() => removeProject({ roots: f.roots, id: "missing" }), /Unknown project/);
+    assert.deepEqual(removeProject({ roots: f.roots, id: "other" }), { id: "other", name: "other", root: other, vcs: "none", deliveryMode: "local-only", enabled: true });
+    const registry = JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "projects.json"), "utf8"));
+    assert.deepEqual(registry.projects.map((item) => item.id), ["plain"]);
+    assert.equal(fs.existsSync(other), true);
+  } finally { f.cleanup(); }
+});
 
 test("registration records Git presence without a default branch", () => {
   const f = fixture();
