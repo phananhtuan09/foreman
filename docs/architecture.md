@@ -4,6 +4,7 @@ Foreman keeps global fleet state in a private file home and identifies each regi
 An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
+`src/next-action.js` builds a task's shown next action and decides whether it still matches the task.
 `src/attention.js` owns the pending points of each task in `data/tasks/<taskId>/attention.json` and the read-only review across all live tasks.
 `src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.

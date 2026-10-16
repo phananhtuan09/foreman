@@ -315,3 +315,42 @@ test("a real Foreman agent reviews pending points on request and records a clear
     assert.doesNotMatch(again, /chọn A \(chuyển tại chỗ\) hay B/, "an answered decision is not asked again");
   });
 });
+
+test("a real Foreman agent proposes the missing step after a report and sends exactly that step when the user agrees", { skip: !enabled, timeout: 1500000 }, async (t) => {
+  await withLiveFixture(async (f) => {
+    const { roots, adapter } = f;
+    // The user's request has two parts; the first round asked only the first, so the second is still required.
+    const task = core.createTask({
+      roots, projectId: "paseo-live", type: "scout", backend: "paseo",
+      brief: "Read README.md and report only its first line. Do not edit any file.",
+      original: "Đọc README.md, báo dòng đầu tiên, sau đó cho tôi biết file có bao nhiêu dòng. Không sửa file nào.",
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
+    });
+    core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
+    f.assigned = core.assignTask({ roots, taskId: task.id, adapter });
+    await waitForReport(f, task.id, 1);
+
+    const foremanAgent = await startForemanAgent(f, "foreman-next-action-live");
+    const presented = askForeman(f, foremanAgent, "foreman-paseo tình hình sao rồi?");
+    t.diagnostic(`report turn:\n${presented}`);
+    const proposal = core.reconstructTask({ roots, taskId: task.id }).meta.nextAction;
+    assert.ok(proposal, "the Foreman agent recorded the next action it showed");
+    assert.match(presented, new RegExp(`▶ ${task.id} · Đề xuất:`));
+    assert.equal(proposal.kind, "round");
+    assert.match(proposal.instruction, /line/i, "the missing line count is the next step");
+    assert.equal(core.listMessages({ roots }).filter((message) => message.taskId === task.id).length, 1, "proposing sends nothing");
+
+    const sent = askForeman(f, foremanAgent, "gửi bước này");
+    t.diagnostic(`send turn:\n${sent}`);
+    const meta = core.reconstructTask({ roots, taskId: task.id }).meta;
+    assert.equal(meta.round, 2, "the approved step became the next round");
+    assert.equal(meta.nextAction, null);
+    const round = JSON.parse(fs.readFileSync(path.join(roots.foremanHome, "data", "tasks", task.id, "rounds", "round-002.json"), "utf8"));
+    assert.equal(round.sent, proposal.instruction, "the worker received exactly the step the user approved");
+    assert.match(round.original, /gửi bước này/);
+    await waitForReport(f, task.id, 2);
+    assert.match(core.reconstructTask({ roots, taskId: task.id }).report, /\d/, "the worker reported the line count");
+    core.acceptTask({ roots, taskId: task.id, adapter });
+    f.assigned = null;
+  });
+});

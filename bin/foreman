@@ -124,7 +124,11 @@ const usage = [
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
   "  task brief --task ID (--text TEXT|--text-file FILE) [--original TEXT] [--image ID|FILE]...   (replace the brief of a task that has no worker yet, or the request of a pending handoff with --original for the user's words; --image replaces round one's images)",
-  "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...",
+  "  task continue --task ID (--text TEXT|--text-file FILE|--next) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...   (--next sends the proposed round's instruction, refused once the task moved on)",
+  "  task history --task ID   (read-only: the user's words, rounds, recent reports, decisions, pending points, and next action)",
+  "  next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout]   (record the one next action shown after a report)",
+  "  next show [--task ID]   (shown next actions and whether each still matches its task)",
+  "  next clear --task ID   (the user declined or postponed the step)",
   "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE [--image ID|FILE]...] [--type ship|scout] [--resources JSON]",
   "  task message --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
@@ -293,10 +297,10 @@ function main() {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
-    if (!text) throw new Error("task continue requires --text or --text-file");
+    if (!text && !flag("--next")) throw new Error("task continue requires --text, --text-file, or --next");
     const original = originalText();
     if (!original) throw new Error("task continue requires --original or --original-file");
-    const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home) });
+    const result = core.continueTask({ roots: home, taskId: arg("--task"), text: text || undefined, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home), fromNext: flag("--next") });
     warnResourceConflicts(result.task);
     syncHeartbeatAfter(home);
     output(result);
@@ -337,6 +341,17 @@ function main() {
     syncHeartbeatAfter(home);
     output(result);
     return;
+  }
+  if (command === "task" && action === "history") { output(core.taskHistory({ roots: home, taskId: arg("--task") })); return; }
+  if (command === "next") {
+    if (action === "propose") {
+      assertSelectedTaskBackend(arg("--task"));
+      const instructionFile = arg("--instruction-file");
+      output(core.proposeNextAction({ roots: home, taskId: arg("--task"), kind: arg("--kind"), text: arg("--text"), instruction: instructionFile ? fs.readFileSync(path.resolve(instructionFile), "utf8") : arg("--instruction"), type: arg("--type") }));
+      return;
+    }
+    if (action === "show") { output(core.nextActions({ roots: home, taskId: arg("--task") })); return; }
+    if (action === "clear") { output(core.clearNextAction({ roots: home, taskId: arg("--task") })); return; }
   }
   if (command === "attention") {
     const taskId = arg("--task");
