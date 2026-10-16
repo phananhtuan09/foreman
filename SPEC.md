@@ -476,6 +476,7 @@ Foreman collects Paseo reports using the persisted timeline cursor and current e
 Foreman-to-worker communication uses the durable message outbox and text prompts in section 7.7; `foreman task message` sends a free-form question from Foreman, and a request to a `blocked` or `review-ready` task returns it to `working`.
 `foreman task continue` answers a report with the next round to the same worker, storing the instruction and the user's words, and optionally switching mode, resources, or interrupting a running round.
 `foreman task reassign` moves the task to a new worker, with a new profile if the user names one, and is not limited by the recovery attempt bound.
+`foreman task continue --next` sends the round of the task's shown next action (section 9.5) instead of new text.
 `foreman task brief` replaces the brief of a task that has no worker yet, and the request of a pending handoff until its successor receives it; with `--original`, it appends the user's words to that pending round.
 Workers never edit the project registry or task metadata.
 
@@ -490,6 +491,17 @@ They are not serialized only because they share a repository.
 When isolated workspaces are required, the client must prepare and identify them before dispatch because Foreman does not create or switch worktrees.
 
 An idle endpoint may receive another task only after its prior assignment is terminal, no message to it is pending, its resource lease is released safely, and a new assignment generation is bound and verified.
+
+### 9.5 Next action
+
+When Foreman presents a new worker report, it may show one next action for that task in a single highlight line: a round the worker can do, a decision for the user, a clarification, or accepting the task.
+`next propose` records it in task metadata as `nextAction` with its kind, the line shown, the worker instruction of a round (rewritten as section 5.6 allows, keeping the limits still in force), and the state it was based on: last report, round, generation, lifecycle status, and decision.
+A stored next action is not permission to act.
+When the user approves the shown step, `task continue --next` sends exactly its stored instruction together with the user's words, and refuses once the task has moved on: a newer report, another round or generation, a different status, or a changed decision.
+The shown line stands for its instruction, so the user's approval of a current next action is the confirmation section 5.6 requires.
+Any delivered round clears the next action, `next clear` drops a declined or postponed one without dropping the request, and it leaves with the task at acceptance.
+Proposing never prompts, interrupts, or accepts anything, and an accept proposal is allowed only for a `review-ready` task.
+`task history` is the read-only view a next action is chosen from: the user's words, rounds, recent reports, decisions, pending points, and the shown next action.
 
 ## 10. Supervision cycle
 
@@ -826,6 +838,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Paseo report collection runs explicitly through `task collect` and during Paseo supervision turns; it uses the durable timeline cursor to recover missed finish events and does not treat idle or prompt acceptance as completion.
 - Permission requests, worker errors, cancellations, timeline gaps, and missing or malformed reports remain visible for review; Foreman does not synthesize a successful report.
 - Paseo agent acceptance archives the bound endpoint and releases resources only after endpoint closure is verified.
+- Next actions are implemented as section 9.5 describes, with `next propose|show|clear`, `task continue --next`, and `task history`.
 - Pending points are implemented as section 7.12 describes, with the `foreman-attention` skill reviewing them on request.
 - Paseo heartbeat supervision is implemented: `heartbeat sync` manages one native heartbeat for the Foreman agent through the Paseo CLI, the prompt hook recognizes Foreman's heartbeat turns, and `notice ack` records which notices the user was told, as section 10.4 describes.
 - `bin/foreman` is a thin wrapper over the core modules.
