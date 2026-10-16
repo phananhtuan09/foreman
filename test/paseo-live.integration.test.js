@@ -221,7 +221,8 @@ test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects th
     core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
     f.assigned = core.assignTask({ roots, taskId: task.id, adapter });
 
-    const foremanEnv = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${roots.foremanHome}`, "FOREMAN_BACKEND=paseo", `FOREMAN_PASEO_HOME=${f.paseoHome}`, `FOREMAN_PASEO_COMMAND=${paseoCommand}`];
+    // `init` in the agent must not rewrite the user's shell startup file.
+    const foremanEnv = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${roots.foremanHome}`, "FOREMAN_BACKEND=paseo", `FOREMAN_PASEO_HOME=${f.paseoHome}`, `FOREMAN_PASEO_COMMAND=${paseoCommand}`, `FOREMAN_SHELL_RC=${path.join(path.dirname(f.paseoHome), "shell-rc")}`];
     const created = JSON.parse(paseo(["run", "-d", "--json", "--provider", "claude", "--model", process.env.FOREMAN_LIVE_FOREMAN_MODEL || "claude-sonnet-5-5", "--mode", "bypassPermissions",
       "--cwd", sourceRoot, "--title", "foreman-heartbeat-live", ...foremanEnv.flatMap((entry) => ["--env", entry]), "--home", f.paseoHome,
       "DEV live heartbeat fixture: reply with the single word READY and do nothing else."], f.env));
