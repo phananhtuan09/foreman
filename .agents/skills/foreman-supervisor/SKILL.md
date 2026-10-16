@@ -16,6 +16,7 @@ Use the active backend wrapper (`bin/foreman-herdr` or `bin/foreman-paseo`) for 
    A `blocked` report needs the user: show what the worker needs and its "Next steps", then answer with a new round through `bin/foreman task continue` once the user replies and agrees.
    Create a Decision Package only when you yourself see a choice that needs the user's authority.
    A `progress` report means the worker stopped before finishing: decide whether to send a follow-up.
+   Keep the task's pending points current from each report and each answer of the user, as `.agents/skills/foreman-attention/SKILL.md` describes; do not show them unless the user asks.
 3. Act on each anomaly:
    - `worker.idle-without-report`: in Herdr mode, ask the worker with `bin/foreman-herdr task message` to continue or report with the Herdr report command; in Paseo mode, ask it to return the required JSON report in its next turn.
    - `worker.waiting-input`: tell the user which worker waits for input.

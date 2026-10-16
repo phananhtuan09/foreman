@@ -6,6 +6,7 @@ The Paseo entrypoint supports common setup and reads, but worker runtime operati
 `foreman-control` contains the shared operational workflow and is not a backend selector.
 `foreman-supervisor` describes the per-turn check of new worker reports and worker health.
 `foreman-recovery` describes confirmed dead or missing worker handoff.
+`foreman-attention` reviews the pending points of every unfinished task on request and describes how Foreman keeps them current.
 `foreman-paseo-heartbeat` describes the Paseo heartbeat Foreman manages for its own session and each heartbeat supervision turn.
 
 The files under `legacy/` are retained for historical parity work and are not production entry points.
