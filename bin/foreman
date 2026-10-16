@@ -128,6 +128,11 @@ const usage = [
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT [--image ID|FILE]...",
   "  decision deliver --task ID --decision ID",
+  "  attention add --task ID --owner user|worker --kind decision|obligation|check --text TEXT [--action TEXT] [--report FILE|--user]   (record a pending point of a live task)",
+  "  attention resolve --task ID --point P1 --how answered|verified|dropped|limit-accepted --text TEXT [--report FILE|--user]",
+  "  attention snooze --task ID --point P1 --until tomorrow|TIME",
+  "  attention reopen --task ID --point P1 --why TEXT",
+  "  attention list [--json] [--limit N] [--task ID]   (review every live task on every project; --task shows one task's points, open and closed)",
   "  status [--project ID] [--json [--brief]]",
   "  supervise [--json]   (one supervision check for a turn without the prompt hook: Paseo collection, one status check, and the notices not yet told)",
   "  notice ack --key KEY [--key KEY]...   (record that the user was told these notices)",
@@ -330,6 +335,20 @@ function main() {
     syncHeartbeatAfter(home);
     output(result);
     return;
+  }
+  if (command === "attention") {
+    const taskId = arg("--task");
+    const pointId = arg("--point");
+    if (action === "list") {
+      if (taskId) { output(core.taskAttention({ roots: home, taskId })); return; }
+      const review = core.attentionReview({ roots: home, limit: arg("--limit") === undefined ? 3 : Number(arg("--limit")) });
+      output(flag("--json") ? review : core.renderAttention(review));
+      return;
+    }
+    if (action === "add") { output(core.addAttentionPoint({ roots: home, taskId, owner: arg("--owner"), kind: arg("--kind"), text: arg("--text"), action: arg("--action"), report: arg("--report"), user: flag("--user") })); return; }
+    if (action === "resolve") { output(core.resolveAttentionPoint({ roots: home, taskId, pointId, how: arg("--how"), text: arg("--text"), report: arg("--report"), user: flag("--user") })); return; }
+    if (action === "snooze") { output(core.snoozeAttentionPoint({ roots: home, taskId, pointId, until: arg("--until") })); return; }
+    if (action === "reopen") { output(core.reopenAttentionPoint({ roots: home, taskId, pointId, why: arg("--why") })); return; }
   }
   if (command === "supervise") {
     const adapter = runtimeAdapter();

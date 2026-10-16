@@ -237,6 +237,7 @@ data/tasks/T-000123/
 ├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
 ├── decisions/        versioned Decision Packages and verbatim human responses
 ├── reports/          verbatim worker reports, one file per report
+├── attention.json    pending points kept across rounds (section 7.12)
 └── handoff.json      latest recovery handoff, written only by dead-worker recovery
 ```
 
@@ -381,6 +382,17 @@ A status check compares each assigned task with one runtime listing and classifi
 An `idle` worker on a `working` task that has not reported since its last prompt is flagged `worker.idle-without-report`.
 Project, workspace, branch, lease, and pane mismatches are reported as anomalies and make the state `unknown` unless it is `dead` or `missing`.
 A status check never writes state, interrupts a worker, or starts recovery.
+
+### 7.12 Pending points
+
+A pending point is one obligation of the requested work, one decision waiting for the user, or one check still missing that affects the result.
+Points live in the task's `attention.json`, written only by the Foreman session through `attention` commands under the home lock, and leave with the task at acceptance or discard; no task or subtask is created for them.
+Each point has a stable ID within its task (`P1`, `P2`, ...), an owner (`user` when the user must act, `worker` when the worker must still do or prove it), a kind (`decision`, `obligation`, or `check`), its text and optional action, and its source: the request, the user's words, or one of the task's own report files, with its round and generation.
+A point closes as `answered`, `verified`, `dropped`, or `limit-accepted`, keeping the user's words or the evidence report; a closed point is kept, so adding the same words again is refused, and reopening it records why and keeps the earlier resolution.
+An answer is recorded when the user gives it, independently of delivering it to the worker.
+A point can be snoozed until a time, `tomorrow` meaning the start of the next local day, without being closed.
+A worker report is input to evaluate and never closes or overrides a point by itself; a worker's "Next steps" suggestion becomes a point only when the request or the user requires it.
+`attention list` reviews every task that has not ended on every project and shows at most three open, unsnoozed points in a separate highlight block, user points first, then decisions, obligations, and checks, oldest first, with the count of the rest; it reads durable state only and never prompts or interrupts a worker or changes a task.
 
 ## 8. Runtime abstraction
 
@@ -814,6 +826,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Paseo report collection runs explicitly through `task collect` and during Paseo supervision turns; it uses the durable timeline cursor to recover missed finish events and does not treat idle or prompt acceptance as completion.
 - Permission requests, worker errors, cancellations, timeline gaps, and missing or malformed reports remain visible for review; Foreman does not synthesize a successful report.
 - Paseo agent acceptance archives the bound endpoint and releases resources only after endpoint closure is verified.
+- Pending points are implemented as section 7.12 describes, with the `foreman-attention` skill reviewing them on request.
 - Paseo heartbeat supervision is implemented: `heartbeat sync` manages one native heartbeat for the Foreman agent through the Paseo CLI, the prompt hook recognizes Foreman's heartbeat turns, and `notice ack` records which notices the user was told, as section 10.4 describes.
 - `bin/foreman` is a thin wrapper over the core modules.
 - Default `status` and `task list` render the grouped Vietnamese report.

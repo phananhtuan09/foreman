@@ -202,6 +202,13 @@ No background process runs; supervision happens only when Foreman handles a prom
 Commands wait up to 5 seconds for the home lock before failing.
 A lock left by a process that died on this host is removed automatically; a lock from another host or a live process is never broken.
 
+### Pending points
+
+`attention list` reviews every unfinished task on every project and prints a highlight block of at most three open points, user points first, with the count of the rest; `--limit N`, `--json`, and `--task ID` show more.
+`attention add --task ID --owner user|worker --kind decision|obligation|check --text TEXT [--action TEXT] [--report FILE|--user]` records a point; the same words as an existing point are refused.
+`attention resolve --task ID --point P1 --how answered|verified|dropped|limit-accepted --text TEXT [--report FILE|--user]` closes it, `attention snooze --task ID --point P1 --until tomorrow|TIME` hides it until then, and `attention reopen --task ID --point P1 --why TEXT` reopens a closed point.
+Points live in `data/tasks/<id>/attention.json` and are deleted with the task at acceptance or discard.
+
 ### Notices and the Paseo heartbeat
 
 The session context and `supervise` list `Not yet told to the user` notices: a review-ready result, a blocker, a waiting decision, an anomaly, or a failed check, each with a key such as `T-000001/review-ready/generation-1-001-done.md`.
