@@ -202,6 +202,13 @@ No background process runs; supervision happens only when Foreman handles a prom
 Commands wait up to 5 seconds for the home lock before failing.
 A lock left by a process that died on this host is removed automatically; a lock from another host or a live process is never broken.
 
+### Next action
+
+`next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout]` records the one next step Foreman shows after a report and prints its highlight line.
+`next show [--task ID]` lists shown next actions with `current` and the reasons one is out of date; `next clear --task ID` drops one the user declined or postponed.
+`task continue --task ID --next --original "gửi bước này"` sends the stored instruction of a current round proposal and refuses after a newer report, round, generation, status, or decision.
+`task history --task ID` prints, read-only, the user's words, every delivered round, recent reports, decisions, pending points, and the shown next action.
+
 ### Pending points
 
 `attention list` reviews every unfinished task on every project and prints a highlight block of at most three open points, user points first, with the count of the rest; `--limit N`, `--json`, and `--task ID` show more.
