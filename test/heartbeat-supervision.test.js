@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
-  resolveRoots, sessionContext, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
+  resolveRoots, createTask, fleetStatus, sessionContext, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
 } = require("../src/foreman");
 const { HEARTBEAT_PROMPT, HEARTBEAT_NAME, readSupervision, supervisionFile } = require("../src/supervision");
 const { PaseoAdapter } = require("../src/paseo");
@@ -268,4 +268,13 @@ test("the Paseo adapter manages heartbeats through the Paseo CLI as the Foreman 
     if (prior.home === undefined) delete process.env.FOREMAN_PASEO_HOME; else process.env.FOREMAN_PASEO_HOME = prior.home;
     f.cleanup();
   }
+});
+
+test("a Paseo task waiting for dispatch has no runtime anomaly to tell", () => {
+  const f = heartbeatFixture();
+  try {
+    createTask({ roots: f.roots, projectId: "fixture", brief: "Inspect later.", backend: "paseo", routingRunner: () => ({ profile: "codex-luna", reason: "default" }) });
+    assert.deepEqual(fleetStatus({ roots: f.roots, adapter: f.adapter }).anomalies, []);
+    assert.deepEqual(supervisionCheck({ roots: f.roots, adapter: f.adapter }).notices, []);
+  } finally { f.cleanup(); }
 });
