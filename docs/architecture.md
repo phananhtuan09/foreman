@@ -4,6 +4,7 @@ Foreman keeps global fleet state in a private file home and identifies each regi
 An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
+`src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
 `bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and selects the matching runtime adapter.
 All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, the user's original wording, round records, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.
