@@ -8,6 +8,7 @@ const coordination = require("./coordination");
 const paseoRouting = require("./paseo-routing");
 const attachments = require("./attachments");
 const supervision = require("./supervision");
+const attention = require("./attention");
 
 class ForemanError extends Error {}
 class HomeLockError extends ForemanError {}
@@ -2247,6 +2248,63 @@ function syncHeartbeat({ roots, adapter, agentId, anomalies, cron, enable }) {
   return supervision.syncHeartbeat({ home: roots.foremanHome, adapter, agentId, metas, anomalies, cron, enable, at: now(), withLock });
 }
 
+// Pending points belong to a live task; an accepted or discarded task has none.
+function liveTask(home, taskId) {
+  const meta = readMeta(home, taskId);
+  if (["accepted", "cleaned"].includes(meta.status)) throw new ValidationError(`Task ${taskId} has ended`);
+  return meta;
+}
+
+// A point taken from a worker report names that report, which must be one of the task's own reports.
+function attentionSource(home, meta, { report, user }) {
+  if (report && user) throw new ValidationError("A point comes from a report or from the user, not both");
+  if (!report) return { type: user ? "user" : "request", ref: null, round: meta.round || 1 };
+  const file = path.resolve(report);
+  const reports = path.join(taskDir(home, meta.taskId), "reports");
+  if (!isWithin(reports, file) || !fs.existsSync(file)) throw new ValidationError(`Report is not a report of ${meta.taskId}: ${report}`);
+  const round = Number(/^ROUND: (\d+)$/m.exec(fs.readFileSync(file, "utf8").split("\n\n")[0])?.[1] || 1);
+  return { type: "report", ref: file, round };
+}
+
+function addAttentionPoint({ roots, taskId, owner, kind, text, action, report, user }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = liveTask(roots.foremanHome, taskId);
+    try { return attention.addPointUnlocked({ home: roots.foremanHome, meta, owner, kind, text, action, source: attentionSource(roots.foremanHome, meta, { report, user }), at: now() }); }
+    catch (error) { throw error instanceof ForemanError ? error : new ValidationError(error.message); }
+  });
+}
+
+function changeAttentionPoint(roots, taskId, change) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = liveTask(roots.foremanHome, taskId);
+    try { return change(meta); }
+    catch (error) { throw error instanceof ForemanError ? error : new ValidationError(error.message); }
+  });
+}
+
+function resolveAttentionPoint({ roots, taskId, pointId, how, text, report, user }) {
+  return changeAttentionPoint(roots, taskId, (meta) => attention.resolvePointUnlocked({ home: roots.foremanHome, taskId, pointId, how, text, source: report || user ? attentionSource(roots.foremanHome, meta, { report, user }) : null, at: now() }));
+}
+
+function snoozeAttentionPoint({ roots, taskId, pointId, until }) {
+  return changeAttentionPoint(roots, taskId, () => attention.snoozePointUnlocked({ home: roots.foremanHome, taskId, pointId, until: attention.snoozeUntil(until), at: now() }));
+}
+
+function reopenAttentionPoint({ roots, taskId, pointId, why }) {
+  return changeAttentionPoint(roots, taskId, () => attention.reopenPointUnlocked({ home: roots.foremanHome, taskId, pointId, why, at: now() }));
+}
+
+// Reads durable state only: it never prompts, interrupts, or changes a task.
+function attentionReview({ roots, limit = 3 }) {
+  initHome(roots);
+  return attention.reviewAttention({ home: roots.foremanHome, metas: listTasks({ roots }), projects: loadProjects(roots.foremanHome), at: now(), limit });
+}
+
+function taskAttention({ roots, taskId }) {
+  liveTask(roots.foremanHome, taskId);
+  return attention.readAttention(roots.foremanHome, taskId);
+}
+
 function validateDispatchProfile(profile, capabilities = {}) {
   if (profile === undefined || profile === null) return null;
   if (typeof profile !== "object" || !profile.name) throw new ValidationError("Dispatch profile must have a name");
@@ -2268,6 +2326,7 @@ module.exports = {
   registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
+  addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention: attention.renderAttention,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, taskSummaries, fleetStatus, briefStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
