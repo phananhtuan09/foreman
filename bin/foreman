@@ -62,6 +62,14 @@ function warnResourceConflicts(meta) {
     process.stderr.write(`foreman: warning: ${conflict.requested.key} (${conflict.requested.mode}) overlaps ${conflict.held.key} (${conflict.held.mode}) held by ${conflict.taskId} @${conflict.owner}\n`);
   }
 }
+// In Paseo mode, commands that start or end watched work keep the Foreman heartbeat in step; a failure never fails the command.
+function syncHeartbeatAfter(home) {
+  if (selectedBackend() !== "paseo") return;
+  try {
+    const result = core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID });
+    if (!["none", "unavailable"].includes(result.action)) process.stderr.write(`foreman: heartbeat ${result.action}${result.heartbeatId ? ` ${result.heartbeatId}` : ""}${result.reason ? `: ${result.reason}` : ""}\n`);
+  } catch (error) { process.stderr.write(`foreman: heartbeat sync failed: ${error.message}\n`); }
+}
 function output(value) {
   if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -121,6 +129,9 @@ const usage = [
   "  decision answer --task ID --decision ID --response TEXT [--image ID|FILE]...",
   "  decision deliver --task ID --decision ID",
   "  status [--project ID] [--json [--brief]]",
+  "  supervise [--json]   (one supervision check for a turn without the prompt hook: Paseo collection, one status check, and the notices not yet told)",
+  "  notice ack --key KEY [--key KEY]...   (record that the user was told these notices)",
+  "  heartbeat sync [--cron EXPR] [--enable|--disable]   (Paseo: create, update, or delete this Foreman agent's heartbeat to match watched work)",
   "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
@@ -157,7 +168,7 @@ function main() {
       const payload = hookPayload();
       const backend = sessionBackend();
       const adapter = backend ? runtimeAdapter(backend) : null;
-      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id });
+      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id, agentId: process.env.PASEO_AGENT_ID });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
     } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
@@ -228,6 +239,7 @@ function main() {
     // A human dispatch proceeds past held leases; the overlaps are reported as a warning.
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint"), allowResourceConflicts: true });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -241,12 +253,14 @@ function main() {
     const max = arg("--max");
     const owner = arg("--owner");
     const result = core.dispatchReadyTasks({ roots: home, adapter: runtimeAdapter(), ownerForTask: owner ? () => owner : undefined, maxConcurrency: max === undefined ? Infinity : Number(max), projectLimits });
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
   if (command === "task" && action === "adopt") {
     const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), original: originalText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -254,11 +268,12 @@ function main() {
     assertSelectedTaskBackend(arg("--task"));
     const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
-  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
-  if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); const result = core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() }); syncHeartbeatAfter(home); output(result); return; }
+  if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); const result = core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() }); syncHeartbeatAfter(home); output(result); return; }
   if (command === "task" && action === "brief") {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
@@ -276,6 +291,7 @@ function main() {
     if (!original) throw new Error("task continue requires --original or --original-file");
     const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home) });
     warnResourceConflicts(result.task);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -284,6 +300,7 @@ function main() {
     const textFile = arg("--text-file");
     const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims(), images: imageSources(home) });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -292,7 +309,9 @@ function main() {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task message requires --text or --text-file");
-    output(core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter(), images: imageSources(home) }));
+    const result = core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter(), images: imageSources(home) });
+    syncHeartbeatAfter(home);
+    output(result);
     return;
   }
   if (command === "decision" && action === "create") {
@@ -307,7 +326,28 @@ function main() {
   }
   if (command === "decision" && action === "deliver") {
     assertSelectedTaskBackend(arg("--task"));
-    output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
+    const result = core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() });
+    syncHeartbeatAfter(home);
+    output(result);
+    return;
+  }
+  if (command === "supervise") {
+    const adapter = runtimeAdapter();
+    const check = core.supervisionCheck({ roots: home, adapter });
+    const sync = adapter.backend === "paseo" ? core.syncHeartbeat({ roots: home, adapter, agentId: process.env.PASEO_AGENT_ID }) : null;
+    if (flag("--json")) { output({ ...check, unread: check.unread.map((meta) => ({ taskId: meta.taskId, projectId: meta.projectId, status: meta.status, report: meta.lastReport })), heartbeat: sync }); return; }
+    const text = core.renderSupervision(check, { sync });
+    output(check.unread.length || check.anomalies.length || check.runtimeError || check.notices.length ? text : `${text}Nothing new.\n`);
+    return;
+  }
+  if (command === "notice" && action === "ack") {
+    output(core.ackNotices({ roots: home, keys: args("--key") }));
+    return;
+  }
+  if (command === "heartbeat" && action === "sync") {
+    if (selectedBackend() !== "paseo") throw new Error("Heartbeat supervision is available only through bin/foreman-paseo");
+    if (flag("--enable") && flag("--disable")) throw new Error("heartbeat sync takes --enable or --disable, not both");
+    output(core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID, cron: arg("--cron"), enable: flag("--enable") ? true : flag("--disable") ? false : undefined }));
     return;
   }
   if (command === "status") {

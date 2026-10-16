@@ -6,7 +6,7 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, acceptTask,
-  recordReport, workerStopHook, sessionContext, sendWorkerMessage, fleetStatus, briefStatus,
+  recordReport, workerStopHook, sessionContext, ackNotices, sendWorkerMessage, fleetStatus, briefStatus,
   createDecision, answerDecision, deliverDecision, ValidationError, HerdrAdapter,
 } = require("../src/foreman");
 const { detectShellStartupFile, installShellEnv, ShellEnvError } = require("../src/shell-env");
@@ -224,6 +224,11 @@ test("session context lists unread reports once, adds anomalies, and ignores DEV
     assert.match(context, /\n  \| .*done/, "the report text is inlined under its entry");
     assert.doesNotMatch(context, /TASK: /, "the identity header is not repeated");
     assert.ok(f.meta(task.id).lastReport.readAt);
+    // Reading a report is not telling the user: its notice stays until Foreman records that it told them.
+    const key = `${task.id}/review-ready/generation-1-001-done.md`;
+    assert.match(context, new RegExp(`Not yet told to the user[\\s\\S]*${key}`));
+    assert.match(sessionContext({ roots: f.roots, adapter: f.adapter }), new RegExp(key));
+    ackNotices({ roots: f.roots, keys: [key] });
     assert.equal(sessionContext({ roots: f.roots, adapter: f.adapter }), null);
     const other = dispatch(f, "other");
     f.workers.get(other.assignment.endpoint).status = "idle";
