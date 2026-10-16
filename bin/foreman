@@ -7,6 +7,7 @@ const { HerdrAdapter, HerdrCliTransport } = require("../src/herdr");
 const { PaseoAdapter } = require("../src/paseo");
 const paseoRouting = require("../src/paseo-routing");
 const { installShellEnv } = require("../src/shell-env");
+const doctor = require("../src/doctor");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
 function arg(name, fallback) {
@@ -124,6 +125,8 @@ const usage = [
   "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
+  "  doctor sessions [--limit N] [--since TIME] [--include-dev] [--json]   (read-only: past Foreman sessions of this checkout, newest first)",
+  "  doctor session (--session ID|FILE|--current) [--from N] [--max-events N] [--json]   (read-only: one session's numbered events, coverage, and the rules in force)",
 ].join("\n");
 
 function main() {
@@ -171,6 +174,31 @@ function main() {
     const summary = summaryFile ? fs.readFileSync(path.resolve(summaryFile), "utf8") : (arg("--summary") ?? readStdin());
     output(core.recordReport({ roots: roots(), paneId: process.env.HERDR_PANE_ID, status: arg("--status"), summary }));
     return;
+  }
+  if (command === "doctor") {
+    // Doctor only reads session transcripts and Git history; it never initializes, locks, or changes the Foreman home.
+    const foremanRoot = path.resolve(process.env.FOREMAN_ROOT || process.cwd());
+    if (action === "sessions") {
+      const listed = doctor.listSessions({ foremanRoot, limit: arg("--limit"), since: arg("--since"), includeDev: flag("--include-dev") });
+      output(flag("--json") ? listed : [
+        `${listed.selected.length} of ${listed.found} Foreman sessions selected${listed.unreadable.length ? `; ${listed.unreadable.length} unreadable` : ""}:`,
+        ...listed.selected.map((item) => `- ${item.sessionId} ${item.client} ${item.kind} ${item.startedAt || "?"} → ${item.endedAt || "?"}: ${item.userTurns} prompts (${item.devTurns} DEV), ${item.events} events; ${item.file}`),
+        ...listed.unreadable.map((item) => `- unreadable ${item.file}: ${item.reason}`),
+      ].join("\n"));
+      return;
+    }
+    if (action === "session") {
+      let session = arg("--session");
+      if (flag("--current")) {
+        const foremanHome = path.resolve(process.env.FOREMAN_HOME || foremanRoot);
+        const record = path.join(foremanHome, "data", "sessions", "current.json");
+        if (!fs.existsSync(record)) throw new Error("No current Foreman session is recorded; pass --session ID or FILE");
+        session = JSON.parse(fs.readFileSync(record, "utf8")).transcriptPath;
+      }
+      const evidence = doctor.sessionEvidence({ foremanRoot, session, from: arg("--from", 1), maxEvents: arg("--max-events", 400) });
+      output(flag("--json") ? evidence : doctor.renderEvidence(evidence));
+      return;
+    }
   }
   if (command === "task" && action === "list" && flag("--summary")) {
     const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());

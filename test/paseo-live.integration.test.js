@@ -73,7 +73,7 @@ async function withLiveFixture(run) {
   const priorPaseoHome = process.env.FOREMAN_PASEO_HOME;
   const priorPaseoCommand = process.env.FOREMAN_PASEO_COMMAND;
   let daemonStarted = false;
-  const fixture = { roots: core.resolveRoots({ foremanRoot, foremanHome }), projectRoot, adapter: null, assigned: null };
+  const fixture = { roots: core.resolveRoots({ foremanRoot, foremanHome }), projectRoot, paseoHome, env, adapter: null, assigned: null, agents: [] };
   try {
     fs.mkdirSync(paseoHome, { recursive: true });
     const port = await freePort();
@@ -93,6 +93,9 @@ async function withLiveFixture(run) {
   } finally {
     if (fixture.assigned && fixture.adapter) {
       try { fixture.adapter.stop(fixture.assigned.endpoint); } catch (_) {}
+    }
+    for (const agent of fixture.agents) {
+      try { fixture.adapter.stop(agent); } catch (_) {}
     }
     if (daemonStarted) {
       try { paseo(["daemon", "stop", "--home", paseoHome, "--timeout", "10"], env); } catch (_) {}
@@ -194,3 +197,35 @@ test("images reach a live Paseo worker in round one, a continued round, a messag
     f.assigned = null;
   });
 });
+
+// Doctor quality on labeled synthetic sessions: a real Claude agent in this checkout runs the foreman-doctor skill.
+async function doctorRun(t, set) {
+  const { writeCases } = require("./support/doctor-cases");
+  await withLiveFixture(async (f) => {
+    const base = path.dirname(path.dirname(f.roots.foremanRoot));
+    const cases = writeCases(path.join(f.roots.foremanHome, "doctor-cases"), set, sourceRoot);
+    const env = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${f.roots.foremanHome}`, `FOREMAN_SHELL_RC=${path.join(base, "shell-rc")}`];
+    const prompt = [
+      "Doctor kiểm tra các session Foreman sau (đọc mỗi file bằng `bin/foreman doctor session --session FILE`):",
+      ...cases.map((item) => `- ${item.file}`),
+      "Sau báo cáo, viết dòng cuối cùng là một object JSON duy nhất ánh xạ tên file (không có .jsonl) tới phân loại chính của session đó: \"mistake\", \"opportunity\", \"insufficient\", \"rebutted\", hoặc \"none\".",
+    ].join("\n");
+    const created = JSON.parse(execFileSync(paseoCommand, ["run", "--json", "--provider", "claude", "--model", process.env.FOREMAN_LIVE_FOREMAN_MODEL || "claude-sonnet-5-5", "--mode", "bypassPermissions",
+      "--cwd", sourceRoot, "--title", `foreman-doctor-${set}`, ...env.flatMap((entry) => ["--env", entry]), "--home", f.paseoHome, prompt], { encoding: "utf8", env: f.env, timeout: 900000 }));
+    const timeline = execFileSync(paseoCommand, ["logs", created.agentId, "--home", f.paseoHome], { encoding: "utf8", env: f.env });
+    t.diagnostic(`doctor ${set} report:\n${timeline}`);
+    const verdicts = JSON.parse(timeline.trim().split("\n").filter((line) => line.trim().startsWith("{")).at(-1));
+    const expected = Object.fromEntries(cases.map((item) => [item.name, item.label]));
+    const got = Object.fromEntries(cases.map((item) => [item.name, verdicts[item.name] === "mistake" ? "mistake" : verdicts[item.name] === "insufficient" ? "insufficient" : "valid"]));
+    t.diagnostic(`expected ${JSON.stringify(expected)}; got ${JSON.stringify(verdicts)}`);
+    const falsePositives = cases.filter((item) => item.label !== "mistake" && got[item.name] === "mistake").map((item) => item.name);
+    const missed = cases.filter((item) => item.label === "mistake" && got[item.name] !== "mistake").map((item) => item.name);
+    assert.deepEqual(falsePositives, [], "no valid or undecidable session is reported as a mistake");
+    assert.deepEqual(missed, [], "every labeled mistake is found");
+    assert.deepEqual(got, expected);
+    f.agents = [created.agentId];
+  });
+}
+
+test("foreman-doctor classifies the labeled tuning sessions", { skip: !enabled, timeout: 1200000 }, (t) => doctorRun(t, "tuning"));
+test("foreman-doctor classifies the held-out labeled sessions it was not tuned on", { skip: !enabled, timeout: 1200000 }, (t) => doctorRun(t, "heldout"));

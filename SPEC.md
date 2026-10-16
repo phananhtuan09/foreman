@@ -594,6 +594,15 @@ A final count reports running and queued work. Each task appears once per respon
 
 Fleet status may be filtered by project, task, worker, lifecycle, or anomaly. A request for full status actively refreshes every running assignment before reporting.
 
+### 12.1 Session doctor
+
+On request, the `foreman-doctor` skill re-reads past Foreman sessions and reports evidence-backed mistakes and improvement opportunities.
+`foreman doctor sessions` lists only sessions whose own cwd is the Foreman checkout, from Claude Code session files and Codex rollouts, newest activity first; sessions where every prompt starts with DEV are excluded unless asked, and worker sessions never match.
+`foreman doctor session` prints one session as numbered events with evidence references, its coverage (unparsable lines, tool calls without a result, compactions, truncated events, and subagent entries not shown), and the committed rules in force: the last Foreman commit before the session started and the rule commits made while it ran.
+Both commands only read transcripts and Git history; they never run a recorded command, touch the Foreman home, or change task state.
+A mistake is reported only with the rule or request in force then, the actual behavior, and a contradiction that survives a rebuttal pass; missing data yields "not enough data", and improvement opportunities and rebutted suspicions are not counted as mistakes.
+No session history or rule versions are stored for the doctor; uncommitted rule edits of the time cannot be known.
+
 ## 13. Safety and failure behavior
 
 Foreman fails closed when:
@@ -822,6 +831,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - `image stage` reads Claude Code session JSONL and Codex rollout files, which are not public APIs; the parser is covered by fixtures, not by a live capture, and `--image FILE` remains the fallback when a client stores pasted images elsewhere.
 - A worker whose model cannot read images still receives the image paths; Foreman does not route by vision support.
+- The session doctor of section 12.1 is implemented; on 2026-10-16 a real Claude agent running `foreman-doctor` through Paseo classified 3 synthetic labeled tuning sessions and 4 held-out ones correctly, with no false positive and no missed mistake; a set the user labels from real sessions is still needed before any quality threshold is set.
 - Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 
 ### OpenCode V2 tool dispatch within Herdr
