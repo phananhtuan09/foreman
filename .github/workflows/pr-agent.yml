@@ -13,7 +13,13 @@ jobs:
   pr_agent:
     if: >-
       github.event.sender.type != 'Bot' &&
-      (github.event_name == 'pull_request' || github.event.comment.user.login == 'phananhtuan09')
+      (
+        (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) ||
+        (github.event.comment.user.login == 'phananhtuan09' && github.event.issue.pull_request)
+      )
+    concurrency:
+      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
