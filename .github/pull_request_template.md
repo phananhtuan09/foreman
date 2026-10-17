@@ -69,9 +69,21 @@ state the expected behavior precisely so they can check the diff against it.
 
 - [ ] `npm test` — result:
 - [ ] Dashboard plugin: `npm run typecheck && npm test` in `paseo-plugins/foreman-dashboard/` — result:
-- [ ] Live tests (`npm run test:live`, `npm run test:paseo:live`) — result or reason skipped:
 - [ ] Regression reproduced before the fix and passing after (bug fixes):
-- Manual checks:
+
+### Backend verification
+
+<!--
+A change that affects runtime behavior must be exercised for real on the backend(s) it touches.
+Pick Herdr, Paseo, or both based on the code path, and say why the other one is not needed.
+Docs-only, instructions-only, or CI-only changes: write "N/A — <reason>".
+-->
+
+- Backends affected: <!-- Herdr | Paseo | both | none, and why -->
+- **Herdr** (`bin/foreman-herdr`): scenario run, commands, and observed result (task state, report, status output):
+- **Paseo** (`bin/foreman-paseo`): scenario run, commands, and observed result (task state, collected report, status output):
+- Live suites (`npm run test:live`, `npm run test:paseo:live`) — result or reason skipped:
+- Other manual checks:
 
 ## Risks and rollback
 
@@ -84,3 +96,17 @@ state the expected behavior precisely so they can check the diff against it.
 ## Reviewer focus
 
 <!-- Where reviewers should look hardest: tricky logic, races, lock windows, migration paths, assumptions to challenge. -->
+
+## Pre-merge checklist
+
+<!--
+Required before merge: the `pr-checklist` check fails while any box below is unchecked.
+The author or the authoring AI agent ticks a box only when the item is actually done; tick a box that does not apply and append "N/A — <reason>".
+-->
+
+- [ ] CI checks pass on the latest commit.
+- [ ] Every AI review comment is fixed or answered with a reason, and its conversation is resolved.
+- [ ] Runtime behavior changes were verified for real on the affected backend (Herdr, Paseo, or both) as recorded under Backend verification.
+- [ ] Changed behavior is reflected in the owning `docs/product/` or `docs/decisions/` artifact, or no durable knowledge changed.
+- [ ] The branch is up to date with `main` and contains no changes outside this PR's scope.
+- [ ] Skill name or description changes are mirrored in `.claude/skills/`.

@@ -30,6 +30,7 @@ Project code changes belong to assigned workers in their leased workspaces.
   `bin/foreman-herdr` and `bin/foreman-paseo` are mode launchers that set `FOREMAN_BACKEND` for one CLI process.
 - `adapters/herdr/` and `src/herdr.js` contain Herdr-specific transport code.
 - Pull request descriptions follow `.github/pull_request_template.md`; fill every section and write `N/A` with a reason instead of deleting one.
+  Tick a `Pre-merge checklist` item only after it is actually done; the `pr-checklist` check blocks merge while any item is unchecked.
 - Keep deferred features out of core until they have their own accepted specification: remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority.
 
 ## Supervisor invariants

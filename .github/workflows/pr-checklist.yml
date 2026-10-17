@@ -1,0 +1,29 @@
+name: pr-checklist
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-checklist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every pre-merge checklist item to be checked
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          section=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | awk '/^## Pre-merge checklist/{found=1; next} found && /^## /{exit} found')
+          if ! printf '%s\n' "$section" | grep -qE '^- \[[ xX]\]'; then
+            echo "::error::The PR description has no '## Pre-merge checklist' section; copy it from .github/pull_request_template.md."
+            exit 1
+          fi
+          unchecked=$(printf '%s\n' "$section" | grep -E '^- \[ \]' || true)
+          if [ -n "$unchecked" ]; then
+            echo "::error::Unchecked pre-merge checklist items:"
+            printf '%s\n' "$unchecked"
+            exit 1
+          fi
+          echo "All pre-merge checklist items are checked."
