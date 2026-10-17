@@ -149,7 +149,7 @@ To check a delivery, open the paths listed in the message under `data/messages/`
 It stops the Herdr pane or archives the Paseo agent, verifies endpoint closure, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk.
 
-`task discard` removes a queued task that was never assigned, or an assigned task whose worker `status` confirms `dead` or `missing`; it refuses live or `unknown` workers and tasks that others depend on.
+`task discard` removes a queued task that was never assigned, an assigned task whose worker `status` confirms `dead` or `missing`, or a pending task whose dispatch stopped before any endpoint or prompt was recorded while no runtime worker carries its owner; it refuses live or `unknown` workers and tasks that others depend on.
 For a confirmed dead Herdr worker it stops the pane before cleanup; a missing endpoint is already absent.
 It releases the lease and deletes the task's records, reports, and decisions; the project workspace stays on disk.
 Use it to drop work that should not continue; use `task recover` instead to hand it to a new worker.

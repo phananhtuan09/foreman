@@ -1349,7 +1349,14 @@ function isUntouchedQueuedTask(meta) {
     && !((meta.resources?.length || 0) > 0) && !meta.lastReport && !meta.completionReport && !meta.handoff;
 }
 
-// Discard removes an untouched queued task, or an assigned task whose worker is confirmed dead or missing.
+// A dispatch that stopped before its endpoint or prompt was recorded leaves an owner and lease but no worker.
+function isUndeliveredDispatch(meta) {
+  return meta.status === "pending" && Boolean(meta.owner)
+    && !meta.endpoint && !meta.paneId && !meta.lastPromptAt && !meta.briefMessageId
+    && !meta.lastReport && !meta.completionReport && !meta.handoff;
+}
+
+// Discard removes an untouched queued task, an undelivered dispatch with no runtime worker, or an assigned task whose worker is confirmed dead or missing.
 function discardTask({ roots, taskId, adapter }) {
   if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
   const observed = readMeta(roots.foremanHome, taskId);
@@ -1358,10 +1365,9 @@ function discardTask({ roots, taskId, adapter }) {
   if (!isUntouchedQueuedTask(observed)) {
     if (!adapter) throw new ValidationError("Discarding an assigned task requires runtime evidence");
     const item = coordination.reconcileFleet({ roots, adapter }).tasks.find((entry) => entry.taskId === taskId);
-    if (!item || !["dead", "missing"].includes(item.state)) {
-      throw new ValidationError("Only untouched queued tasks or tasks whose worker is confirmed dead or missing can be discarded");
-    }
-    workerState = item.state;
+    if (item && isUndeliveredDispatch(observed) && !item.worker) workerState = "undelivered";
+    else if (item && ["dead", "missing"].includes(item.state)) workerState = item.state;
+    else throw new ValidationError("Only untouched queued tasks, undelivered dispatches with no runtime worker, or tasks whose worker is confirmed dead or missing can be discarded");
   }
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);

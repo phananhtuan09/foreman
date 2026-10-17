@@ -10,6 +10,7 @@ const {
   deliverDecision, createTask: intake, acceptTask, discardTask,
   dispatchReadyTasks, HerdrAdapter, ValidationError,
 } = require("../src/foreman");
+const coordination = require("../src/coordination");
 
 class ChildWorkerTransport {
   constructor() { this.next = 1; this.workers = new Map(); }
@@ -149,6 +150,44 @@ test("a task whose worker is confirmed dead can be discarded, releasing its leas
     const next = createTask({ roots: f.roots, projectId: "one", brief: "reuse the resource" });
     const second = assignTask({ roots: f.roots, taskId: next.id, owner: "next-worker", adapter: f.adapter, resources: [{ key: "file/abandoned", mode: "exclusive" }] });
     await f.transport.wait(second.endpoint);
+  } finally { f.cleanup(); }
+});
+
+test("a dispatch that stopped before its endpoint was recorded is pending and can be discarded once no runtime worker owns it", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "one", brief: "interrupted dispatch" });
+    // The record left when the process stops after the pending write and before the endpoint is recorded.
+    const file = coordination.metaFile(f.roots.foremanHome, task.id);
+    coordination.atomicJson(file, {
+      ...coordination.readJson(file),
+      status: "pending",
+      owner: "one-interrupted",
+      generation: 1,
+      resources: [{ key: "file/interrupted", mode: "exclusive" }],
+      resourceLease: { leaseId: "L-interrupted", taskId: task.id, generation: 1, owner: "one-interrupted", resources: [{ key: "file/interrupted", mode: "exclusive" }], acquiredAt: new Date().toISOString() },
+    });
+    assert.equal(fleetStatus({ roots: f.roots, adapter: f.adapter }).tasks.find((item) => item.taskId === task.id).state, "pending");
+
+    f.transport.workers.set("live", { owner: "one-interrupted", endpoint: "live", cwd: f.one, status: "working" });
+    assert.throws(() => discardTask({ roots: f.roots, taskId: task.id, adapter: f.adapter }), /confirmed dead or missing/);
+    f.transport.workers.delete("live");
+
+    const discarded = discardTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(discarded.workerState, "undelivered");
+    assert.equal(fs.existsSync(coordination.taskDir(f.roots.foremanHome, task.id)), false);
+  } finally { f.cleanup(); }
+});
+
+test("a pending Paseo task with no runtime worker reports no identity mismatch", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "one", brief: "not yet assigned" });
+    const file = coordination.metaFile(f.roots.foremanHome, task.id);
+    coordination.atomicJson(file, { ...coordination.readJson(file), backend: "paseo", status: "pending", owner: "one-paseo-pending", generation: 1 });
+    const item = coordination.reconcileFleet({ roots: f.roots, adapter: { backend: "paseo", list: () => [] } }).tasks.find((entry) => entry.taskId === task.id);
+    assert.equal(item.state, "pending");
+    assert.deepEqual(item.issues, []);
   } finally { f.cleanup(); }
 });
 
