@@ -52,7 +52,7 @@ This boundary keeps Foreman's global operational context separate from each mana
 - Automatic PR merge and standing merge authority are out of scope.
 - Autonomous product, business, security, compatibility, or architecture decisions are out of scope.
 - A database or continuously running LLM service is out of scope.
-- Automatic model or quota optimization beyond the dispatch-profile phase is out of scope.
+- Automatic model or quota optimization before the P3 dispatch-profile phase is out of scope.
 - Direct production-code implementation by Foreman is out of scope.
 - These capabilities MAY be designed later only when the core lifecycle and recovery invariants are already proven.
 

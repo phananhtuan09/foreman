@@ -1,5 +1,6 @@
 <!--
-Fill every section. Write "N/A — <reason>" instead of deleting a section.
+Fill every section.
+Write "N/A — <reason>" instead of deleting a section.
 AI reviewers (pr-agent, Greptile, Sourcery, @claude-ci) read this description as the author's intent:
 state the expected behavior precisely so they can check the diff against it.
 -->
@@ -10,7 +11,10 @@ state the expected behavior precisely so they can check the diff against it.
 
 ## Context
 
-<!-- Why this change is needed: the problem, failing behavior, or request. Link the issue, proposal (docs/proposals/), or prior PR. -->
+<!--
+Why this change is needed: the problem, failing behavior, or request.
+Link the issue, proposal (docs/proposals/), or prior PR.
+-->
 
 ## Type of change
 
@@ -23,7 +27,10 @@ state the expected behavior precisely so they can check the diff against it.
 
 ## Changes
 
-<!-- Group by area and name the files or modules. Describe behavior, not line-by-line edits. -->
+<!--
+Group by area and name the files or modules.
+Describe behavior, not line-by-line edits.
+-->
 
 - **Core (`src/`, `bin/`)**:
 - **Backends (`adapters/herdr/`, `src/herdr.js`, Paseo bridge)**:
@@ -35,7 +42,10 @@ state the expected behavior precisely so they can check the diff against it.
 
 ## Behavior before and after
 
-<!-- For behavior changes: the exact command, state, or scenario, with the result before and after. Include CLI output or state snippets when they clarify. -->
+<!--
+For behavior changes: the exact command, state, or scenario, with the result before and after.
+Include CLI output or state snippets when they clarify.
+-->
 
 | Scenario | Before | After |
 | --- | --- | --- |
@@ -65,7 +75,10 @@ state the expected behavior precisely so they can check the diff against it.
 
 ## Verification
 
-<!-- Commands actually run and their results. Separate automated evidence from manual checks; do not claim what was not observed. -->
+<!--
+Commands actually run and their results.
+Separate automated evidence from manual checks; do not claim what was not observed.
+-->
 
 - [ ] `npm test` — result:
 - [ ] Dashboard plugin: `npm run typecheck && npm test` in `paseo-plugins/foreman-dashboard/` — result:
