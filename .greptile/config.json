@@ -26,7 +26,7 @@
     },
     {
       "id": "no-deferred-features",
-      "rule": "Remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority are deferred. Flag any such feature added to core without an accepted specification in SPEC.md.",
+      "rule": "Remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority are deferred. Flag any such feature added to core without an accepted product rule in docs/product/ or decision in docs/decisions/.",
       "scope": ["src/**", "bin/**", "adapters/**"],
       "severity": "medium"
     },
@@ -38,8 +38,8 @@
     },
     {
       "id": "spec-and-docs-sync",
-      "rule": "Behavior changes to the CLI or state model must update SPEC.md, docs/architecture.md, or docs/runbook.md where they describe that behavior, and ship with tests under test/.",
-      "scope": ["src/**", "bin/**", "SPEC.md", "docs/**"],
+      "rule": "Behavior changes to the CLI or state model must update the owning artifact in docs/product/ or docs/decisions/, docs/architecture.md, or docs/runbook.md where they describe that behavior, and ship with tests under test/.",
+      "scope": ["src/**", "bin/**", "docs/**"],
       "severity": "medium"
     },
     {

@@ -8,4 +8,4 @@ The Paseo entrypoint supports common setup and reads, but worker runtime operati
 `foreman-recovery` describes confirmed dead or missing worker handoff.
 `foreman-paseo-heartbeat` manages Paseo's native recurring prompts for Foreman supervision.
 
-The files under `legacy/` are retained for historical parity work and are not production entry points.
+`manage-project-knowledge` is a development skill for finding, explaining, and updating durable knowledge under `docs/`; it is not an operational entrypoint.

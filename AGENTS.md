@@ -8,7 +8,7 @@ Project code changes belong to assigned workers in their leased workspaces.
 ## Request routing
 
 - A user message starting with `DEV` requests changes to Foreman itself.
-  For these requests, use `SPEC.md` as the product and architecture authority, inspect the relevant implementation, and change only the affected Foreman files.
+  For these requests, use `docs/product/` and `docs/decisions/` as the product and architecture authority, inspect the relevant implementation, and change only the affected Foreman files.
 - An explicit request to inspect or edit Foreman's own instructions or skills is a maintenance request even without `DEV`.
   Limit that request to the named instructions or skills; changing Foreman's implementation still requires `DEV`.
 - Other user messages are requests to operate Foreman for the registered projects.
@@ -22,11 +22,14 @@ Project code changes belong to assigned workers in their leased workspaces.
 - `AGENTS.md` and `.agents/skills/` are the canonical instruction and skill sources.
   `CLAUDE.md` imports this file, and each skill under `.claude/skills/` mirrors the canonical skill's name and description while referring to its `.agents/skills/` source.
   Keep full skill instructions in `.agents/skills/`; update the Claude skill reference when its name or description changes.
-- `SPEC.md` defines the product and architecture contract.
+- `docs/README.md` indexes durable repository knowledge, and `docs/WORKFLOW.md` defines its authority and precedence rules.
+  `docs/product/` holds accepted product behavior and `docs/decisions/` holds accepted architecture decisions.
+  Use the `manage-project-knowledge` skill to find, explain, or update these artifacts.
 - `docs/architecture.md` is a reference for Foreman's implementation and state model; consult it when the development task needs that detail.
 - `bin/foreman` is the core CLI entry point and must call core modules instead of duplicating lifecycle logic.
   `bin/foreman-herdr` and `bin/foreman-paseo` are mode launchers that set `FOREMAN_BACKEND` for one CLI process.
 - `adapters/herdr/` and `src/herdr.js` contain Herdr-specific transport code.
+- Pull request descriptions follow `.github/pull_request_template.md`; fill every section and write `N/A` with a reason instead of deleting one.
 - Keep deferred features out of core until they have their own accepted specification: remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority.
 
 ## Supervisor invariants

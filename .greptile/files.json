@@ -1,7 +1,8 @@
 {
   "files": [
     { "path": "AGENTS.md", "description": "Foreman supervisor identity, request routing, and invariants" },
-    { "path": "SPEC.md", "description": "Product and architecture contract" },
+    { "path": "docs/README.md", "description": "Index of durable documentation namespaces" },
+    { "path": "docs/WORKFLOW.md", "description": "Authority, precedence, and durable-knowledge rules" },
     { "path": "docs/architecture.md", "description": "Implementation and state model reference" },
     { "path": ".agents/skills/README.md", "description": "Canonical skill sources mirrored under .claude/skills/" }
   ]
