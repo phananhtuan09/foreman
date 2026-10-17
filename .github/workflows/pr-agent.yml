@@ -18,7 +18,7 @@ jobs:
         (github.event.comment.user.login == 'phananhtuan09' && github.event.issue.pull_request)
       )
     concurrency:
-      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: pr-agent-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
