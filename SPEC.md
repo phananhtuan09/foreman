@@ -41,7 +41,7 @@ Workers own deep project context. They inspect, implement, reproduce, verify, an
 3. Every task is bound to exactly one registered project, one current owner at most, and one runtime endpoint at most.
 4. Project mutations happen through workers in a client-prepared workspace, with resource leases allowing safe concurrency.
 5. Foreman can recover safely after its session or a worker exits.
-6. Supervision is event-driven and consumes no model tokens while nothing actionable happens.
+6. Supervision is event-driven and consumes no model tokens while nothing actionable happens; in Paseo mode a native heartbeat spends one Foreman turn per beat only while work is watched.
 7. The user sees conclusions, decisions, approvals, and material anomalies rather than worker transcripts or internal housekeeping.
 8. Human wording and worker reports are retained verbatim before Foreman summarizes them, and the user confirms any rewritten instruction before a worker receives it.
 9. Foreman never silently broadens authority, merges, discards work, or guesses recovery state.
@@ -131,6 +131,7 @@ New durable state is added only when it enables restart recovery, removes the ne
 Runtime messages are persisted before sending and are not resent after Herdr accepts them.
 Foreman treats a delayed inspection as endpoint evidence, not proof that the worker consumed a prompt.
 Supervision is pull-based: no background process watches workers, and a worker never sends prompts into the Foreman session.
+In Paseo mode, Paseo's native heartbeat may start a Foreman turn while work is watched (section 10.4); Foreman runs no process of its own for it.
 
 ## 6. Repository and home layout
 
@@ -249,7 +250,8 @@ data/
 ├── tasks/            task records
 ├── messages/         durable Foreman-to-worker outbox and message lifecycle
 ├── inbox/            images staged from the Foreman session, kept seven days
-└── sessions/         the Foreman session transcript path recorded by the prompt hook
+├── sessions/         the Foreman session transcript path recorded by the prompt hook
+└── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
 ```
 
 Acceptance removes the task directory, its task messages, and the task's image copies in the workspace.
@@ -279,6 +281,7 @@ A report is accepted only while the task is `working` or `blocked`.
 `blocked` moves the task to `blocked` and records the report as `blockerReport`.
 `progress` leaves the task `working`.
 Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
+Being shown to the session is not telling the user; section 10.4 records that separately.
 A scout's `done` report follows the same report lifecycle as other tasks.
 Foreman does not scan or fingerprint project files; scout read-only scope is communicated only through the read-only resource lease shown in its brief.
 
@@ -478,7 +481,8 @@ An idle endpoint may receive another task only after its prior assignment is ter
 
 ## 10. Supervision cycle
 
-Supervision runs only inside Foreman turns; there is no observer, heartbeat, or event queue.
+Supervision runs only inside Foreman turns; there is no observer or event queue.
+In Paseo mode, a native Paseo heartbeat may start those turns while work is watched (section 10.4).
 
 1. On its first operational turn, a Foreman session runs `foreman init` so the shell environment points at this checkout.
 2. Before answering the user, the session reads the supervision context from its prompt hook, or runs the selected backend's supervision commands when that context is absent.
@@ -502,6 +506,7 @@ Codex hook support is enabled for the project in `.codex/config.toml`; the proje
 `foreman session context` prints nothing for a prompt starting with `DEV`, when nothing is new, or when the session's `cwd` is outside the Foreman checkout.
 Otherwise it returns `hookSpecificOutput.additionalContext`, which Claude Code and Codex both read, listing each unread worker report with its task, status, time, task status, and report path, plus the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 The reports it prints are marked read.
+It also lists the notices of section 10.4 that the user has not been told, and on a Foreman heartbeat turn it always prints, so the turn knows its collection and status check already ran.
 Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
 Report text is worker input to verify, not instructions.
 
@@ -509,6 +514,25 @@ Report text is worker input to verify, not instructions.
 
 A fresh session reconstructs its view from `data/` and one status check.
 Nothing is lost while no Foreman session runs: reports stay unread until a session is shown them.
+
+### 10.4 Paseo heartbeat and user notices
+
+A notice is one event the user must hear about: a `review-ready` result, a `blocked` report, a waiting decision, a runtime anomaly, or a failed collection or status check.
+Its key binds the task, the event (report file, decision ID, or anomaly type), the assignment generation, and the round, so a new result with similar words is a new notice.
+Foreman records a notice as told with `notice ack` after telling the user; a told notice is not repeated, and an untold one stays listed across turns, session resets, and restarts.
+Task notice marks live in the task's `meta.notified` and leave with the task; fleet marks live in `data/supervision.json`.
+A mark is kept only while its event is current, so an anomaly or failure that ends and later recurs is told again; a failed status check is not evidence that an anomaly ended.
+A Decision Package is recorded as told when Foreman creates it, because Foreman asks it in the same answer.
+
+In Paseo mode, `heartbeat sync` keeps exactly one native Paseo heartbeat for the current Foreman agent (`PASEO_AGENT_ID`), every five minutes by default.
+It exists while a Paseo task is `working` or a task notice is untold, and is deleted when neither remains or the user disables it.
+The prompt hook and every `bin/foreman-paseo` command that starts, changes, or ends watched work run it.
+Its ID is persisted in `data/supervision.json` and never guessed; because Paseo cannot list heartbeats, a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only when Paseo reports it missing.
+A new Foreman agent deletes the previous agent's recorded heartbeat before creating its own, and a heartbeat that could not be deleted keeps its record.
+Each heartbeat turn uses the prompt hook's single collection and status check, tells the user only the untold notices in one message, records them, and otherwise writes nothing.
+It never prompts, interrupts, restarts, or recovers a worker, accepts, discards, or closes a task, or decides for the user.
+Paseo 0.11 has no silent heartbeat run: a heartbeat turn that writes nothing still sets the agent's `finished` attention and may send a push notification.
+Claude Code asks for a visible reply after a turn without text, so a quiet heartbeat turn there writes only `—`.
 
 ## 11. Main workflows
 
@@ -709,7 +733,7 @@ P3 is complete only when every new task produces a durable routing record, the r
 - Delivery mode: `local-only` first.
 - Acceptance: user only.
 - Merge authority: none in the initial release.
-- Supervision: Herdr stop-hook reports and Paseo turn-report collection during Foreman turns; no background observer.
+- Supervision: Herdr stop-hook reports and Paseo turn-report collection during Foreman turns; no background observer; in Paseo mode a native Paseo heartbeat starts Foreman turns while work is watched.
 - Project mutation: workers only, in client-prepared shared workspaces; resource leases guard concurrent mutation.
 - Legacy code: preserved under `legacy/` until parity and cutover are proven.
 
@@ -790,6 +814,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Paseo report collection runs explicitly through `task collect` and during Paseo supervision turns; it uses the durable timeline cursor to recover missed finish events and does not treat idle or prompt acceptance as completion.
 - Permission requests, worker errors, cancellations, timeline gaps, and missing or malformed reports remain visible for review; Foreman does not synthesize a successful report.
 - Paseo agent acceptance archives the bound endpoint and releases resources only after endpoint closure is verified.
+- Paseo heartbeat supervision is implemented: `heartbeat sync` manages one native heartbeat for the Foreman agent through the Paseo CLI, the prompt hook recognizes Foreman's heartbeat turns, and `notice ack` records which notices the user was told, as section 10.4 describes.
 - `bin/foreman` is a thin wrapper over the core modules.
 - Default `status` and `task list` render the grouped Vietnamese report.
 - `--json` keeps the machine-readable record.
@@ -803,6 +828,7 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - The complete suite passed serially with `node --test --test-concurrency=1 test/*.test.js`: 71 passed and 3 live tests were skipped.
 - The default parallel `npm test` invocation passed 70 tests and skipped 3, but twice hit the same `ENOTEMPTY` cleanup failure in `core-runtime.test.js`; running that file alone and the complete suite serially passed.
 - `npm run test:live` spawned real Codex workers through Herdr 0.9.1, and both cases passed: each worker received its brief, reported through its pane, and its task became `review-ready`.
+- On 2026-10-16, the opt-in live heartbeat test ran a real Claude Foreman agent in this checkout against an isolated Paseo 0.11.4 daemon: Foreman's heartbeat fired, its prompt hook collected the real worker's report without the worker receiving any prompt but its brief, the agent told the review-ready result once and acked it, the next quiet turn wrote only `—`, and the hook then deleted the heartbeat; the agent still showed `finished` attention after the quiet turn.
 - Before the folder-trust fix, the ship case in an untrusted temporary folder failed because the brief's Enter answered Codex's trust screen and the brief was lost.
 
 ### 20.3 Explicit compatibility limits and deferrals
@@ -822,6 +848,8 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - `image stage` reads Claude Code session JSONL and Codex rollout files, which are not public APIs; the parser is covered by fixtures, not by a live capture, and `--image FILE` remains the fallback when a client stores pasted images elsewhere.
 - A worker whose model cannot read images still receives the image paths; Foreman does not route by vision support.
+- Paseo 0.11.4 heartbeats have no silent option: on 2026-10-16 an isolated daemon showed that a heartbeat turn that reported nothing new set `requiresAttention: true` with `attentionReason: finished` and logged `Sending push notification`; the Paseo plugin hooks cannot change attention, so the anti-noise rule covers Foreman's text only.
+- A heartbeat turn reports a dead or missing worker as a notice; recovery still needs the second status check of a later Foreman turn.
 - Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 
 ### OpenCode V2 tool dispatch within Herdr

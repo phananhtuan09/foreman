@@ -1,49 +1,65 @@
 ---
 name: foreman-paseo-heartbeat
-description: Create, change, or delete Paseo native heartbeats used for recurring Foreman supervision.
+description: Handle a Foreman Paseo heartbeat turn, and change, pause, or resume the heartbeat that Foreman manages for recurring Paseo supervision.
 ---
 
 # Foreman Paseo heartbeat
 
-Use Paseo's built-in heartbeat for recurring prompts to the current Foreman agent.
-Do not implement heartbeat polling with repository code, shell scripts, operating-system cron, or a Paseo schedule.
+Foreman uses one native Paseo heartbeat to wake its own Paseo session while Paseo work is watched.
+Do not implement recurring checks with repository code, shell polling, operating-system cron, an observer process, or a Paseo schedule that creates a new agent.
 
-## Paseo behavior
+## How Foreman manages it
 
-- A heartbeat prompts the current agent on a cron cadence; it does not create a new worker.
-- Prefer the Paseo MCP tools create_heartbeat and delete_heartbeat.
-- The Paseo CLI supports heartbeat create, update, and delete. Update changes only the cron cadence and timezone.
-- Paseo does not expose heartbeat listing or inspection in the available MCP or CLI surface. Use an exact heartbeat ID from this conversation or from the user; never guess an ID from a name.
-- Heartbeats are separate from schedules. Do not use create_schedule or schedule update for this task.
+- `bin/foreman-paseo heartbeat sync` creates the heartbeat for the current Foreman agent (`PASEO_AGENT_ID`) when a Paseo task is `working` or a task notice is untold, and deletes it when neither is left.
+- It runs by itself: in the session prompt hook, and after `task dispatch`, `schedule`, `continue`, `reassign`, `recover`, `adopt`, `message`, `decision deliver`, `accept`, and `discard` through `bin/foreman-paseo`.
+  A `foreman: heartbeat ...` line on standard error reports a create, update, delete, or failure; mention a failure to the user.
+- The heartbeat ID is stored in `data/supervision.json`; never guess an ID, and never create a heartbeat yourself with Paseo MCP or CLI.
+- Paseo cannot list heartbeats, so `heartbeat sync` re-checks a recorded heartbeat that has not fired recently and recreates it only when Paseo no longer has it.
+- A new Foreman session replaces the previous session's heartbeat instead of running a second one.
+- Outside a Paseo agent, `heartbeat sync` reports `unavailable` and creates nothing.
 
-## Create
+## User requests
 
-When the user explicitly asks to create a heartbeat, use the cadence and prompt they gave.
-For “every five minutes,” use the five-field cron expression */5 * * * *.
-Use the current session timezone when a timezone is needed and the user has not specified one.
+- Change the cadence: `bin/foreman-paseo heartbeat sync --cron "*/10 * * * *"` (five-field cron; the default is every five minutes).
+- Turn recurring checks off: `bin/foreman-paseo heartbeat sync --disable`; back on: `--enable`.
+- A question about whether heartbeat supervision exists is not a request to change it.
+- A heartbeat the user created that is not Foreman's stays untouched unless the user asks to delete it by its exact ID.
 
-For a Foreman status monitor, the recurring prompt should run bin/foreman-paseo task collect first, then exactly one bin/foreman-paseo status --json check. It should read new report files, summarize new task status changes and anomalies, and follow the foreman-supervisor procedure. It must not accept, discard, or close tasks.
+## Heartbeat turn
 
-Create the heartbeat through create_heartbeat, supplying the requested prompt and cron and any requested name, timezone, expiry, or run limit. Report the returned heartbeat ID, cadence, and any expiry/run limit.
+A heartbeat prompt arrives as a `<paseo-system>` message naming the schedule and ID, and the prompt hook adds a supervision context that says this turn is the Foreman heartbeat.
 
-## Change
+1. Use that context: its Paseo collection and status check already ran in this turn.
+   Run `bin/foreman-paseo supervise` once only when the context is missing because the hook failed.
+2. Read the reports and the `Not yet told to the user` list.
+3. Tell the user only those notices, merged into one short message:
+   - `review-ready`: the outcome, the evidence (as worker claims), and what the user must review;
+   - `blocked` or a decision: what the user must do;
+   - an anomaly or a failed check: what is new and what it does not prove.
+4. After telling them, record each told notice with `bin/foreman-paseo notice ack --key KEY` (several `--key` at once).
+5. When the context says nothing needs the user, end the turn without writing any text.
+   Claude Code insists on a visible reply after a turn without text; then write only `—`, never a status sentence or a reminder of something already told.
 
-First identify the exact heartbeat ID from this conversation or the user.
+| Situation | Behavior |
+| --- | --- |
+| Worker still running | Silent. |
+| Progress report that needs nothing from the user | Silent; it is stored. |
+| New review-ready result | Tell once with outcome, evidence, and what to review. |
+| New blocker, decision, or permission request | Tell once with what the user must do. |
+| The same blocker or decision still waiting | Not repeated; it is already acked. |
+| New or materially changed anomaly | Tell what is new. |
+| Nothing worth telling | No text at all, or only `—` when the client insists: no "checked", "still running", or "nothing new". |
 
-- For a cadence or timezone change only, use the native CLI command paseo heartbeat update with that ID. This updates the existing heartbeat in place.
-- Paseo cannot edit a heartbeat prompt, name, expiry, or run limit in place. For those changes, create a replacement with the requested settings, confirm creation succeeded, then delete the old heartbeat by its exact ID. If creation fails, keep the old heartbeat and report the failure. If deletion fails, report both IDs and that both may remain active.
-- Never substitute a new-agent schedule for an existing heartbeat.
+A heartbeat turn never sends a prompt to a worker, interrupts, restarts, recovers, accepts, discards, or closes anything, makes no decision for the user, and does not widen the task.
+An idle, finished, or prompt-accepted worker is not a completed task; only a valid report is.
+A failed collection or status check is not evidence that workers are fine, dead, or done.
+Dead or missing workers are told as anomalies; recovery waits for a user turn, where the supervisor procedure confirms them with a second status check.
 
-## Delete
+## Paseo limits
 
-Delete only the exact heartbeat the user identified, using delete_heartbeat or paseo heartbeat delete.
-If the ID is not available in the conversation and cannot be supplied by the user, ask for the ID or the original creation result instead of guessing.
-Report the deleted ID and the Paseo result.
-
-## Foreman boundaries
-
-Use bin/foreman-paseo for every Foreman CLI command.
-Heartbeat administration uses Paseo's native MCP or Paseo CLI and must not change Foreman source code or task records.
-Creating, changing, or deleting a heartbeat requires an explicit user request; a question about whether the feature is available is not a request to activate it.
+- Paseo 0.11 has no silent heartbeat run: every finished heartbeat turn sets the agent's `finished` attention and the daemon sends a push notification when that attention was cleared, even when Foreman writes nothing.
+  Ending the turn without text keeps the timeline quiet but does not remove that attention or push.
+- Claude Code asks the agent for a visible reply after a turn that wrote none, so a quiet Claude heartbeat turn ends with `—`.
+- Every heartbeat turn is a model turn and costs tokens, which is why the heartbeat runs only while work is watched.
 
 Paseo references: https://paseo.sh/docs/schedules and https://paseo.sh/docs/mcp

@@ -250,6 +250,8 @@ test("default status output is grouped Vietnamese and the CLI delegates producti
     for (const phrase of ["task dispatch", "task schedule", "task adopt", "task recover", "task accept", "task discard", "task message", "decision deliver", "report --status", "worker hook", "session context"]) {
       assert.match(help, new RegExp(phrase));
     }
-    for (const removed of ["task mark-landed", "task cleanup", "observer", "reconcile", "event emit", "heartbeat", "decision acknowledge", "decision apply"]) assert.doesNotMatch(help, new RegExp(removed));
+    // The removed worker heartbeat stays removed; `heartbeat sync` manages only the Foreman session's Paseo heartbeat.
+    assert.match(help, /heartbeat sync .*Paseo/);
+    for (const removed of ["task mark-landed", "task cleanup", "observer", "reconcile", "event emit", "worker heartbeat", "heartbeat renew", "decision acknowledge", "decision apply"]) assert.doesNotMatch(help, new RegExp(removed));
   } finally { f.cleanup(); }
 });
