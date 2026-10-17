@@ -1,0 +1,58 @@
+{
+  "rules": [
+    {
+      "id": "canonical-instructions-and-skills",
+      "rule": "AGENTS.md and .agents/skills/ are the canonical instruction and skill sources. Each skill under .claude/skills/ must mirror the canonical skill's name and description and only refer to its .agents/skills/ source; flag full skill instructions duplicated under .claude/skills/ or a name/description mismatch.",
+      "scope": ["AGENTS.md", "CLAUDE.md", ".agents/**", ".claude/**"],
+      "severity": "high"
+    },
+    {
+      "id": "cli-delegates-to-core",
+      "rule": "bin/foreman must call core modules in src/ instead of duplicating lifecycle logic. bin/foreman-herdr and bin/foreman-paseo only set FOREMAN_BACKEND for one CLI process.",
+      "scope": ["bin/**"],
+      "severity": "high"
+    },
+    {
+      "id": "home-lock-and-versioned-records",
+      "rule": "Canonical state mutations under FOREMAN_HOME must hold the home lock, and every active JSON record must be versioned and identity-bound. Flag writes to data/ that bypass the lock or skip version/identity checks.",
+      "scope": ["src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "backend-isolation",
+      "rule": "Herdr-specific transport code stays in adapters/herdr/ and src/herdr.js. An assignment stays bound to its selected backend; flag silent backend fallback or cross-backend behavior in core.",
+      "scope": ["src/**", "adapters/**", "bin/**"],
+      "severity": "high"
+    },
+    {
+      "id": "no-deferred-features",
+      "rule": "Remote homes, relay channels, runtime backends beyond Herdr and Paseo, PR delivery, and merge authority are deferred. Flag any such feature added to core without an accepted specification in SPEC.md.",
+      "scope": ["src/**", "bin/**", "adapters/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "preserve-evidence",
+      "rule": "Original briefs, decisions, worker reports, and evidence must be preserved. Flag code that overwrites or deletes them, and liveness logic that infers a dead worker from unknown evidence.",
+      "scope": ["src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "spec-and-docs-sync",
+      "rule": "Behavior changes to the CLI or state model must update SPEC.md, docs/architecture.md, or docs/runbook.md where they describe that behavior, and ship with tests under test/.",
+      "scope": ["src/**", "bin/**", "SPEC.md", "docs/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "markdown-sentence-per-line",
+      "rule": "In Markdown files, each complete sentence should be on its own line. Flag newly added paragraphs that put several sentences on one line.",
+      "scope": ["**/*.md"],
+      "severity": "low"
+    },
+    {
+      "id": "workflow-least-privilege",
+      "rule": "GitHub Actions workflows must declare top-level permissions with the minimum scope (default contents: read), set persist-credentials: false on actions/checkout unless the job pushes, pin third-party actions to a commit SHA, and must not use pull_request_target with a checkout of PR code.",
+      "scope": [".github/workflows/**"],
+      "severity": "high"
+    }
+  ]
+}
