@@ -254,7 +254,8 @@ data/
 
 Acceptance removes the task directory, its task messages, and the task's image copies in the workspace.
 The project workspace stays on disk.
-`foreman task discard --task ID` removes a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, or an assigned task whose worker a runtime status check confirms `dead` or `missing`; it refuses `unknown` or live workers and any task another task depends on.
+`foreman task discard --task ID` removes a queued task with no owner, endpoint, workspace, resource lease, report, or handoff, or an assigned task whose worker a runtime status check confirms `dead` or `missing`; it also removes a pending task whose dispatch never recorded an endpoint or sent a prompt, when no runtime worker carries its owner.
+It refuses `unknown` or live workers and any task another task depends on.
 Discard runs under the home lock, refuses if the assignment generation or endpoint changed since the status check, stops a `dead` worker's endpoint, releases the resource lease, and removes the task directory and its task-scoped messages, decisions, and reports without archiving them.
 The project workspace stays on disk.
 
