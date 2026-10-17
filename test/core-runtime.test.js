@@ -191,6 +191,18 @@ test("a pending Paseo task with no runtime worker reports no identity mismatch",
   } finally { f.cleanup(); }
 });
 
+test("a pending Paseo task with an owner-matched runtime worker still reports identity mismatches", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "one", brief: "worker without endpoint" });
+    const file = coordination.metaFile(f.roots.foremanHome, task.id);
+    coordination.atomicJson(file, { ...coordination.readJson(file), backend: "paseo", status: "pending", owner: "one-paseo-pending", generation: 1 });
+    const worker = { owner: "one-paseo-pending", endpoint: "agent-1", taskId: "T-999999", projectId: "one", generation: 1, status: "working" };
+    const item = coordination.reconcileFleet({ roots: f.roots, adapter: { backend: "paseo", list: () => [worker] } }).tasks.find((entry) => entry.taskId === task.id);
+    assert.ok(item.issues.some((issue) => issue.type === "task.runtime-task-mismatch"));
+  } finally { f.cleanup(); }
+});
+
 test("dead child recovery preserves handoff state and rejects the old pane", async () => {
   const f = fixture();
   try {

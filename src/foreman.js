@@ -1371,7 +1371,10 @@ function discardTask({ roots, taskId, adapter }) {
   }
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
-    if (workerState ? Number(meta.generation) !== Number(observed.generation) || meta.endpoint !== observed.endpoint : !isUntouchedQueuedTask(meta)) {
+    const changed = workerState === "undelivered" ? !isUndeliveredDispatch(meta) || meta.owner !== observed.owner
+      : workerState ? Number(meta.generation) !== Number(observed.generation) || meta.endpoint !== observed.endpoint
+      : !isUntouchedQueuedTask(meta);
+    if (changed) {
       throw new ValidationError("Task assignment changed during discard; check status and retry");
     }
     for (const id of taskIds(roots.foremanHome)) {
