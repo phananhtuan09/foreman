@@ -24,9 +24,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Reviews diff the PR against main, which needs the full history.
+          fetch-depth: 0
       - uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "@claude-ci"
-          claude_args: --model claude-haiku-5-5 --max-turns 8
+          # Read-only tools so a review can inspect the diff and the code; nothing here writes to the repository.
+          claude_args: >-
+            --model claude-sonnet-5-5
+            --max-turns 30
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*)"
