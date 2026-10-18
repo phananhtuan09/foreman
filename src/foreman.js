@@ -2242,7 +2242,9 @@ function ackNotices({ roots, keys }) {
 
 function syncHeartbeat({ roots, adapter, agentId, anomalies, cron, enable }) {
   initHome(roots);
-  return withHomeLock(roots.foremanHome, () => supervision.syncHeartbeatUnlocked({ home: roots.foremanHome, adapter, agentId, metas: listTasks({ roots }), anomalies, cron, enable, at: now() }));
+  const withLock = (fn) => withHomeLock(roots.foremanHome, fn);
+  const metas = withLock(() => listTasks({ roots }));
+  return supervision.syncHeartbeat({ home: roots.foremanHome, adapter, agentId, metas, anomalies, cron, enable, at: now(), withLock });
 }
 
 function validateDispatchProfile(profile, capabilities = {}) {

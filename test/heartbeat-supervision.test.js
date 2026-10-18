@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
-  resolveRoots, createTask, fleetStatus, sessionContext, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
+  resolveRoots, withHomeLock, createTask, fleetStatus, sessionContext, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
 } = require("../src/foreman");
 const { HEARTBEAT_PROMPT, HEARTBEAT_NAME, readSupervision, supervisionFile } = require("../src/supervision");
 const { PaseoAdapter } = require("../src/paseo");
@@ -278,5 +278,35 @@ test("a Paseo task waiting for dispatch has no runtime anomaly to tell", () => {
     createTask({ roots: f.roots, projectId: "fixture", brief: "Inspect later.", backend: "paseo", routingRunner: () => ({ profile: "codex-luna", reason: "default" }) });
     assert.deepEqual(fleetStatus({ roots: f.roots, adapter: f.adapter }).anomalies, []);
     assert.deepEqual(supervisionCheck({ roots: f.roots, adapter: f.adapter }).notices, []);
+  } finally { f.cleanup(); }
+});
+
+test("Paseo heartbeat calls run outside the home lock, and a schedule that is not Foreman's heartbeat keeps its normal answer", () => {
+  const f = heartbeatFixture();
+  try {
+    routeAndAssign(f);
+    const create = f.adapter.heartbeatCreate.bind(f.adapter);
+    f.adapter.heartbeatCreate = (args) => {
+      assert.equal(withHomeLock(f.roots.foremanHome, () => "free"), "free", "other commands can take the home lock during the CLI call");
+      return create(args);
+    };
+    assert.equal(syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT }).action, "created");
+
+    const other = sessionContext({ roots: f.roots, adapter: f.adapter, prompt: `<paseo-system>\nSchedule "my-reminder" fired (id=user1, run=r1).\nRemind me to stretch.\n</paseo-system>`, cwd: f.projectRoot, agentId: FOREMAN_AGENT });
+    assert.doesNotMatch(String(other), /Foreman Paseo heartbeat/);
+    assert.doesNotMatch(String(other), /end this turn without any text/);
+  } finally { f.cleanup(); }
+});
+
+test("a recorded heartbeat is deleted when heartbeat sync --disable runs outside a Paseo agent", () => {
+  const f = heartbeatFixture();
+  try {
+    routeAndAssign(f);
+    syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT });
+    assert.equal(f.adapter.heartbeats.size, 1);
+    const disabled = syncHeartbeat({ roots: f.roots, adapter: f.adapter, enable: false });
+    assert.equal(disabled.action, "deleted");
+    assert.equal(f.adapter.heartbeats.size, 0);
+    assert.equal(readSupervision(f.roots.foremanHome).heartbeatEnabled, false);
   } finally { f.cleanup(); }
 });

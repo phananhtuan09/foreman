@@ -170,10 +170,26 @@ function recordHeartbeatFiredUnlocked(home, heartbeatId, at) {
  * Creates, updates, or deletes the one Paseo heartbeat of the current Foreman agent so it runs only while work is watched.
  * The heartbeat ID is persisted before anything else depends on it and is never guessed: a heartbeat Foreman did
  * not create is never touched, and a recorded one that Paseo no longer has is replaced.
+ * `withLock` wraps only the reads and writes of the supervision record, so the slow Paseo CLI calls run outside the home lock;
+ * the record is checked again before it is written, and a sync that lost a race deletes the heartbeat it just created.
  */
-function syncHeartbeatUnlocked({ home, adapter, agentId, metas, anomalies, cron, enable, at }) {
+function syncHeartbeat({ withLock = (fn) => fn(), ...params }) {
+  const created = [];
+  try { return runHeartbeatSync(params, withLock, created); }
+  catch (error) {
+    if (!error.heartbeatConflict) throw error;
+    const current = withLock(() => readSupervision(params.home).heartbeat);
+    for (const heartbeatId of created) {
+      if (current?.heartbeatId === heartbeatId) continue;
+      try { params.adapter.heartbeatDelete({ agentId: params.agentId, heartbeatId }); } catch (_) {}
+    }
+    return { needed: null, action: "error", reason: "the heartbeat record changed while syncing; run heartbeat sync again", heartbeatId: current?.heartbeatId || null };
+  }
+}
+
+function runHeartbeatSync({ home, adapter, agentId, metas, anomalies, cron, enable, at }, withLock, created) {
   if (cron !== undefined && !validCron(cron)) throw new SchemaValidationError(`Heartbeat cron is not a valid five-field cron: ${cron}`);
-  const supervision = readSupervision(home);
+  const supervision = withLock(() => readSupervision(home));
   const settings = {
     heartbeatCron: cron !== undefined ? String(cron).trim() : supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON,
     heartbeatEnabled: enable !== undefined ? Boolean(enable) : supervision.heartbeatEnabled !== false,
@@ -183,7 +199,11 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, anomalies, cron,
   const result = { needed, enabled: settings.heartbeatEnabled, cron: settings.heartbeatCron, action: "none", heartbeatId: heartbeat?.heartbeatId || null };
   let rejected = false;
   // A cadence Paseo rejected is not saved, so later automatic syncs do not keep retrying it.
-  const save = () => writeSupervisionUnlocked(home, { ...readSupervision(home), ...settings, ...(rejected ? { heartbeatCron: supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON } : {}), heartbeat });
+  const save = () => withLock(() => {
+    const current = readSupervision(home);
+    if ((current.heartbeat?.heartbeatId || null) !== (supervision.heartbeat?.heartbeatId || null)) throw Object.assign(new Error("heartbeat record changed"), { heartbeatConflict: true });
+    writeSupervisionUnlocked(home, { ...current, ...settings, ...(rejected ? { heartbeatCron: supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON } : {}), heartbeat });
+  });
   if (!adapter || typeof adapter.heartbeatCreate !== "function") {
     save();
     return { ...result, action: "unavailable", reason: "the selected runtime has no heartbeat support" };
@@ -211,9 +231,10 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, anomalies, cron,
     heartbeat = null;
   }
   const create = () => {
-    const created = adapter.heartbeatCreate({ agentId, cron: settings.heartbeatCron, name: HEARTBEAT_NAME, prompt: HEARTBEAT_PROMPT });
-    if (!created?.id) throw new SchemaValidationError("Paseo did not return a heartbeat ID");
-    heartbeat = { heartbeatId: String(created.id), agentId, cron: settings.heartbeatCron, name: HEARTBEAT_NAME, createdAt: at, confirmedAt: at, lastFiredAt: null };
+    const response = adapter.heartbeatCreate({ agentId, cron: settings.heartbeatCron, name: HEARTBEAT_NAME, prompt: HEARTBEAT_PROMPT });
+    if (!response?.id) throw new SchemaValidationError("Paseo did not return a heartbeat ID");
+    created.push(String(response.id));
+    heartbeat = { heartbeatId: String(response.id), agentId, cron: settings.heartbeatCron, name: HEARTBEAT_NAME, createdAt: at, confirmedAt: at, lastFiredAt: null };
   };
   try {
     if (needed && !heartbeat) {
@@ -255,5 +276,5 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, anomalies, cron,
 module.exports = {
   validCron, DEFAULT_HEARTBEAT_CRON, HEARTBEAT_NAME, HEARTBEAT_PROMPT,
   supervisionFile, readSupervision, taskNotices, collectNotices, pendingNotices, pruneNotifiedUnlocked, ackNoticesUnlocked,
-  parseHeartbeatPrompt, heartbeatNeeded, recordHeartbeatFiredUnlocked, syncHeartbeatUnlocked,
+  parseHeartbeatPrompt, heartbeatNeeded, recordHeartbeatFiredUnlocked, syncHeartbeat,
 };

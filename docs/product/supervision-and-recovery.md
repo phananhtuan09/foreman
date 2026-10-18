@@ -67,6 +67,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - The heartbeat ID is persisted in `data/supervision.json` and never guessed; because Paseo cannot list heartbeats, a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only when Paseo reports it missing.
 - A new Foreman agent replaces the previous agent's recorded heartbeat.
 - A heartbeat that could not be deleted keeps its record.
+- Paseo heartbeat calls run outside the home lock with a short timeout; the record is checked again before it is written, and a sync that lost a race deletes the heartbeat it just created.
 - Each heartbeat turn uses the prompt hook's single collection and status check, tells the user only the untold notices in one message, records them, and otherwise writes nothing.
 - Only Foreman's own managed heartbeat is treated as a heartbeat turn; other Paseo schedules keep their normal answers.
 - A heartbeat turn never prompts, interrupts, restarts, or recovers a worker, accepts, discards, or closes a task, or decides for the user.

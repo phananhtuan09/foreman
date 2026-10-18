@@ -7,10 +7,11 @@ class PaseoHeartbeatError extends Error {
 }
 
 class PaseoAdapter {
-  constructor({ node = process.execPath, bridge = path.join(__dirname, "..", "bin", "foreman-paseo-bridge.js"), timeoutMs = 120000, runner, heartbeatRunner } = {}) {
+  constructor({ node = process.execPath, bridge = path.join(__dirname, "..", "bin", "foreman-paseo-bridge.js"), timeoutMs = 120000, heartbeatTimeoutMs = 10000, runner, heartbeatRunner } = {}) {
     this.node = node;
     this.bridge = bridge;
     this.timeoutMs = timeoutMs;
+    this.heartbeatTimeoutMs = heartbeatTimeoutMs;
     this.runner = runner;
     this.heartbeatRunner = heartbeatRunner;
     this.backend = "paseo";
@@ -72,7 +73,7 @@ class PaseoAdapter {
     const home = process.env.FOREMAN_PASEO_HOME || process.env.PASEO_HOME;
     try {
       const stdout = execFileSync(process.env.FOREMAN_PASEO_COMMAND || "paseo", ["heartbeat", ...args, "--json", ...(home ? ["--home", home] : [])], {
-        encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: agentId }, stdio: ["ignore", "pipe", "pipe"], timeout: this.timeoutMs,
+        encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: agentId }, stdio: ["ignore", "pipe", "pipe"], timeout: this.heartbeatTimeoutMs,
       });
       return JSON.parse(stdout);
     } catch (error) {
