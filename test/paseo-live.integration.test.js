@@ -246,7 +246,7 @@ test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects th
     const key = `${task.id}/review-ready/${path.basename(reviewReady.completionReport)}`;
     await waitFor(() => core.reconstructTask({ roots, taskId: task.id }).meta.notified?.[key], "the Foreman agent to record that it told the result", 300000);
 
-    // With nothing watched and nothing untold, the next heartbeat turn's hook deletes the heartbeat.
+    // With nothing watched and nothing untold, the acknowledgement (or else the next heartbeat turn's hook) deletes the heartbeat.
     await waitFor(() => readSupervision(roots.foremanHome).heartbeat === null, "the heartbeat to stop", 300000);
     assert.throws(() => paseo(["heartbeat", "update", heartbeatId, "--cron", "* * * * *", "--json", "--home", f.paseoHome], { ...f.env, PASEO_AGENT_ID: foremanAgent }), /not found/i);
     await waitFor(() => !adapter.inspect(foremanAgent).activeTurn, "the last heartbeat turn to finish");
@@ -256,7 +256,7 @@ test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects th
     t.diagnostic(`Foreman agent after the quiet heartbeat turn: requiresAttention=${foremanView.requiresAttention} attentionReason=${foremanView.attentionReason}`);
     t.diagnostic(`Foreman agent timeline tail:\n${timeline.split("\n").slice(-25).join("\n")}`);
     assert.match(timeline, new RegExp(task.id), "the Foreman agent told the user about the review-ready task");
-    assert.equal(timeline.trim().split("\n").at(-1).trim(), "—", "the quiet heartbeat turn told the user nothing");
+    assert.doesNotMatch(timeline.split(task.id).slice(-1)[0], /heartbeat/i, "the agent did not narrate heartbeat housekeeping to the user");
     assert.equal(core.reconstructTask({ roots, taskId: task.id }).meta.status, "review-ready", "the heartbeat did not accept the task");
 
     const accepted = core.acceptTask({ roots, taskId: task.id, adapter });

@@ -68,7 +68,8 @@ function syncHeartbeatAfter(home) {
   if (selectedBackend() !== "paseo") return;
   try {
     const result = core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID });
-    if (!["none", "unavailable"].includes(result.action)) process.stderr.write(`foreman: heartbeat ${result.action}${result.heartbeatId ? ` ${result.heartbeatId}` : ""}${result.reason ? `: ${result.reason}` : ""}\n`);
+    // Starting and stopping the heartbeat is housekeeping the Foreman session must not narrate; only a failure is shown.
+    if (result.action === "error") process.stderr.write(`foreman: heartbeat ${result.action}${result.heartbeatId ? ` ${result.heartbeatId}` : ""}${result.reason ? `: ${result.reason}` : ""}\n`);
   } catch (error) { process.stderr.write(`foreman: heartbeat sync failed: ${error.message}\n`); }
 }
 function output(value) {
