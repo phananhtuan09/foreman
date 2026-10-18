@@ -80,6 +80,7 @@ Every feature and workflow MUST preserve them.
 - Runtime messages are persisted before sending and are not resent after Herdr accepts them.
 - Foreman treats a delayed inspection as endpoint evidence, not proof that the worker consumed a prompt.
 - Supervision is pull-based: no background process watches workers, and a worker never sends prompts into the Foreman session.
+- In Paseo mode, Paseo's native heartbeat may start a Foreman turn while work is watched; Foreman runs no process of its own for it.
 
 ### Safety and failure behavior
 

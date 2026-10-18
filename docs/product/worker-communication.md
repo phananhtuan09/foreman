@@ -69,6 +69,7 @@ Every Foreman-to-worker message is durable before delivery and every worker repo
 - `blocked` moves the task to `blocked` and records the report as `blockerReport`.
 - `progress` leaves the task `working`.
 - Every report becomes `lastReport` in task metadata with `readAt` unset until the Foreman session has been shown it.
+- Being shown a report is not telling the user; `meta.notified` records that separately.
 
 ### Worker stop hook
 

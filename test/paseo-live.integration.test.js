@@ -9,6 +9,7 @@ const test = require("node:test");
 const core = require("../src/foreman");
 const { PaseoAdapter } = require("../src/paseo");
 const { syncPaseoProfiles } = require("../src/paseo-routing");
+const { readSupervision } = require("../src/supervision");
 
 const enabled = process.env.RUN_PASEO_LIVE === "1";
 const paseoCommand = process.env.FOREMAN_PASEO_COMMAND || "paseo";
@@ -73,7 +74,7 @@ async function withLiveFixture(run) {
   const priorPaseoHome = process.env.FOREMAN_PASEO_HOME;
   const priorPaseoCommand = process.env.FOREMAN_PASEO_COMMAND;
   let daemonStarted = false;
-  const fixture = { roots: core.resolveRoots({ foremanRoot, foremanHome }), projectRoot, adapter: null, assigned: null };
+  const fixture = { roots: core.resolveRoots({ foremanRoot, foremanHome }), projectRoot, paseoHome, env, adapter: null, assigned: null, agents: [] };
   try {
     fs.mkdirSync(paseoHome, { recursive: true });
     const port = await freePort();
@@ -93,6 +94,9 @@ async function withLiveFixture(run) {
   } finally {
     if (fixture.assigned && fixture.adapter) {
       try { fixture.adapter.stop(fixture.assigned.endpoint); } catch (_) {}
+    }
+    for (const agent of fixture.agents) {
+      try { fixture.adapter.stop(agent); } catch (_) {}
     }
     if (daemonStarted) {
       try { paseo(["daemon", "stop", "--home", paseoHome, "--timeout", "10"], env); } catch (_) {}
@@ -191,6 +195,72 @@ test("images reach a live Paseo worker in round one, a continued round, a messag
     assert.equal(accepted.deleted, true);
     assert.equal(accepted.imageCleanupError, undefined);
     assert.equal(fs.existsSync(path.join(f.projectRoot, ".foreman")), false, "accept left worker-visible images behind");
+    f.assigned = null;
+  });
+});
+
+async function waitFor(check, label, timeoutMs = 300000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+// The Foreman agent runs in this checkout, so its Claude Code prompt hook is the repository's session-context hook.
+test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects the worker report without prompting the worker", { skip: !enabled, timeout: 1200000 }, async (t) => {
+  await withLiveFixture(async (f) => {
+    const { roots, adapter } = f;
+    const task = core.createTask({
+      roots, projectId: "paseo-live", type: "scout", backend: "paseo",
+      brief: "Read only README.md in this temporary project, do not edit any file, and report its first line using Foreman's required JSON report format.",
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
+    });
+    core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
+    f.assigned = core.assignTask({ roots, taskId: task.id, adapter });
+
+    // `init` in the agent must not rewrite the user's shell startup file.
+    const foremanEnv = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${roots.foremanHome}`, "FOREMAN_BACKEND=paseo", `FOREMAN_PASEO_HOME=${f.paseoHome}`, `FOREMAN_PASEO_COMMAND=${paseoCommand}`, `FOREMAN_SHELL_RC=${path.join(path.dirname(f.paseoHome), "shell-rc")}`];
+    const created = JSON.parse(paseo(["run", "-d", "--json", "--provider", "claude", "--model", process.env.FOREMAN_LIVE_FOREMAN_MODEL || "claude-sonnet-5-5", "--mode", "bypassPermissions",
+      "--cwd", sourceRoot, "--title", "foreman-heartbeat-live", ...foremanEnv.flatMap((entry) => ["--env", entry]), "--home", f.paseoHome,
+      "DEV live heartbeat fixture: reply with the single word READY and do nothing else."], f.env));
+    const foremanAgent = created.agentId;
+    f.agents.push(foremanAgent);
+    await waitFor(() => !adapter.inspect(foremanAgent).activeTurn, "the Foreman agent to finish its first turn");
+
+    const sync = core.syncHeartbeat({ roots, adapter, agentId: foremanAgent, cron: "* * * * *" });
+    assert.equal(sync.action, "created");
+    const heartbeatId = sync.heartbeatId;
+    assert.equal(core.syncHeartbeat({ roots, adapter, agentId: foremanAgent }).action, "none", "no duplicate heartbeat");
+
+    // This test process never collects: the heartbeat turn's prompt hook must.
+    const reviewReady = await waitFor(() => {
+      const meta = core.reconstructTask({ roots, taskId: task.id }).meta;
+      return meta.status === "review-ready" ? meta : null;
+    }, "the heartbeat-triggered hook to collect the worker report", 600000);
+    assert.ok(readSupervision(roots.foremanHome).heartbeat.lastFiredAt, "the hook recognized Foreman's heartbeat");
+    assert.equal(core.listMessages({ roots }).filter((message) => message.taskId === task.id).length, 1, "the worker received only its brief");
+
+    const key = `${task.id}/review-ready/${path.basename(reviewReady.completionReport)}`;
+    await waitFor(() => core.reconstructTask({ roots, taskId: task.id }).meta.notified?.[key], "the Foreman agent to record that it told the result", 300000);
+
+    // With nothing watched and nothing untold, the acknowledgement (or else the next heartbeat turn's hook) deletes the heartbeat.
+    await waitFor(() => readSupervision(roots.foremanHome).heartbeat === null, "the heartbeat to stop", 300000);
+    assert.throws(() => paseo(["heartbeat", "update", heartbeatId, "--cron", "* * * * *", "--json", "--home", f.paseoHome], { ...f.env, PASEO_AGENT_ID: foremanAgent }), /not found/i);
+    await waitFor(() => !adapter.inspect(foremanAgent).activeTurn, "the last heartbeat turn to finish");
+
+    const timeline = paseo(["logs", foremanAgent, "--home", f.paseoHome], f.env);
+    const foremanView = adapter.inspect(foremanAgent);
+    t.diagnostic(`Foreman agent after the quiet heartbeat turn: requiresAttention=${foremanView.requiresAttention} attentionReason=${foremanView.attentionReason}`);
+    t.diagnostic(`Foreman agent timeline tail:\n${timeline.split("\n").slice(-25).join("\n")}`);
+    assert.match(timeline, new RegExp(task.id), "the Foreman agent told the user about the review-ready task");
+    assert.doesNotMatch(timeline.split(task.id).slice(-1)[0], /heartbeat/i, "the agent did not narrate heartbeat housekeeping to the user");
+    assert.equal(core.reconstructTask({ roots, taskId: task.id }).meta.status, "review-ready", "the heartbeat did not accept the task");
+
+    const accepted = core.acceptTask({ roots, taskId: task.id, adapter });
+    assert.equal(accepted.deleted, true);
     f.assigned = null;
   });
 });

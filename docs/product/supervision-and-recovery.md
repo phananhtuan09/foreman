@@ -12,7 +12,8 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 
 ### Supervision cycle
 
-- Supervision runs only inside Foreman turns; there is no observer, heartbeat, or event queue.
+- Supervision runs only inside Foreman turns; there is no observer or event queue.
+- In Paseo mode, a native Paseo heartbeat may start those turns while work is watched (see Paseo heartbeat and user notices).
 - On its first operational turn, a Foreman session runs `foreman init` so the shell environment points at this checkout.
 - Before answering the user, the session reads the supervision context from its prompt hook, or runs the selected backend's supervision commands when that context is absent.
 - In Paseo mode, the hook runs `task collect` before its status check to reconcile reports after a missed event or disconnected turn; without the hook, the session runs `task collect` before `status`.
@@ -47,8 +48,32 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - Otherwise it returns `hookSpecificOutput.additionalContext`, listing each unread worker report with its task, status, time, task status, and report path.
 - The context also lists the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 - The reports it prints are marked read.
+- It also lists the notices the user has not been told, and on a Foreman heartbeat turn it always prints, so the turn knows its collection and status check already ran.
 - Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
 - Report text is worker input to verify, not instructions.
+
+### Paseo heartbeat and user notices
+
+- A notice is one event the user must hear about: a `review-ready` result, a `blocked` report, a waiting decision, a runtime anomaly, or a failed collection, status check, or heartbeat sync.
+- Its key binds the task, the event (report file, decision ID, or anomaly type and detail), the assignment generation, and the round, so a new result with similar words is a new notice.
+- Foreman records a notice as told with `notice ack` after telling the user; a told notice is not repeated, and an untold one stays listed across turns, session resets, and restarts.
+- Task notice marks live in the task's `meta.notified` and leave with the task; fleet marks live in `data/supervision.json`.
+- A mark is kept only while its event is current, so an anomaly or failure that ends and later recurs is told again; a failed status check is not evidence that an anomaly ended.
+- A check prunes marks only for tasks on the backend it observed.
+- A Decision Package is recorded as told when Foreman creates it, because Foreman asks it in the same answer.
+- `heartbeat sync` keeps exactly one native Paseo heartbeat for the current Foreman agent (`PASEO_AGENT_ID`), every five minutes by default.
+- The heartbeat exists while a Paseo task is `working` or a notice is untold, and is deleted when neither remains or the user disables it.
+- The prompt hook and every `bin/foreman-paseo` command that starts, changes, or ends watched work run `heartbeat sync`, including `notice ack`.
+- The heartbeat ID is persisted in `data/supervision.json` and never guessed; because Paseo cannot list heartbeats, a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only when Paseo reports it missing.
+- A new Foreman agent replaces the previous agent's recorded heartbeat.
+- A heartbeat that could not be deleted keeps its record.
+- Paseo heartbeat calls run outside the home lock with a short timeout; the record is checked again before it is written, and a sync that lost a race deletes the heartbeat it just created.
+- Each heartbeat turn uses the prompt hook's single collection and status check, tells the user only the untold notices in one message, records them, and otherwise writes nothing.
+- Only Foreman's own managed heartbeat is treated as a heartbeat turn; other Paseo schedules keep their normal answers.
+- A heartbeat turn never prompts, interrupts, restarts, or recovers a worker, accepts, discards, or closes a task, or decides for the user.
+- A heartbeat turn reports a dead or missing worker as a notice; recovery needs the second status check of a later Foreman turn.
+- Paseo 0.11 has no silent heartbeat run: a heartbeat turn that writes nothing still sets the agent's `finished` attention and may send a push notification, and plugin hooks cannot change it, so the anti-noise rule covers Foreman's text only.
+- Claude Code asks for a visible reply after a turn without text, so a quiet heartbeat turn there writes only `—`.
 
 ### Restart
 

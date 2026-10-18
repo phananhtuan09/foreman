@@ -77,7 +77,8 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── tasks/            task records
   ├── messages/         durable Foreman-to-worker outbox and message lifecycle
   ├── inbox/            images staged from the Foreman session, kept seven days
-  └── sessions/         the Foreman session transcript path recorded by the prompt hook
+  ├── sessions/         the Foreman session transcript path recorded by the prompt hook
+  └── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
   ```
 
 ### Assignment generation

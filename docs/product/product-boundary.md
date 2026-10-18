@@ -37,7 +37,7 @@ This boundary keeps Foreman's global operational context separate from each mana
 - Every task is bound to exactly one registered project, one current owner at most, and one runtime endpoint at most.
 - Project mutations happen through workers in a client-prepared workspace, with resource leases allowing safe concurrency.
 - Foreman can recover safely after its session or a worker exits.
-- Supervision is event-driven and consumes no model tokens while nothing actionable happens.
+- Supervision is event-driven and consumes no model tokens while nothing actionable happens; in Paseo mode a native heartbeat spends one Foreman turn per beat only while work is watched.
 - The user sees conclusions, decisions, approvals, and material anomalies rather than worker transcripts or internal housekeeping.
 - Human wording and worker reports are retained verbatim before Foreman summarizes them, and the user confirms any rewritten instruction before a worker receives it.
 - Foreman never silently broadens authority, merges, discards work, or guesses recovery state.
