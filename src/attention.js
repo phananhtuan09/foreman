@@ -117,6 +117,7 @@ function snoozeUntil(value, at = new Date()) {
  * The limit applies only to the highlight; every task is read.
  */
 function reviewAttention({ home, metas, projects, at, limit = 3 }) {
+  if (!Number.isInteger(limit) || limit < 0) throw new Error(`Attention limit must be a non-negative whole number: ${limit}`);
   const time = Date.parse(at);
   const names = new Map((projects || []).map((project) => [project.id, project.name || project.id]));
   const open = [];
@@ -139,8 +140,10 @@ function reviewAttention({ home, metas, projects, at, limit = 3 }) {
 }
 
 function renderAttention(review) {
+  // A task whose points could not be read was not checked, so the review must never read as an all-clear.
+  const unchecked = (review.skipped || []).length ? `Không đọc được điểm treo của ${review.skipped.map((item) => item.taskId).join(", ")}; các task này chưa được rà soát.` : null;
   if (!review.open) {
-    const lines = ["Không còn điểm treo nào cần nhắc."];
+    const lines = [unchecked ? `Chưa thể kết luận: ${unchecked}` : "Không còn điểm treo nào cần nhắc."];
     if (review.snoozed) lines.push(`(${review.snoozed} điểm đang hoãn nhắc.)`);
     return `${lines.join("\n")}\n`;
   }
@@ -154,6 +157,7 @@ function renderAttention(review) {
   if (review.remaining) tail.push(`còn ${review.remaining} điểm khác`);
   if (review.snoozed) tail.push(`${review.snoozed} điểm đang hoãn`);
   if (tail.length) lines.push(">", `> _${tail.join("; ")}._`);
+  if (unchecked) lines.push(">", `> **Chưa đầy đủ:** ${unchecked}`);
   lines.push("", "---");
   return `${lines.join("\n")}\n`;
 }

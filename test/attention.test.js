@@ -137,3 +137,18 @@ test("accepting a task removes its points, and a reopened point keeps its histor
     assert.throws(() => addAttentionPoint({ roots: f.roots, taskId: task.id, owner: "user", kind: "decision", text: "late" }), /Unknown task/);
   } finally { f.cleanup(); }
 });
+
+test("a task whose points cannot be read is never reported as all clear, and a bad limit is refused", () => {
+  const f = fixture();
+  try {
+    const { task } = routeAndAssign(f);
+    addAttentionPoint({ roots: f.roots, taskId: task.id, owner: "worker", kind: "check", text: "Migration chưa được kiểm chứng" });
+    require("node:fs").writeFileSync(require("../src/attention").attentionFile(f.roots.foremanHome, task.id), "{ not json");
+    const review = attentionReview({ roots: f.roots });
+    assert.deepEqual(review.skipped.map((item) => item.taskId), [task.id]);
+    const block = renderAttention(review);
+    assert.match(block, /^Chưa thể kết luận: Không đọc được điểm treo của /);
+    assert.doesNotMatch(block, /Không còn điểm treo nào/);
+    for (const limit of [Number.NaN, -1, 1.5]) assert.throws(() => attentionReview({ roots: f.roots, limit }), /non-negative whole number/);
+  } finally { f.cleanup(); }
+});

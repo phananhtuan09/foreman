@@ -104,3 +104,15 @@ test("task history gives the user's words, rounds, reports, decisions, pending p
     assert.equal(history.nextAction.current, true);
   } finally { f.cleanup(); }
 });
+
+test("a round that switches the task's mode says so in the shown line, and a changed mode makes the proposal stale", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f, "Inspect the README.", "scout");
+    report(f, assignment, "done", "Found the typo on line 3.");
+    const shown = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });
+    assert.equal(shown.line, `> **▶ ${task.id} · Đề xuất: Sửa lỗi chính tả ở dòng 3 (đổi sang chế độ ship: worker được ghi vào workspace).**`);
+    const same = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc thêm phần cài đặt", instruction: "Read the install section.", type: "scout" });
+    assert.doesNotMatch(same.line, /chế độ/, "no mode note when the mode stays the same");
+  } finally { f.cleanup(); }
+});

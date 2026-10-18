@@ -50,8 +50,14 @@ Write "chốt task" or "accept task" for acceptance, never "merge".
 ## When the user answers
 
 - "gửi bước này", "ok làm đi", or similar approves exactly the shown step.
-  Run `next show --task ID`; if it is still `current`, send it with `task continue --task ID --next --original "<the user's words>"`.
-  The shown line stands for its stored instruction, so this approval is the confirmation `foreman-control` requires; show the instruction only when the user asks for it.
+  Run `next show --task ID`; if it is still `current`, act by its `kind`:
+  - `round`: send it with `task continue --task ID --next --original "<the user's words>"`.
+    The shown line stands for its stored instruction, so this approval is the confirmation `foreman-control` requires; show the instruction only when the user asks for it.
+    When the line names a mode change, the approval covers that change too.
+  - `accept`: `task continue --next` refuses it.
+    Treat the approval as the user's intent to accept, follow the acceptance flow of `foreman-control` (`task accept`), and clear the proposal.
+  - `decision` or `clarify`: nothing is sent to the worker.
+    Put the question to the user through the Decision Package or the clarifying question the line announced, then clear the proposal.
 - If the user edits the step, rewrite the instruction, record it again with `next propose`, and ask before sending.
 - If `next show` reports the step out of date, or the task moved on, re-check the history and propose again; when the step changed materially, show the new line and ask again.
 - When several tasks have current next actions and the reference is vague, ask which task in one short question.

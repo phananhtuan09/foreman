@@ -20,6 +20,7 @@ function proposalBasis(meta) {
     generation: meta.generation,
     status: meta.status,
     decisionId: meta.decisionId || null,
+    taskType: meta.type,
   };
 }
 
@@ -50,6 +51,7 @@ function staleReasons(proposal, meta) {
   if (now.report !== proposal.basis.report) reasons.push("a newer worker report arrived");
   if (now.status !== proposal.basis.status) reasons.push(`the task is now ${now.status}, not ${proposal.basis.status}`);
   if (now.decisionId !== proposal.basis.decisionId) reasons.push("the task's decision changed");
+  if (now.taskType !== proposal.basis.taskType) reasons.push(`the task mode changed to ${now.taskType}`);
   return reasons;
 }
 
@@ -61,6 +63,12 @@ function describe(meta) {
 }
 
 // The one line the user sees right after the report.
-function renderLine(taskId, proposal) { return `> **▶ ${taskId} · Đề xuất: ${proposal.text.replace(/[.。]$/u, "")}.**`; }
+// A round that switches the task's mode says so, because approving the line approves that change too.
+function renderLine(taskId, proposal) {
+  const mode = proposal.type && proposal.type !== proposal.basis.taskType
+    ? ` (đổi sang chế độ ${proposal.type}${proposal.type === "ship" ? ": worker được ghi vào workspace" : ": worker chỉ đọc"})`
+    : "";
+  return `> **▶ ${taskId} · Đề xuất: ${proposal.text.replace(/[.。]$/u, "")}${mode}.**`;
+}
 
 module.exports = { KINDS, NextActionError, proposalBasis, buildProposal, staleReasons, describe, renderLine };
