@@ -118,7 +118,8 @@ test("a waiting blocker or anomaly is told once across heartbeats, and a new one
     const agent = f.adapter.agents.get(assignment.endpoint);
     agent.attentionReason = "permission";
     const permission = pendingKeys(beat(f));
-    assert.deepEqual(permission, [`${task.id}/anomaly/worker.waiting-input:g1:r3`]);
+    assert.equal(permission.length, 1);
+    assert.match(permission[0], new RegExp(`^${task.id}/anomaly/worker.waiting-input:g1:r3:[0-9a-f]{12}$`));
     ackNotices({ roots: f.roots, keys: permission });
     assert.deepEqual(pendingKeys(beat(f)), [], "a permission request that keeps waiting is not repeated");
     agent.attentionReason = null;
@@ -202,7 +203,8 @@ test("heartbeat sync replaces a missing or previous-session heartbeat, keeps a r
     const changed = syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT, cron: "*/10 * * * *" });
     assert.equal(changed.action, "updated");
     assert.equal([...f.adapter.heartbeats.values()][0].cron, "*/10 * * * *");
-    assert.throws(() => syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT, cron: "every 5 minutes" }), /five fields/);
+    assert.throws(() => syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT, cron: "every 5 minutes" }), /valid five-field cron/);
+    assert.throws(() => syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT, cron: "60 * * * *" }), /valid five-field cron/);
 
     const replaced = syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: NEXT_FOREMAN_AGENT });
     assert.equal(replaced.action, "created");

@@ -17,7 +17,22 @@ const HEARTBEAT_PROMPT = [
 ].join(" ");
 // A heartbeat Foreman has not seen fire or confirmed for this long is checked again, because Paseo cannot list heartbeats.
 const HEARTBEAT_CONFIRM_MS = 15 * 60 * 1000;
-const CRON = /^\S+(\s+\S+){4}$/;
+const CRON_FIELDS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+
+// Rejects a cron Paseo would refuse, so a bad cadence is never saved; names such as MON are left to Paseo.
+function validCron(cron) {
+  const fields = String(cron).trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  return fields.every((field, index) => field.split(",").every((token) => {
+    const [range, step, extra] = token.split("/");
+    if (extra !== undefined || (step !== undefined && !/^[1-9]\d*$/.test(step))) return false;
+    if (range === "*" || /[A-Za-z]/.test(range)) return true;
+    const bounds = range.split("-");
+    if (bounds.length > 2 || !bounds.every((bound) => /^\d+$/.test(bound))) return false;
+    const [min, max] = CRON_FIELDS[index];
+    return bounds.every((bound) => Number(bound) >= min && Number(bound) <= max);
+  }));
+}
 
 function supervisionFile(home) { return path.join(home, "data", "supervision.json"); }
 
@@ -51,7 +66,8 @@ function anomalyNotice(issue, meta) {
   const generation = meta?.generation ?? "-";
   const round = meta?.round || 1;
   const detail = issue.reportFile ? `:${path.basename(issue.reportFile)}` : "";
-  return { taskId: issue.taskId, projectId: issue.projectId, generation, round, key: `${issue.taskId}/anomaly/${issue.type}:g${generation}:r${round}${detail}`, kind: "anomaly", type: issue.type, reason: issue.reason || null };
+  const changed = issue.reason ? `:${shortDigest(issue.reason)}` : "";
+  return { taskId: issue.taskId, projectId: issue.projectId, generation, round, key: `${issue.taskId}/anomaly/${issue.type}:g${generation}:r${round}${detail}${changed}`, kind: "anomaly", type: issue.type, reason: issue.reason || null };
 }
 
 function runtimeNotice(message) {
@@ -84,7 +100,8 @@ function pendingNotices(home, notices, metas) {
 
 // Keeps only the marks of notices that are still current, so an event that ends and later recurs is told again.
 // Anomaly marks are kept when the status check failed, because a failed check is not evidence that they cleared.
-function pruneNotifiedUnlocked(home, { notices, statusKnown }) {
+// Only tasks on the observed backend lose anomaly marks, because a check of one backend says nothing about the other.
+function pruneNotifiedUnlocked(home, { notices, statusKnown, backend = null }) {
   const current = new Set(notices.map((notice) => notice.key));
   const tasksRoot = path.join(home, "data", "tasks");
   for (const taskId of fs.existsSync(tasksRoot) ? fs.readdirSync(tasksRoot) : []) {
@@ -92,7 +109,7 @@ function pruneNotifiedUnlocked(home, { notices, statusKnown }) {
     if (!fs.existsSync(file)) continue;
     const meta = validateTaskMetaRecord(readJson(file), taskId);
     const marks = meta.notified || {};
-    const kept = Object.fromEntries(Object.entries(marks).filter(([key]) => current.has(key) || (!statusKnown && key.startsWith(`${taskId}/anomaly/`))));
+    const kept = Object.fromEntries(Object.entries(marks).filter(([key]) => current.has(key) || ((!statusKnown || (meta.backend || "herdr") !== backend) && key.startsWith(`${taskId}/anomaly/`))));
     if (Object.keys(kept).length !== Object.keys(marks).length) atomicJson(file, { ...meta, notified: kept });
   }
   const supervision = readSupervision(home);
@@ -105,23 +122,26 @@ const NOTICE_KEY = /^(fleet|[TB]-\d+)\/(review-ready|blocked|decision|anomaly|ru
 // Records that Foreman told the user about these notices; the key binds task, event, assignment, and round.
 function ackNoticesUnlocked(home, keys, at) {
   if (!Array.isArray(keys) || !keys.length) throw new SchemaValidationError("notice ack requires at least one --key");
-  const acked = [];
-  for (const key of keys) {
+  // Every key is validated before the first write, so a bad key cannot leave the batch half recorded.
+  const writes = keys.map((key) => {
     const match = NOTICE_KEY.exec(String(key));
     if (!match) throw new SchemaValidationError(`Invalid notice key: ${key}`);
     const [, owner] = match;
+    if (owner === "fleet") return { key, owner };
+    const file = metaFile(home, owner);
+    if (!fs.existsSync(file)) throw new SchemaValidationError(`Unknown task for notice: ${key}`);
+    return { key, owner, file, meta: validateTaskMetaRecord(readJson(file), owner) };
+  });
+  for (const { key, owner, file, meta } of writes) {
     if (owner === "fleet") {
       const supervision = readSupervision(home);
       writeSupervisionUnlocked(home, { ...supervision, notified: { ...supervision.notified, [key]: at } });
     } else {
-      const file = metaFile(home, owner);
-      if (!fs.existsSync(file)) throw new SchemaValidationError(`Unknown task for notice: ${key}`);
-      const meta = validateTaskMetaRecord(readJson(file), owner);
-      atomicJson(file, { ...meta, notified: { ...(meta.notified || {}), [key]: at } });
+      const current = validateTaskMetaRecord(readJson(file), owner);
+      atomicJson(file, { ...current, notified: { ...(current.notified || {}), [key]: at } });
     }
-    acked.push(key);
   }
-  return { acked, at };
+  return { acked: keys, at };
 }
 
 // A Paseo heartbeat prompt arrives as `<paseo-system>Schedule "NAME" fired (id=ID, run=RUN).\nPROMPT</paseo-system>`.
@@ -131,9 +151,11 @@ function parseHeartbeatPrompt(prompt) {
 }
 
 // A Paseo worker may still report, or a task notice is still untold: the heartbeat has something to watch.
-function heartbeatNeeded(metas) {
+// `anomalies` are the untold anomaly notices of the latest check, which no task record holds.
+function heartbeatNeeded(metas, anomalies = []) {
   const paseo = metas.filter((meta) => (meta.backend || "herdr") === "paseo");
   if (paseo.some((meta) => meta.status === "working" && meta.endpoint)) return true;
+  if (anomalies.some((notice) => paseo.some((meta) => meta.taskId === notice.taskId))) return true;
   return paseo.some((meta) => taskNotices(meta).some((notice) => !meta.notified?.[notice.key]));
 }
 
@@ -149,22 +171,25 @@ function recordHeartbeatFiredUnlocked(home, heartbeatId, at) {
  * The heartbeat ID is persisted before anything else depends on it and is never guessed: a heartbeat Foreman did
  * not create is never touched, and a recorded one that Paseo no longer has is replaced.
  */
-function syncHeartbeatUnlocked({ home, adapter, agentId, metas, cron, enable, at }) {
-  if (cron !== undefined && !CRON.test(String(cron).trim())) throw new SchemaValidationError(`Heartbeat cron must have five fields: ${cron}`);
+function syncHeartbeatUnlocked({ home, adapter, agentId, metas, anomalies, cron, enable, at }) {
+  if (cron !== undefined && !validCron(cron)) throw new SchemaValidationError(`Heartbeat cron is not a valid five-field cron: ${cron}`);
   const supervision = readSupervision(home);
   const settings = {
     heartbeatCron: cron !== undefined ? String(cron).trim() : supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON,
     heartbeatEnabled: enable !== undefined ? Boolean(enable) : supervision.heartbeatEnabled !== false,
   };
-  const needed = settings.heartbeatEnabled && heartbeatNeeded(metas);
+  const needed = settings.heartbeatEnabled && heartbeatNeeded(metas, anomalies);
   let heartbeat = supervision.heartbeat || null;
   const result = { needed, enabled: settings.heartbeatEnabled, cron: settings.heartbeatCron, action: "none", heartbeatId: heartbeat?.heartbeatId || null };
-  const save = () => writeSupervisionUnlocked(home, { ...readSupervision(home), ...settings, heartbeat });
+  let rejected = false;
+  // A cadence Paseo rejected is not saved, so later automatic syncs do not keep retrying it.
+  const save = () => writeSupervisionUnlocked(home, { ...readSupervision(home), ...settings, ...(rejected ? { heartbeatCron: supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON } : {}), heartbeat });
   if (!adapter || typeof adapter.heartbeatCreate !== "function") {
     save();
     return { ...result, action: "unavailable", reason: "the selected runtime has no heartbeat support" };
   }
-  if (!agentId) {
+  // Without an agent only a recorded heartbeat can still be deleted, by the agent that owns it.
+  if (!agentId && !(heartbeat && !needed)) {
     save();
     return { ...result, action: "unavailable", reason: "this Foreman session is not running inside a Paseo agent (PASEO_AGENT_ID is unset)" };
   }
@@ -175,7 +200,7 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, cron, enable, at
       return { error: error.message };
     }
   };
-  if (heartbeat && heartbeat.agentId !== agentId) {
+  if (agentId && heartbeat && heartbeat.agentId !== agentId) {
     // A new Foreman session replaces the previous session's heartbeat instead of running a second one.
     const removed = remove(heartbeat);
     if (removed.error) {
@@ -219,6 +244,7 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, cron, enable, at
       result.action = "deleted";
     }
   } catch (error) {
+    rejected = true;
     save();
     return { ...result, action: "error", heartbeatId: heartbeat?.heartbeatId || null, reason: error.message };
   }
@@ -227,7 +253,7 @@ function syncHeartbeatUnlocked({ home, adapter, agentId, metas, cron, enable, at
 }
 
 module.exports = {
-  DEFAULT_HEARTBEAT_CRON, HEARTBEAT_NAME, HEARTBEAT_PROMPT,
+  validCron, DEFAULT_HEARTBEAT_CRON, HEARTBEAT_NAME, HEARTBEAT_PROMPT,
   supervisionFile, readSupervision, taskNotices, collectNotices, pendingNotices, pruneNotifiedUnlocked, ackNoticesUnlocked,
   parseHeartbeatPrompt, heartbeatNeeded, recordHeartbeatFiredUnlocked, syncHeartbeatUnlocked,
 };

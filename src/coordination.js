@@ -364,13 +364,15 @@ function reconcileFleet({ roots, adapter }) {
     const paseoTask = (meta.backend || "herdr") === "paseo";
     if (!paseoTask && worker?.projectId && worker.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker.projectId });
     if (worker?.cwd && meta.workspace && path.resolve(worker.cwd) !== path.resolve(meta.workspace)) issues.push({ type: "task.runtime-workspace-mismatch", expected: meta.workspace, actual: worker.cwd });
-    // A Paseo task without an endpoint has no agent yet, so there is no identity to compare.
-    if (paseoTask && meta.endpoint) {
-      if (!worker?.workspaceId || worker.workspaceId !== meta.workspaceId) issues.push({ type: "task.runtime-workspace-id-mismatch", expected: meta.workspaceId, actual: worker?.workspaceId || null });
-      if (!meta.adopted) {
-        if (worker?.taskId !== meta.taskId) issues.push({ type: "task.runtime-task-mismatch", expected: meta.taskId, actual: worker?.taskId || null });
-        if (worker?.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker?.projectId || null });
-        if (worker?.generation == null || Number(worker.generation) !== Number(meta.generation)) issues.push({ type: "task.runtime-generation-mismatch", expected: meta.generation, actual: worker?.generation ?? null });
+    if (paseoTask) {
+      // A task never assigned to an endpoint has no runtime worker to compare with; its durable status is its state.
+      if (worker || meta.endpoint) {
+        if (!worker?.workspaceId || worker.workspaceId !== meta.workspaceId) issues.push({ type: "task.runtime-workspace-id-mismatch", expected: meta.workspaceId, actual: worker?.workspaceId || null });
+        if (!meta.adopted) {
+          if (worker?.taskId !== meta.taskId) issues.push({ type: "task.runtime-task-mismatch", expected: meta.taskId, actual: worker?.taskId || null });
+          if (worker?.projectId !== meta.projectId) issues.push({ type: "task.runtime-project-mismatch", expected: meta.projectId, actual: worker?.projectId || null });
+          if (worker?.generation == null || Number(worker.generation) !== Number(meta.generation)) issues.push({ type: "task.runtime-generation-mismatch", expected: meta.generation, actual: worker?.generation ?? null });
+        }
       }
     } else {
       if (worker?.workspaceId && meta.workspaceId && worker.workspaceId !== meta.workspaceId) issues.push({ type: "task.runtime-workspace-id-mismatch", expected: meta.workspaceId, actual: worker.workspaceId });

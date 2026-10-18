@@ -39,6 +39,7 @@ function sessionBackend() {
     if (!fs.existsSync(taskRoot)) return null;
     const active = core.listTasks({ roots: roots() }).filter((meta) => !["accepted", "cleaned", "review-ready"].includes(meta.status));
     const backends = new Set(active.map((meta) => meta.backend || "herdr"));
+    if (backends.size === 0 && process.env.PASEO_AGENT_ID && require("../src/supervision").readSupervision(roots().foremanHome).heartbeat) return "paseo";
     return backends.size === 1 ? [...backends][0] : null;
   } catch (_) {
     return null;
@@ -341,7 +342,9 @@ function main() {
     return;
   }
   if (command === "notice" && action === "ack") {
-    output(core.ackNotices({ roots: home, keys: args("--key") }));
+    const result = core.ackNotices({ roots: home, keys: args("--key") });
+    syncHeartbeatAfter(home);
+    output(result);
     return;
   }
   if (command === "heartbeat" && action === "sync") {

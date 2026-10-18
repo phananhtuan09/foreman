@@ -63,7 +63,7 @@ Only recovery counts against the attempt limit.
 Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
-An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, or assigned to a worker a status check confirms dead or missing.
+An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, a pending task whose dispatch never recorded an endpoint or sent a prompt while no runtime worker carries its owner, or assigned to a worker a status check confirms dead or missing.
 
 ## Read-only task summary and the Paseo dashboard
 

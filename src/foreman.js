@@ -1350,7 +1350,14 @@ function isUntouchedQueuedTask(meta) {
     && !((meta.resources?.length || 0) > 0) && !meta.lastReport && !meta.completionReport && !meta.handoff;
 }
 
-// Discard removes an untouched queued task, or an assigned task whose worker is confirmed dead or missing.
+// A dispatch that stopped before its endpoint or prompt was recorded leaves an owner and lease but no worker.
+function isUndeliveredDispatch(meta) {
+  return meta.status === "pending" && Boolean(meta.owner)
+    && !meta.endpoint && !meta.paneId && !meta.lastPromptAt && !meta.briefMessageId
+    && !meta.lastReport && !meta.completionReport && !meta.handoff;
+}
+
+// Discard removes an untouched queued task, an undelivered dispatch with no runtime worker, or an assigned task whose worker is confirmed dead or missing.
 function discardTask({ roots, taskId, adapter }) {
   if (!/^T-\d{6,}$/.test(String(taskId || ""))) throw new ValidationError("Task ID is invalid");
   const observed = readMeta(roots.foremanHome, taskId);
@@ -1359,14 +1366,16 @@ function discardTask({ roots, taskId, adapter }) {
   if (!isUntouchedQueuedTask(observed)) {
     if (!adapter) throw new ValidationError("Discarding an assigned task requires runtime evidence");
     const item = coordination.reconcileFleet({ roots, adapter }).tasks.find((entry) => entry.taskId === taskId);
-    if (!item || !["dead", "missing"].includes(item.state)) {
-      throw new ValidationError("Only untouched queued tasks or tasks whose worker is confirmed dead or missing can be discarded");
-    }
-    workerState = item.state;
+    if (item && isUndeliveredDispatch(observed) && !item.worker) workerState = "undelivered";
+    else if (item && ["dead", "missing"].includes(item.state)) workerState = item.state;
+    else throw new ValidationError("Only untouched queued tasks, undelivered dispatches with no runtime worker, or tasks whose worker is confirmed dead or missing can be discarded");
   }
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
-    if (workerState ? Number(meta.generation) !== Number(observed.generation) || meta.endpoint !== observed.endpoint : !isUntouchedQueuedTask(meta)) {
+    const changed = workerState === "undelivered" ? !isUndeliveredDispatch(meta) || meta.owner !== observed.owner
+      : workerState ? Number(meta.generation) !== Number(observed.generation) || meta.endpoint !== observed.endpoint
+      : !isUntouchedQueuedTask(meta);
+    if (changed) {
       throw new ValidationError("Task assignment changed during discard; check status and retry");
     }
     for (const id of taskIds(roots.foremanHome)) {
@@ -2154,7 +2163,7 @@ function supervisionCheck({ roots, adapter }) {
       const current = readMeta(roots.foremanHome, taskId);
       if (current.lastReport?.file === lastReport.file && !current.lastReport.readAt) atomicJson(metaFile(roots.foremanHome, taskId), { ...current, lastReport: { ...current.lastReport, readAt: at } });
     }
-    supervision.pruneNotifiedUnlocked(roots.foremanHome, { notices, statusKnown: Boolean(adapter) && !runtimeError });
+    supervision.pruneNotifiedUnlocked(roots.foremanHome, { notices, statusKnown: Boolean(adapter) && !runtimeError, backend: adapter?.backend || null });
   });
   const pending = supervision.pendingNotices(roots.foremanHome, notices, listTasks({ roots }));
   return { checkedAt: at, backend: adapter?.backend || null, unread, anomalies, runtimeError, notices: pending };
@@ -2209,7 +2218,9 @@ function sessionContext({ roots, adapter, prompt = "", cwd, transcriptPath, sess
   // `image stage` reads pasted images from this transcript later in the same turn.
   try { attachments.recordSession({ roots, sessionId, transcriptPath, cwd }); } catch (_) {}
   if (!fs.existsSync(path.join(roots.foremanHome, "data", "tasks"))) return null;
-  const fired = supervision.parseHeartbeatPrompt(prompt);
+  // Other Paseo schedules that fire in this session keep their normal answers.
+  const parsed = supervision.parseHeartbeatPrompt(prompt);
+  const fired = parsed?.name === supervision.HEARTBEAT_NAME ? parsed : null;
   let heartbeat = null;
   if (fired) {
     const recorded = withHomeLock(roots.foremanHome, () => {
@@ -2220,7 +2231,7 @@ function sessionContext({ roots, adapter, prompt = "", cwd, transcriptPath, sess
     heartbeat = { ...fired, managed: recorded?.heartbeatId === fired.heartbeatId, recorded: recorded?.heartbeatId || null };
   }
   const check = supervisionCheck({ roots, adapter });
-  const sync = adapter?.backend === "paseo" && agentId ? syncHeartbeat({ roots, adapter, agentId }) : null;
+  const sync = adapter?.backend === "paseo" ? syncHeartbeat({ roots, adapter, agentId, anomalies: check.notices.filter((notice) => notice.kind === "anomaly") }) : null;
   if (!heartbeat && !check.unread.length && !check.anomalies.length && !check.runtimeError && !check.notices.length && sync?.action !== "error") return null;
   return renderSupervision(check, { heartbeat, sync });
 }
@@ -2229,9 +2240,9 @@ function ackNotices({ roots, keys }) {
   return withHomeLock(roots.foremanHome, () => supervision.ackNoticesUnlocked(roots.foremanHome, keys, now()));
 }
 
-function syncHeartbeat({ roots, adapter, agentId, cron, enable }) {
+function syncHeartbeat({ roots, adapter, agentId, anomalies, cron, enable }) {
   initHome(roots);
-  return withHomeLock(roots.foremanHome, () => supervision.syncHeartbeatUnlocked({ home: roots.foremanHome, adapter, agentId, metas: listTasks({ roots }), cron, enable, at: now() }));
+  return withHomeLock(roots.foremanHome, () => supervision.syncHeartbeatUnlocked({ home: roots.foremanHome, adapter, agentId, metas: listTasks({ roots }), anomalies, cron, enable, at: now() }));
 }
 
 function validateDispatchProfile(profile, capabilities = {}) {
