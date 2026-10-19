@@ -3,6 +3,7 @@
 // A stored proposal is not permission to act: sending it still needs the user's agreement in that turn.
 
 const KINDS = ["round", "decision", "accept", "clarify"];
+const { digest } = require("./coordination");
 
 class NextActionError extends Error {}
 
@@ -12,7 +13,7 @@ function requireText(value, label) {
 }
 
 // The state a proposal is based on: the report it answers, the round, the assignment, the lifecycle, and any decision.
-function proposalBasis(meta) {
+function proposalBasis(meta, points = []) {
   return {
     report: meta.lastReport?.file || null,
     reportAt: meta.lastReport?.at || null,
@@ -21,10 +22,11 @@ function proposalBasis(meta) {
     status: meta.status,
     decisionId: meta.decisionId || null,
     taskType: meta.type,
+    attentionDigest: digest(points),
   };
 }
 
-function buildProposal({ meta, kind, text, instruction, type, at }) {
+function buildProposal({ meta, kind, text, instruction, type, at, points }) {
   if (!KINDS.includes(kind)) throw new NextActionError(`Next action kind must be one of: ${KINDS.join(", ")}`);
   if (["accepted", "cleaned"].includes(meta.status)) throw new NextActionError(`Task ${meta.taskId} has ended`);
   if (kind === "accept" && meta.status !== "review-ready") throw new NextActionError(`Only a review-ready task can be proposed for acceptance; ${meta.taskId} is ${meta.status}`);
@@ -36,15 +38,15 @@ function buildProposal({ meta, kind, text, instruction, type, at }) {
     text: requireText(text, "Next action text"),
     instruction: kind === "round" ? requireText(instruction, "A round proposal's worker instruction") : null,
     type: type || null,
-    basis: proposalBasis(meta),
+    basis: proposalBasis(meta, points),
     proposedAt: at,
   };
 }
 
 // Every way the task moved on since the proposal was shown; an empty list means it still applies.
-function staleReasons(proposal, meta) {
+function staleReasons(proposal, meta, points) {
   if (!proposal) return ["no next action was proposed"];
-  const now = proposalBasis(meta);
+  const now = proposalBasis(meta, points);
   const reasons = [];
   if (now.generation !== proposal.basis.generation) reasons.push(`the task moved to worker generation ${now.generation}`);
   if (now.round !== proposal.basis.round) reasons.push(`round ${now.round} started after the proposal`);
@@ -52,13 +54,14 @@ function staleReasons(proposal, meta) {
   if (now.status !== proposal.basis.status) reasons.push(`the task is now ${now.status}, not ${proposal.basis.status}`);
   if (now.decisionId !== proposal.basis.decisionId) reasons.push("the task's decision changed");
   if (now.taskType !== proposal.basis.taskType) reasons.push(`the task mode changed to ${now.taskType}`);
+  if (now.attentionDigest !== proposal.basis.attentionDigest) reasons.push("the task's pending points changed or were not recorded with the proposal");
   return reasons;
 }
 
-function describe(meta) {
+function describe(meta, points) {
   const proposal = meta.nextAction || null;
   if (!proposal) return null;
-  const stale = staleReasons(proposal, meta);
+  const stale = staleReasons(proposal, meta, points);
   return { taskId: meta.taskId, projectId: meta.projectId, ...proposal, current: stale.length === 0, stale };
 }
 

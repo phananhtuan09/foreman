@@ -5,7 +5,7 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, registerProject, createTask, confirmTaskProfile, assignTask, collectPaseoReports, continueTask, acceptTask, reconstructTask,
-  addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention,
+  addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention, reassignWorker,
 } = require("../src/foreman");
 const attention = require("../src/attention");
 const { fixture, routeAndAssign } = require("./support/paseo-fixture");
@@ -150,5 +150,23 @@ test("a task whose points cannot be read is never reported as all clear, and a b
     assert.match(block, /^Chưa thể kết luận: Không đọc được điểm treo của /);
     assert.doesNotMatch(block, /Không còn điểm treo nào/);
     for (const limit of [Number.NaN, -1, 1.5]) assert.throws(() => attentionReview({ roots: f.roots, limit }), /non-negative whole number/);
+  } finally { f.cleanup(); }
+});
+
+test("report-backed point sources and resolutions keep the report's round and generation after reassignment", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    const firstReport = report(f, assignment, "done", "Initial inspection complete.");
+    continueTask({ roots: f.roots, taskId: task.id, text: "Verify the inspection.", original: "kiểm chứng", adapter: f.adapter });
+    const secondReport = report(f, assignment, "done", "Inspection verified.");
+    reassignWorker({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.generation, 2);
+    const point = addAttentionPoint({ roots: f.roots, taskId: task.id, owner: "worker", kind: "check", text: "Inspection verification", report: firstReport }).point;
+    assert.deepEqual([point.source.round, point.source.generation], [1, 1]);
+    const resolved = resolveAttentionPoint({ roots: f.roots, taskId: task.id, pointId: point.id, how: "verified", text: "Previous worker verified the inspection", report: secondReport }).point;
+    assert.deepEqual([resolved.resolution.source.round, resolved.resolution.source.generation], [2, 1]);
+    const userPoint = addAttentionPoint({ roots: f.roots, taskId: task.id, owner: "user", kind: "decision", text: "Choose the next step", user: true }).point;
+    assert.equal(userPoint.source.generation, 2);
   } finally { f.cleanup(); }
 });

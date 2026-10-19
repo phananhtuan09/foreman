@@ -1634,10 +1634,13 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
       // Only the exact step the user saw, while the task is still where it was, may be sent from the proposal.
       const proposal = meta.nextAction;
       if (!proposal || proposal.kind !== "round") throw new ValidationError(`Task ${taskId} has no proposed round to send`);
-      const stale = nextAction.staleReasons(proposal, meta);
+      const stale = nextAction.staleReasons(proposal, meta, attention.readAttention(roots.foremanHome, taskId).points);
       if (stale.length) throw new ValidationError(`The next action of ${taskId} is out of date: ${stale.join("; ")}; propose it again and ask the user`);
       text = proposal.instruction;
-      if (requestedType === undefined && proposal.type) requestedType = proposal.type;
+      const proposedType = proposal.type || proposal.basis.taskType;
+      if (requestedType !== undefined && requestedType !== proposedType) throw new ValidationError("A round sent from the next action uses its stored mode; propose the mode change again before sending");
+      if (resources !== undefined) throw new ValidationError("A round sent from the next action uses its stored resources; do not pass --resources");
+      requestedType = proposedType;
     }
     if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
     if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
@@ -2270,12 +2273,15 @@ function liveTask(home, taskId) {
 // A point taken from a worker report names that report, which must be one of the task's own reports.
 function attentionSource(home, meta, { report, user }) {
   if (report && user) throw new ValidationError("A point comes from a report or from the user, not both");
-  if (!report) return { type: user ? "user" : "request", ref: null, round: meta.round || 1 };
+  if (!report) return { type: user ? "user" : "request", ref: null, round: meta.round || 1, generation: meta.generation };
   const file = path.resolve(report);
   const reports = path.join(taskDir(home, meta.taskId), "reports");
   if (!isWithin(reports, file) || !fs.existsSync(file)) throw new ValidationError(`Report is not a report of ${meta.taskId}: ${report}`);
-  const round = Number(/^ROUND: (\d+)$/m.exec(fs.readFileSync(file, "utf8").split("\n\n")[0])?.[1] || 1);
-  return { type: "report", ref: file, round };
+  const header = fs.readFileSync(file, "utf8").split("\n\n")[0];
+  const round = Number(/^ROUND: (\d+)$/m.exec(header)?.[1] || 1);
+  const generation = Number(/^GENERATION: (\d+)$/m.exec(header)?.[1]);
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new ValidationError(`Report generation is invalid: ${report}`);
+  return { type: "report", ref: file, round, generation };
 }
 
 function addAttentionPoint({ roots, taskId, owner, kind, text, action, report, user }) {
@@ -2321,7 +2327,7 @@ function proposeNextAction({ roots, taskId, kind, text, instruction, type }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     let proposal;
-    try { proposal = nextAction.buildProposal({ meta, kind, text, instruction, type: type === undefined ? undefined : String(type).toLowerCase(), at: now() }); }
+    try { proposal = nextAction.buildProposal({ meta, kind, text, instruction, type: type === undefined ? undefined : String(type).toLowerCase(), at: now(), points: attention.readAttention(roots.foremanHome, taskId).points }); }
     catch (error) { throw new ValidationError(error.message); }
     atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, nextAction: proposal });
     return { taskId, ...proposal, line: nextAction.renderLine(taskId, proposal) };
@@ -2331,7 +2337,7 @@ function proposeNextAction({ roots, taskId, kind, text, instruction, type }) {
 // Each live task's shown next action and whether it still matches the task.
 function nextActions({ roots, taskId } = {}) {
   const metas = taskId ? [readMeta(roots.foremanHome, taskId)] : listTasks({ roots });
-  return metas.map(nextAction.describe).filter(Boolean);
+  return metas.map((meta) => nextAction.describe(meta, meta.nextAction ? attention.readAttention(roots.foremanHome, meta.taskId).points : [])).filter(Boolean);
 }
 
 // The user declined or postponed the step; the request itself is untouched.
@@ -2358,7 +2364,7 @@ function taskHistory({ roots, taskId }) {
     lastReport: meta.lastReport ? { ...meta.lastReport, text: reportBody(meta.lastReport.file) } : null,
     decisions: handoff.decisions.map(({ decisionId, finding, options, recommendation, status, humanResponse, answeredAt }) => ({ decisionId, finding, options, recommendation, status, humanResponse, answeredAt })),
     attention: attention.readAttention(roots.foremanHome, taskId).points,
-    nextAction: nextAction.describe(meta),
+    nextAction: nextAction.describe(meta, attention.readAttention(roots.foremanHome, taskId).points),
   };
 }
 

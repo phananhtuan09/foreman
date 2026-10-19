@@ -29,6 +29,7 @@ Blockers and decisions are persisted with the human response verbatim so authori
 - A pending point is one obligation of the requested work, one decision waiting for the user, or one check still missing that affects the result.
 - Points live in the task's `attention.json`, written only by the Foreman session through `attention` commands under the home lock, and leave with the task at acceptance or discard; no task or subtask is created for them.
 - Each point has a stable ID within its task (`P1`, `P2`, ...), an owner (`user` when the user must act, `worker` when the worker must still do or prove it), a kind (`decision`, `obligation`, or `check`), its text and optional action, and its source: the request, the user's words, or one of the task's own report files, with its round and generation.
+- Report-backed sources and resolutions retain the report's round and generation even after the worker is replaced.
 - A point closes as `answered`, `verified`, `dropped`, or `limit-accepted`, keeping the user's words or the evidence report; a closed point is kept, so adding the same words again is refused, and reopening it records why and keeps the earlier resolution.
 - An answer is recorded when the user gives it, independently of delivering it to the worker.
 - A point can be snoozed until a time, `tomorrow` meaning the start of the next local day, without being closed.

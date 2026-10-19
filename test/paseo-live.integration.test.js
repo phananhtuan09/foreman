@@ -354,3 +354,50 @@ test("a real Foreman agent proposes the missing step after a report and sends ex
     f.assigned = null;
   });
 });
+
+test("live Paseo refuses changed or outdated approved steps and preserves evidence from the replaced worker", { skip: !enabled, timeout: 600000 }, async () => {
+  await withLiveFixture(async (f) => {
+    const { roots, adapter } = f;
+    const task = core.createTask({
+      roots, projectId: "paseo-live", type: "scout", backend: "paseo",
+      brief: "Read README.md and report its first line. Do not edit any file.",
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
+    });
+    const opts = { roots, taskId: task.id };
+    core.confirmTaskProfile({ ...opts, profile: "claude-sonnet" });
+    f.assigned = core.assignTask({ ...opts, adapter });
+    const firstReport = (await waitForReport(f, task.id)).lastReport.file;
+    core.addAttentionPoint({ ...opts, owner: "worker", kind: "check", text: "Count the README lines", report: firstReport });
+    const proposal = { ...opts, kind: "round", text: "Đếm số dòng README", instruction: "Count the lines in README.md and report the count. Do not edit any file.", type: "scout" };
+    core.proposeNextAction(proposal);
+    const messages = () => core.listMessages({ roots }).filter((item) => item.taskId === task.id).length;
+    const before = messages();
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", type: "ship", adapter }), /stored mode/);
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", resources: [{ key: "workspace/paseo-live", mode: "exclusive" }], adapter }), /stored resources/);
+    core.resolveAttentionPoint({ ...opts, pointId: "P1", how: "dropped", text: "Bỏ bước đếm dòng", user: true });
+    assert.equal(core.nextActions(opts)[0].current, false);
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", adapter }), /out of date: .*pending points changed/);
+    assert.equal(messages(), before, "refused steps never reach the real worker");
+    assert.equal(core.reconstructTask(opts).meta.round || 1, 1);
+
+    // A new user request restores the check, then a fresh proposal can be approved.
+    core.reopenAttentionPoint({ ...opts, pointId: "P1", why: "Người dùng yêu cầu đếm dòng trở lại" });
+    core.proposeNextAction(proposal);
+    const sent = core.continueTask({ ...opts, fromNext: true, original: "gửi bước đếm dòng mới", adapter });
+    assert.equal(sent.round.sent, proposal.instruction);
+    assert.equal(sent.round.mode, "scout");
+    assert.ok(sent.round.resources.every((claim) => claim.mode === "read"));
+    const secondReport = (await waitForReport(f, task.id, 2)).lastReport.file;
+
+    f.assigned = core.reassignWorker({ ...opts, adapter });
+    await waitForReport(f, task.id, 3);
+    const generation = core.reconstructTask(opts).meta.generation;
+    assert.equal(generation, 2);
+    const point = core.addAttentionPoint({ ...opts, owner: "worker", kind: "check", text: "Review the previous worker's evidence", report: firstReport }).point;
+    assert.deepEqual([point.source.round, point.source.generation], [1, 1]);
+    const resolved = core.resolveAttentionPoint({ ...opts, pointId: point.id, how: "verified", text: "Earlier worker reported the line count", report: secondReport }).point;
+    assert.deepEqual([resolved.resolution.source.round, resolved.resolution.source.generation], [2, 1]);
+    core.acceptTask({ ...opts, adapter });
+    f.assigned = null;
+  });
+});

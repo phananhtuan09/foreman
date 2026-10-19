@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   resolveRoots, collectPaseoReports, continueTask, sendWorkerMessage, acceptTask, reconstructTask, addAttentionPoint, createDecision,
-  proposeNextAction, nextActions, clearNextAction, taskHistory,
+  proposeNextAction, nextActions, clearNextAction, taskHistory, resolveAttentionPoint, reopenAttentionPoint,
 } = require("../src/foreman");
 const { fixture, routeAndAssign } = require("./support/paseo-fixture");
 
@@ -114,5 +114,53 @@ test("a round that switches the task's mode says so in the shown line, and a cha
     assert.equal(shown.line, `> **▶ ${task.id} · Đề xuất: Sửa lỗi chính tả ở dòng 3 (đổi sang chế độ ship: worker được ghi vào workspace).**`);
     const same = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc thêm phần cài đặt", instruction: "Read the install section.", type: "scout" });
     assert.doesNotMatch(same.line, /chế độ/, "no mode note when the mode stays the same");
+    proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });
+    const sent = continueTask({ roots: f.roots, taskId: task.id, fromNext: true, original: "gửi bước sửa lỗi", adapter: f.adapter });
+    assert.equal(sent.round.mode, "ship", "the approved mode change still takes effect");
+    assert.equal(sent.round.resources[0].mode, "exclusive");
+  } finally { f.cleanup(); }
+});
+
+test("sending a shown round refuses mode and resource overrides before messaging the worker", () => {
+  for (const type of [undefined, "scout"]) {
+    const f = fixture();
+    try {
+      const { task, assignment } = routeAndAssign(f);
+      report(f, assignment, "done", "Read the first section.");
+      proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc phần cài đặt", instruction: "Read the install section.", type });
+      const before = f.adapter.sent.length;
+      const send = (options) => continueTask({ roots: f.roots, taskId: task.id, fromNext: true, original: "gửi bước này", adapter: f.adapter, ...options });
+      assert.throws(() => send({ type: "ship" }), /stored mode/);
+      assert.throws(() => send({ resources: [{ key: "workspace/fixture", mode: "exclusive" }] }), /stored resources/);
+      assert.equal(f.adapter.sent.length, before);
+      assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.type, "scout");
+      const sent = send({ type: "scout" });
+      assert.equal(sent.round.mode, "scout");
+      assert.ok(sent.round.resources.every((claim) => claim.mode === "read"));
+    } finally { f.cleanup(); }
+  }
+});
+
+test("a changed pending point makes the shown step stale across a restart", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Implementation complete; migration verification remains.");
+    const opts = { roots: f.roots, taskId: task.id };
+    addAttentionPoint({ ...opts, owner: "worker", kind: "check", text: "Migration verification" });
+    proposeNextAction({ ...opts, kind: "round", text: "Kiểm chứng migration", instruction: VERIFY });
+    resolveAttentionPoint({ ...opts, pointId: "P1", how: "dropped", text: "Bỏ kiểm chứng migration", user: true });
+    const restarted = resolveRoots({ foremanRoot: f.roots.foremanRoot, foremanHome: f.roots.foremanHome });
+    const stale = nextActions({ ...opts, roots: restarted })[0];
+    assert.equal(stale.current, false);
+    assert.match(stale.stale.join("; "), /pending points changed/);
+    assert.equal(taskHistory(opts).nextAction.current, false);
+    const before = f.adapter.sent.length;
+    assert.throws(() => continueTask({ ...opts, roots: restarted, fromNext: true, original: "gửi bước này", adapter: f.adapter }), /out of date: .*pending points changed/);
+    assert.equal(f.adapter.sent.length, before);
+    proposeNextAction({ ...opts, kind: "accept", text: "Chốt task" });
+    assert.equal(nextActions(opts)[0].current, true, "a new proposal uses the changed points");
+    reopenAttentionPoint({ ...opts, pointId: "P1", why: "New data requires verification" });
+    assert.equal(nextActions(opts)[0].current, false, "reopening also invalidates an acceptance proposal");
   } finally { f.cleanup(); }
 });

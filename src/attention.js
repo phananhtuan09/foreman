@@ -59,7 +59,7 @@ function addPointUnlocked({ home, meta, owner, kind, text, action, source, at })
   }
   const point = {
     id: `P${record.points.length + 1}`, owner, kind, text: words, action: action ? requireText(action, "Attention action") : null,
-    source: { ...source, round: source?.round || meta.round || 1, generation: meta.generation }, status: "open",
+    source: { ...source, round: source?.round || meta.round || 1, generation: source?.generation ?? meta.generation }, status: "open",
     createdAt: at, updatedAt: at, snoozedUntil: null, resolution: null, history: [],
   };
   writeAttentionUnlocked(home, { ...record, points: [...record.points, point] });
