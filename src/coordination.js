@@ -88,9 +88,10 @@ function listRounds({ roots, taskId, statuses }) {
   const dir = roundsDir(roots.foremanHome, taskId);
   if (!fs.existsSync(dir)) return [];
   const allowed = statuses ? new Set(statuses) : null;
-  return fs.readdirSync(dir).filter((name) => /^round-\d+\.json$/.test(name)).sort()
+  return fs.readdirSync(dir).filter((name) => /^round-\d+\.json$/.test(name))
     .map((name) => validateRoundRecord(readJson(path.join(dir, name)), taskId, Number(name.slice(6, -5))))
-    .filter((record) => !allowed || allowed.has(record.status));
+    .filter((record) => !allowed || allowed.has(record.status))
+    .sort((left, right) => left.round - right.round);
 }
 
 function writeRoundUnlocked({ roots, record }) {
