@@ -56,4 +56,4 @@ function installShellEnv({ vars, env = process.env, platform = process.platform,
   return { ...target, changed: true, vars };
 }
 
-module.exports = { ShellEnvError, detectShellStartupFile, installShellEnv };
+module.exports = { ShellEnvError, detectShellStartupFile, installShellEnv, quote };

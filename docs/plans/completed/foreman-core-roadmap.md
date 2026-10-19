@@ -191,5 +191,6 @@ Sections 14–16 remain the normative roadmap and acceptance contract; this sect
 - Scout read-only behavior relies only on the read-only resource lease shown in the brief; the runtime does not sandbox project files.
 - `image stage` reads Claude Code session JSONL and Codex rollout files, which are not public APIs; the parser is covered by fixtures, not by a live capture, and `--image FILE` remains the fallback when a client stores pasted images elsewhere.
 - A worker whose model cannot read images still receives the image paths; Foreman does not route by vision support.
+- The session doctor of `docs/product/session-doctor.md` is implemented; on 2026-10-16 a real Claude agent running `foreman-doctor` through Paseo classified 3 synthetic labeled tuning sessions and 4 held-out ones correctly, with no false positive and no missed mistake; a set the user labels from real sessions is still needed before any quality threshold is set.
 - Pull-request delivery, remote homes, relay channels, automatic model optimization, Paseo-managed worker subagent import, and autonomous merge authority remain deferred according to sections 4, 14, and 17.
 

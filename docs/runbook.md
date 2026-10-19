@@ -238,6 +238,13 @@ Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handof
 Do not delete `data/` while work is active.
 Pull-request delivery, remote homes, relay channels, additional runtime backends, and merge authority are deferred.
 
+## Session doctor
+
+`doctor sessions [--limit N] [--since TIME] [--include-dev] [--json]` lists past Foreman sessions of this checkout, newest first, from `~/.claude/projects/<checkout>` and Codex rollouts whose cwd is the checkout (`CODEX_HOME` or `~/.codex`).
+`doctor session --session ID|FILE|--current [--from N] [--max-events N] [--json]` prints one session as numbered events with coverage and the committed rules in force; `--current` reads the transcript the prompt hook recorded last.
+An ID is looked up only among Foreman sessions, while a FILE path is read as given, without that filter.
+Both are read-only and never touch `data/`; the `foreman-doctor` skill analyzes their output.
+
 ## Paseo dashboard plugin
 
 `paseo-plugins/foreman-dashboard/` is an optional, read-only Paseo plugin that shows running workers and open tasks in the Paseo sidebar.

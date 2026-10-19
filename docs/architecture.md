@@ -7,6 +7,7 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/next-action.js` builds a task's shown next action and decides whether it still matches the task.
 `src/attention.js` owns the pending points of each task in `data/tasks/<taskId>/attention.json` and the read-only review across all live tasks.
 `src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
+`src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
 `bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and selects the matching runtime adapter.
 All private records live under `FOREMAN_HOME/data/`: each task keeps its brief, the user's original wording, round records, metadata, decisions, reports, and optional handoff in `data/tasks/<taskId>/`, while `data/messages/` holds the fleet-wide outbox.

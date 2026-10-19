@@ -13,6 +13,7 @@ Read `docs/runbook.md` when the request needs exact CLI syntax, local setup, hoo
 For routing and profile selection, inspect `config/model-routing.json`; for Paseo dispatch fields, inspect the matching `foreman-<profile>` entry in `config/paseo-agent-profiles.json` (every routing profile needs one; `isActive` only controls selection) and run the profile sync command after changing them.
 For handoff after confirmed worker death or absence, read `.agents/skills/foreman-recovery/SKILL.md`.
 When the user invokes `foreman-attention` or asks what they may have missed, read `.agents/skills/foreman-attention/SKILL.md`.
+When the user asks Doctor to check past Foreman sessions, read `.agents/skills/foreman-doctor/SKILL.md`.
 Do not invoke the global `foreman-agent` skill while working in this repository.
 
 A task is a series of rounds with the same worker: the user gives a request, the worker reports, and the user's reply to that report is the next round.
