@@ -210,6 +210,9 @@ function summary(session) {
  * Foreman sessions, newest activity first. A session counts only when its own cwd is the Foreman checkout;
  * `dev` sessions (every prompt starts with DEV) and empty ones are listed but not counted as operational.
  */
+// A session without timestamps sorts last and never passes --since.
+function endedTime(session) { return Date.parse(session.endedAt) || 0; }
+
 function listSessions({ foremanRoot, claudeHome, codexHome, limit, since, includeDev = false }) {
   const sessions = [];
   const unreadable = [];
@@ -223,8 +226,8 @@ function listSessions({ foremanRoot, claudeHome, codexHome, limit, since, includ
   const sinceTime = since ? Date.parse(since) : null;
   if (since && !Number.isFinite(sinceTime)) throw new DoctorError(`Invalid --since time: ${since}`);
   const ordered = sessions
-    .filter((session) => !sinceTime || Date.parse(session.endedAt || 0) >= sinceTime)
-    .sort((left, right) => Date.parse(right.endedAt || 0) - Date.parse(left.endedAt || 0));
+    .filter((session) => !sinceTime || endedTime(session) >= sinceTime)
+    .sort((left, right) => endedTime(right) - endedTime(left));
   const selectable = ordered.filter((session) => includeDev || session.kind === "operational");
   const selected = limit === undefined ? selectable : selectable.slice(0, count(limit, "--limit", 1));
   return { foremanRoot, found: ordered.length, selected, skipped: ordered.filter((session) => !selected.includes(session)).map(({ sessionId, kind, endedAt }) => ({ sessionId, kind, endedAt })), unreadable };
@@ -250,7 +253,11 @@ function rulesInForce(foremanRoot, startedAt, endedAt) {
   };
 }
 
-/** One session as ordered, numbered events with evidence references, bounded text, coverage, and the rules in force. */
+/**
+ * One session as ordered, numbered events with evidence references, bounded text, coverage, and the rules in force.
+ * A FILE path is read as given, without the Foreman-session filter, so a transcript the user names can be checked;
+ * an ID is looked up only among Foreman sessions.
+ */
 function sessionEvidence({ foremanRoot, claudeHome, codexHome, session, from = 1, maxEvents = 400 }) {
   let file = session;
   if (!file) throw new DoctorError("doctor session needs --session ID or FILE");

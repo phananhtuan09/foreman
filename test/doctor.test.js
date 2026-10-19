@@ -85,6 +85,10 @@ test("only sessions run in the Foreman checkout are listed, newest first, withou
     assert.equal(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, includeDev: true }).selected[0].sessionId, "s-dev");
     assert.deepEqual(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, since: "2026-10-06T00:00:00Z" }).selected.map((session) => session.sessionId), ["codex-1"]);
     assert.throws(() => listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, since: "last week" }), /Invalid --since/);
+    // A session without timestamps sorts last and never passes --since, however early.
+    jsonl(path.join(f.claudeDir, "s-untimed.jsonl"), [{ type: "user", cwd: f.root, message: { role: "user", content: "no time" } }]);
+    assert.equal(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome }).selected.at(-1).sessionId, "s-untimed");
+    assert.ok(!listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, since: "1990-01-01T00:00:00Z" }).selected.some((session) => session.sessionId === "s-untimed"));
   } finally { f.cleanup(); }
 });
 
@@ -135,6 +139,7 @@ test("the doctor CLI reads sessions without creating or locking anything in the 
     const shown = execFileSync(process.execPath, [bin, "doctor", "session", "--session", "s-old"], { env, encoding: "utf8" });
     assert.match(shown, /^Session s-old \(claude, operational\)/);
     assert.throws(() => execFileSync(process.execPath, [bin, "doctor", "session", "--current"], { env, encoding: "utf8", stdio: "pipe" }), /No current Foreman session is recorded/);
+    assert.throws(() => execFileSync(process.execPath, [bin, "doctor", "sessions"], { env: { ...env, FOREMAN_ROOT: path.join(f.base, "missing") }, encoding: "utf8", stdio: "pipe" }), /Foreman checkout does not exist: .*missing; set FOREMAN_ROOT/);
     assert.deepEqual(fs.readdirSync(home), [], "doctor wrote nothing to the home");
   } finally { f.cleanup(); }
 });

@@ -20,6 +20,7 @@ It prefers few wrong conclusions over many findings.
 - "session này": `bin/foreman doctor session --current`.
 - "N session gần nhất": `bin/foreman doctor sessions --limit N`, then `doctor session --session ID` for each.
   Only sessions whose own cwd is the Foreman checkout count; worker and other agent sessions never mix in, and sessions where every prompt starts with DEV are excluded unless the user asks.
+- A transcript file the user names is read with `doctor session --session FILE` as given; it skips the Foreman-session filter, so say when it is not a Foreman session.
 - "trong tuần này" or another period: add `--since TIME`; a topic filter is your reading, stated as such.
 - Long sessions are paged: continue with `--from N` until `more` is false, or state which events you did not read.
 - Note each session's coverage line: unparsable lines, tool calls without a result, compactions, truncated events, and subagent entries not shown.

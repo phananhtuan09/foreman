@@ -148,7 +148,7 @@ const usage = [
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
   "  doctor sessions [--limit N] [--since TIME] [--include-dev] [--json]   (read-only: past Foreman sessions of this checkout, newest first)",
-  "  doctor session (--session ID|FILE|--current) [--from N] [--max-events N] [--json]   (read-only: one session's numbered events, coverage, and the rules in force)",
+  "  doctor session (--session ID|FILE|--current) [--from N] [--max-events N] [--json]   (read-only: one session's numbered events, coverage, and the rules in force; a FILE is read as given, without the Foreman-session filter)",
 ].join("\n");
 
 function main() {
@@ -199,7 +199,9 @@ function main() {
   }
   if (command === "doctor") {
     // Doctor only reads session transcripts and Git history; it never initializes, locks, or changes the Foreman home.
-    const foremanRoot = fs.realpathSync(path.resolve(process.env.FOREMAN_ROOT || process.cwd()));
+    const checkout = path.resolve(process.env.FOREMAN_ROOT || process.cwd());
+    if (!fs.existsSync(checkout)) throw new Error(`Foreman checkout does not exist: ${checkout}; set FOREMAN_ROOT to the Foreman checkout`);
+    const foremanRoot = fs.realpathSync(checkout);
     if (action === "sessions") {
       const listed = doctor.listSessions({ foremanRoot, limit: arg("--limit"), since: arg("--since"), includeDev: flag("--include-dev") });
       output(flag("--json") ? listed : [

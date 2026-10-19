@@ -12,6 +12,7 @@ The user can ask Foreman to re-read its own past sessions and learn which mistak
 - On request, the `foreman-doctor` skill re-reads past Foreman sessions and reports evidence-backed mistakes and improvement opportunities.
 - `foreman doctor sessions` lists only sessions whose own cwd is the Foreman checkout, from Claude Code session files and Codex rollouts, newest activity first.
 - Sessions where every prompt starts with DEV are excluded unless asked, and worker sessions never match.
+- `foreman doctor session` looks an ID up only among Foreman sessions; a transcript file the user names is read as given.
 - `foreman doctor session` prints one session as numbered events with evidence references and its coverage: unparsable lines, tool calls without a result, compactions, truncated events, and subagent entries not shown.
 - It also names the committed rules in force, inferred by commit date from the branch checked out when Doctor runs: the last Foreman commit before the session started and the rule commits made while it ran.
 - Both commands only read transcripts and Git history; they never run a recorded command, touch the Foreman home, or change task state.
