@@ -19,7 +19,8 @@ function claudeAssistant(cwd, at, content) { return { type: "assistant", cwd, ti
 // A Foreman checkout with two rule commits, a Claude home, and a Codex home holding Foreman and worker sessions.
 function fixture() {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-doctor-")));
-  const root = path.join(base, "foreman");
+  // A space in the checkout path proves the printed `git show` command can be copied as is.
+  const root = path.join(base, "foreman checkout");
   const worker = path.join(base, "project");
   fs.mkdirSync(root);
   fs.mkdirSync(worker);
@@ -61,6 +62,11 @@ function fixture() {
     { timestamp: "2026-10-07T08:00:04Z", type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "{\"status\":\"working\"}" } },
     { timestamp: "2026-10-07T08:00:05Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Đã giao T-2." }] } },
   ]);
+  // A worker in a subdirectory or a nested worktree of the checkout is not a Foreman session.
+  jsonl(path.join(codexHome, "sessions", "2026", "10", "07", "rollout-nested.jsonl"), [
+    { timestamp: "2026-10-07T10:00:00Z", type: "session_meta", payload: { id: "codex-nested", cwd: path.join(root, "projects", "app") } },
+    { timestamp: "2026-10-07T10:00:02Z", type: "event_msg", payload: { type: "user_message", message: "worker in a nested worktree" } },
+  ]);
   jsonl(path.join(codexHome, "sessions", "2026", "10", "07", "rollout-worker.jsonl"), [
     { timestamp: "2026-10-07T09:00:00Z", type: "session_meta", payload: { id: "codex-worker", cwd: worker } },
     { timestamp: "2026-10-07T09:00:02Z", type: "event_msg", payload: { type: "user_message", message: "worker brief" } },
@@ -75,6 +81,7 @@ test("only sessions run in the Foreman checkout are listed, newest first, withou
     assert.deepEqual(listed.selected.map((session) => [session.sessionId, session.client, session.kind]), [["codex-1", "codex", "operational"], ["s-old", "claude", "operational"]]);
     assert.deepEqual(listed.skipped.map((session) => [session.sessionId, session.kind]), [["s-dev", "dev"]], "worker sessions are never found; DEV-only ones are found but skipped");
     assert.equal(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, limit: 1 }).selected.length, 1);
+    for (const limit of ["abc", "0", "1.5"]) assert.throws(() => listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, limit }), /--limit must be a whole number/);
     assert.equal(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, includeDev: true }).selected[0].sessionId, "s-dev");
     assert.deepEqual(listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, since: "2026-10-06T00:00:00Z" }).selected.map((session) => session.sessionId), ["codex-1"]);
     assert.throws(() => listSessions({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, since: "last week" }), /Invalid --since/);
@@ -107,6 +114,9 @@ test("a session becomes ordered events with what is missing, truncated, compacte
     const codex = sessionEvidence({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, session: path.join(f.codexHome, "sessions", "2026", "10", "07", "rollout-a.jsonl") });
     assert.deepEqual(codex.events.map((event) => [event.kind, event.text.slice(0, 12)]), [["user", "giao T-2 cho"], ["tool-call", "{\"command\":["], ["tool-result", "{\"status\":\"w"], ["assistant", "Đã giao T-2."]]);
     assert.throws(() => sessionEvidence({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, session: "nope" }), /No Foreman session matches/);
+    assert.throws(() => sessionEvidence({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, session: "s-" }), /s- matches 3 Foreman sessions/, "a short ID never picks one of several sessions");
+    assert.throws(() => sessionEvidence({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, session: "old" }), /No Foreman session matches/, "an ID matches from its start, not anywhere in the name");
+    assert.throws(() => sessionEvidence({ foremanRoot: f.root, claudeHome: f.claudeHome, codexHome: f.codexHome, session: "s-old", maxEvents: "abc" }), /--max-events must be a whole number/);
   } finally { f.cleanup(); }
 });
 
@@ -115,7 +125,10 @@ test("the doctor CLI reads sessions without creating or locking anything in the 
   try {
     const home = path.join(f.base, "home");
     fs.mkdirSync(home);
-    const env = { ...process.env, FOREMAN_ROOT: f.root, FOREMAN_HOME: home, HOME: f.base, CODEX_HOME: f.codexHome };
+    // FOREMAN_ROOT reached through a symlink still finds the sessions recorded under the real checkout path.
+    const link = path.join(f.base, "foreman-link");
+    fs.symlinkSync(f.root, link);
+    const env = { ...process.env, FOREMAN_ROOT: link, FOREMAN_HOME: home, HOME: f.base, CODEX_HOME: f.codexHome };
     fs.renameSync(f.claudeHome, path.join(f.base, ".claude"));
     const listed = JSON.parse(execFileSync(process.execPath, [bin, "doctor", "sessions", "--json", "--limit", "5"], { env, encoding: "utf8" }));
     assert.deepEqual(listed.selected.map((session) => session.sessionId), ["codex-1", "s-old"]);

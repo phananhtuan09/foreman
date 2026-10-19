@@ -432,6 +432,10 @@ async function doctorRun(t, set) {
     const timeline = execFileSync(paseoCommand, ["logs", created.agentId, "--home", f.paseoHome], { encoding: "utf8", env: f.env });
     t.diagnostic(`doctor ${set} report:\n${timeline}`);
     const verdicts = JSON.parse(timeline.trim().split("\n").filter((line) => line.trim().startsWith("{")).at(-1));
+    for (const item of cases) {
+      assert.ok(Object.hasOwn(verdicts, item.name), `Missing verdict for ${item.name}`);
+      assert.ok(["mistake", "opportunity", "insufficient", "rebutted", "none"].includes(verdicts[item.name]), `Invalid verdict for ${item.name}: ${verdicts[item.name]}`);
+    }
     const expected = Object.fromEntries(cases.map((item) => [item.name, item.label]));
     const got = Object.fromEntries(cases.map((item) => [item.name, verdicts[item.name] === "mistake" ? "mistake" : verdicts[item.name] === "insufficient" ? "insufficient" : "valid"]));
     t.diagnostic(`expected ${JSON.stringify(expected)}; got ${JSON.stringify(verdicts)}`);

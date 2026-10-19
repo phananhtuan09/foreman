@@ -199,7 +199,7 @@ function main() {
   }
   if (command === "doctor") {
     // Doctor only reads session transcripts and Git history; it never initializes, locks, or changes the Foreman home.
-    const foremanRoot = path.resolve(process.env.FOREMAN_ROOT || process.cwd());
+    const foremanRoot = fs.realpathSync(path.resolve(process.env.FOREMAN_ROOT || process.cwd()));
     if (action === "sessions") {
       const listed = doctor.listSessions({ foremanRoot, limit: arg("--limit"), since: arg("--since"), includeDev: flag("--include-dev") });
       output(flag("--json") ? listed : [

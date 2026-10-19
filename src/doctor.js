@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { quote } = require("./shell-env");
 
 // Read-only evidence for `foreman-doctor`: which past sessions were Foreman sessions, what happened in them in
 // order, how complete that record is, and which committed rules were in force. It never writes anything, never
@@ -14,9 +15,22 @@ const RESULT_CHARS = 1200;
 const DEV_PROMPT = /^\s*dev\b/i;
 const RULE_PATHS = ["AGENTS.md", "SPEC.md", ".agents/skills", "docs/product", "docs/decisions"];
 
-function within(root, candidate) {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+// A session belongs to Foreman only when its cwd is the checkout itself; a worker in a subdirectory or a nested worktree does not.
+function sameDir(left, right) {
+  const real = (dir) => { try { return fs.realpathSync(dir); } catch (_) { return path.resolve(dir); } };
+  return real(left) === real(right);
+}
+
+function count(value, label, min) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min) throw new DoctorError(`${label} must be a whole number of at least ${min}: ${value}`);
+  return number;
+}
+
+// The session ID a file is known by: a Claude file is named after it, and a Codex rollout name ends with it.
+function sessionKey(file) {
+  const name = path.basename(file, ".jsonl");
+  return name.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] || name;
 }
 
 function bounded(text, limit) {
@@ -182,7 +196,7 @@ function foremanSessionFiles({ foremanRoot, claudeHome = path.join(os.homedir(),
   if (fs.existsSync(claudeDir)) for (const name of fs.readdirSync(claudeDir)) if (name.endsWith(".jsonl")) files.push({ client: "claude", file: path.join(claudeDir, name) });
   for (const file of codexRollouts(codexHome)) {
     const cwd = codexCwd(file);
-    if (cwd && within(foremanRoot, path.resolve(cwd))) files.push({ client: "codex", file });
+    if (cwd && sameDir(cwd, foremanRoot)) files.push({ client: "codex", file });
   }
   return files;
 }
@@ -193,7 +207,7 @@ function summary(session) {
 }
 
 /**
- * Foreman sessions, newest activity first. A session counts only when its own cwd is inside the Foreman checkout;
+ * Foreman sessions, newest activity first. A session counts only when its own cwd is the Foreman checkout;
  * `dev` sessions (every prompt starts with DEV) and empty ones are listed but not counted as operational.
  */
 function listSessions({ foremanRoot, claudeHome, codexHome, limit, since, includeDev = false }) {
@@ -202,7 +216,7 @@ function listSessions({ foremanRoot, claudeHome, codexHome, limit, since, includ
   for (const { file } of foremanSessionFiles({ foremanRoot, claudeHome, codexHome })) {
     try {
       const session = parseSession(file);
-      if (session.cwd && !within(foremanRoot, path.resolve(session.cwd))) continue;
+      if (session.cwd && !sameDir(session.cwd, foremanRoot)) continue;
       sessions.push(summary(session));
     } catch (error) { unreadable.push({ file, reason: error.message }); }
   }
@@ -212,7 +226,7 @@ function listSessions({ foremanRoot, claudeHome, codexHome, limit, since, includ
     .filter((session) => !sinceTime || Date.parse(session.endedAt || 0) >= sinceTime)
     .sort((left, right) => Date.parse(right.endedAt || 0) - Date.parse(left.endedAt || 0));
   const selectable = ordered.filter((session) => includeDev || session.kind === "operational");
-  const selected = limit === undefined ? selectable : selectable.slice(0, Number(limit));
+  const selected = limit === undefined ? selectable : selectable.slice(0, count(limit, "--limit", 1));
   return { foremanRoot, found: ordered.length, selected, skipped: ordered.filter((session) => !selected.includes(session)).map(({ sessionId, kind, endedAt }) => ({ sessionId, kind, endedAt })), unreadable };
 }
 
@@ -220,8 +234,8 @@ function git(root, args) {
   try { return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch (_) { return null; }
 }
 
-// The committed instructions in force when the session started, and every rule commit made while it ran.
-// Uncommitted local edits of that time cannot be known.
+// The committed instructions in force when the session started, and every rule commit made while it ran,
+// inferred by commit date from the branch checked out now. Uncommitted local edits of that time cannot be known.
 function rulesInForce(foremanRoot, startedAt, endedAt) {
   if (!startedAt) return { commit: null, note: "the session has no timestamps" };
   const head = git(foremanRoot, ["log", "-1", `--before=${startedAt}`, "--format=%H %cI %s"]);
@@ -231,8 +245,8 @@ function rulesInForce(foremanRoot, startedAt, endedAt) {
   return {
     commit, committedAt, subject: subject.join(" "),
     changedDuringSession: changes.split("\n").filter(Boolean).map((line) => { const [hash, at, ...rest] = line.split(" "); return { commit: hash, committedAt: at, subject: rest.join(" ") }; }),
-    read: `git -C ${foremanRoot} show ${commit.slice(0, 12)}:AGENTS.md`,
-    note: "Uncommitted edits that existed at that time are not visible.",
+    read: `git -C ${quote(foremanRoot)} show ${commit.slice(0, 12)}:AGENTS.md`,
+    note: "Inferred by commit date from the currently checked-out branch; uncommitted edits that existed at that time are not visible.",
   };
 }
 
@@ -241,9 +255,10 @@ function sessionEvidence({ foremanRoot, claudeHome, codexHome, session, from = 1
   let file = session;
   if (!file) throw new DoctorError("doctor session needs --session ID or FILE");
   if (!fs.existsSync(file)) {
-    const match = foremanSessionFiles({ foremanRoot, claudeHome, codexHome }).find((candidate) => path.basename(candidate.file).includes(session));
-    if (!match) throw new DoctorError(`No Foreman session matches ${session}`);
-    file = match.file;
+    const matches = foremanSessionFiles({ foremanRoot, claudeHome, codexHome }).filter((candidate) => sessionKey(candidate.file).startsWith(session));
+    if (!matches.length) throw new DoctorError(`No Foreman session matches ${session}`);
+    if (matches.length > 1) throw new DoctorError(`${session} matches ${matches.length} Foreman sessions; give more of the ID: ${matches.map((match) => sessionKey(match.file)).join(", ")}`);
+    file = matches[0].file;
   }
   const parsed = parseSession(path.resolve(file));
   let truncatedEvents = 0;
@@ -252,8 +267,8 @@ function sessionEvidence({ foremanRoot, claudeHome, codexHome, session, from = 1
     if (truncated) truncatedEvents += 1;
     return { n: index + 1, ...event, text, ...(truncated ? { truncated } : {}), ...(event.kind === "user" && DEV_PROMPT.test(event.text) ? { dev: true } : {}) };
   });
-  const start = Math.max(1, Number(from) || 1);
-  const page = numbered.slice(start - 1, start - 1 + Number(maxEvents));
+  const start = count(from, "--from", 1);
+  const page = numbered.slice(start - 1, start - 1 + count(maxEvents, "--max-events", 1));
   return {
     ...summary(parsed),
     coverage: { ...parsed.coverage, truncatedEvents, events: numbered.length, shown: page.length ? [page[0].n, page.at(-1).n] : [], more: start - 1 + page.length < numbered.length },

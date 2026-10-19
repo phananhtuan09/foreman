@@ -23,7 +23,7 @@ It prefers few wrong conclusions over many findings.
 - "trong tuần này" or another period: add `--since TIME`; a topic filter is your reading, stated as such.
 - Long sessions are paged: continue with `--from N` until `more` is false, or state which events you did not read.
 - Note each session's coverage line: unparsable lines, tool calls without a result, compactions, truncated events, and subagent entries not shown.
-- The rules line names the committed instructions in force when the session started and any rule commits during it; read old rules with the printed `git show` command before judging against them.
+- The rules line names the committed instructions in force when the session started and any rule commits during it, inferred by commit date from the branch checked out now; read old rules with the printed `git show` command before judging against them.
   Uncommitted edits of that time are unknown.
 
 ## 2. Suspicions to look for
