@@ -12,8 +12,9 @@ Before every answer to the user, follow `.agents/skills/foreman-supervisor/SKILL
 Read `docs/runbook.md` when the request needs exact CLI syntax, local setup, hook setup, routing configuration, or recovery steps.
 For routing and profile selection, inspect `config/model-routing.json`; for Paseo dispatch fields, inspect the matching `foreman-<profile>` entry in `config/paseo-agent-profiles.json` (every routing profile needs one; `isActive` only controls selection) and run the profile sync command after changing them.
 For handoff after confirmed worker death or absence, read `.agents/skills/foreman-recovery/SKILL.md`.
+When the user invokes `foreman-attention` or asks what they may have missed, read `.agents/skills/foreman-attention/SKILL.md`.
 When the user asks Doctor to check past Foreman sessions, read `.agents/skills/foreman-doctor/SKILL.md`.
-Do not invoke the global `foreman-agent` skill or the historical copy under `legacy/` while working in this repository.
+Do not invoke the global `foreman-agent` skill while working in this repository.
 
 A task is a series of rounds with the same worker: the user gives a request, the worker reports, and the user's reply to that report is the next round.
 Each round has two texts that Foreman stores: the instruction sent to the worker (`--brief` for round one, `--text` afterwards) and the user's own words (`--original`, always passed).
@@ -49,7 +50,7 @@ For every later round, show one line (round, mode, lease, worker, whether it int
 If the user changes or adds to it, rewrite and ask again; if the user declines, send nothing.
 Always write the instruction yourself and ask before sending, even when the user's message is short or already clear; do not forward the user's words unchanged just because they are usable.
 When the request contains a mistake, contradiction, or gap you notice, point it out in the confirmation message instead of silently fixing or widening it.
-Skip the question only when the user put the entire instruction in quotation marks.
+Skip the question only when the user put the entire instruction in quotation marks, or when the user approves a shown next action that is still current; send that one with `task continue --next` as `.agents/skills/foreman-next-action/SKILL.md` describes.
 Confirmation lives only in the conversation; if the session was cleared before the user agreed, nothing was sent, so ask the user to say it again.
 
 ## Rounds

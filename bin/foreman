@@ -40,6 +40,7 @@ function sessionBackend() {
     if (!fs.existsSync(taskRoot)) return null;
     const active = core.listTasks({ roots: roots() }).filter((meta) => !["accepted", "cleaned", "review-ready"].includes(meta.status));
     const backends = new Set(active.map((meta) => meta.backend || "herdr"));
+    if (backends.size === 0 && process.env.PASEO_AGENT_ID && require("../src/supervision").readSupervision(roots().foremanHome).heartbeat) return "paseo";
     return backends.size === 1 ? [...backends][0] : null;
   } catch (_) {
     return null;
@@ -62,6 +63,15 @@ function warnResourceConflicts(meta) {
   for (const conflict of meta?.resourceLease?.conflicts || []) {
     process.stderr.write(`foreman: warning: ${conflict.requested.key} (${conflict.requested.mode}) overlaps ${conflict.held.key} (${conflict.held.mode}) held by ${conflict.taskId} @${conflict.owner}\n`);
   }
+}
+// In Paseo mode, commands that start or end watched work keep the Foreman heartbeat in step; a failure never fails the command.
+function syncHeartbeatAfter(home) {
+  if (selectedBackend() !== "paseo") return;
+  try {
+    const result = core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID });
+    // Starting and stopping the heartbeat is housekeeping the Foreman session must not narrate; only a failure is shown.
+    if (result.action === "error") process.stderr.write(`foreman: heartbeat ${result.action}${result.heartbeatId ? ` ${result.heartbeatId}` : ""}${result.reason ? `: ${result.reason}` : ""}\n`);
+  } catch (error) { process.stderr.write(`foreman: heartbeat sync failed: ${error.message}\n`); }
 }
 function output(value) {
   if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
@@ -115,13 +125,25 @@ const usage = [
   "  task accept --task ID",
   "  task discard --task ID      (untouched queued task, or worker confirmed dead or missing)",
   "  task brief --task ID (--text TEXT|--text-file FILE) [--original TEXT] [--image ID|FILE]...   (replace the brief of a task that has no worker yet, or the request of a pending handoff with --original for the user's words; --image replaces round one's images)",
-  "  task continue --task ID (--text TEXT|--text-file FILE) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...",
+  "  task continue --task ID (--text TEXT|--text-file FILE|--next) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...   (--next sends the proposed round's instruction, refused once the task moved on)",
+  "  task history --task ID   (read-only: the user's words, rounds, recent reports, decisions, pending points, and next action)",
+  "  next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--json]   (record the next action and print its highlight line; --json prints the full proposal)",
+  "  next show [--task ID]   (shown next actions and whether each still matches its task)",
+  "  next clear --task ID   (the user declined or postponed the step)",
   "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE [--image ID|FILE]...] [--type ship|scout] [--resources JSON]",
   "  task message --task ID (--text TEXT|--text-file FILE) [--image ID|FILE]...",
   "  decision create --task ID --finding TEXT --why TEXT --option A --option B [--impact TEXT] [--evidence TEXT] [--recommendation TEXT]",
   "  decision answer --task ID --decision ID --response TEXT [--image ID|FILE]...",
   "  decision deliver --task ID --decision ID",
+  "  attention add --task ID --owner user|worker --kind decision|obligation|check --text TEXT [--action TEXT] [--report FILE|--user]   (record a pending point of a live task)",
+  "  attention resolve --task ID --point P1 --how answered|verified|dropped|limit-accepted --text TEXT [--report FILE|--user]",
+  "  attention snooze --task ID --point P1 --until tomorrow|TIME",
+  "  attention reopen --task ID --point P1 --why TEXT",
+  "  attention list [--json] [--limit N] [--task ID]   (review every live task on every project; --task shows one task's points, open and closed)",
   "  status [--project ID] [--json [--brief]]",
+  "  supervise [--json]   (one supervision check for a turn without the prompt hook: Paseo collection, one status check, and the notices not yet told)",
+  "  notice ack --key KEY [--key KEY]...   (record that the user was told these notices)",
+  "  heartbeat sync [--cron EXPR] [--enable|--disable]   (Paseo: create, update, or delete this Foreman agent's heartbeat to match watched work)",
   "  report --status done|blocked|progress [--summary TEXT|--summary-file FILE]   (worker; summary defaults to stdin)",
   "  worker hook      (coding-agent stop hook; reads the hook payload from stdin)",
   "  session context  (Foreman session prompt hook; reads the hook payload from stdin)",
@@ -160,7 +182,7 @@ function main() {
       const payload = hookPayload();
       const backend = sessionBackend();
       const adapter = backend ? runtimeAdapter(backend) : null;
-      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id });
+      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id, agentId: process.env.PASEO_AGENT_ID });
       // Claude Code and Codex both read prompt context from this JSON shape.
       if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
     } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
@@ -256,6 +278,7 @@ function main() {
     // A human dispatch proceeds past held leases; the overlaps are reported as a warning.
     const result = core.assignTask({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter(), workspacePath: arg("--workspace"), resources: resourceClaims(), reuseEndpoint: arg("--reuse-endpoint"), allowResourceConflicts: true });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -269,12 +292,14 @@ function main() {
     const max = arg("--max");
     const owner = arg("--owner");
     const result = core.dispatchReadyTasks({ roots: home, adapter: runtimeAdapter(), ownerForTask: owner ? () => owner : undefined, maxConcurrency: max === undefined ? Infinity : Number(max), projectLimits });
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
   if (command === "task" && action === "adopt") {
     const result = core.adoptExistingWorker({ roots: home, adapter: runtimeAdapter(), worker: arg("--worker"), taskId: arg("--task"), brief: briefText(), original: originalText(), projectId: arg("--project"), type: arg("--type", "ship"), explicit: true });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -282,11 +307,12 @@ function main() {
     assertSelectedTaskBackend(arg("--task"));
     const result = core.recoverDeadWorker({ roots: home, taskId: arg("--task"), owner: arg("--owner"), adapter: runtimeAdapter() });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
-  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); output(core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
-  if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); output(core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() })); return; }
+  if (command === "task" && action === "accept") { assertSelectedTaskBackend(arg("--task")); const result = core.acceptTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() }); syncHeartbeatAfter(home); output(result); return; }
+  if (command === "task" && action === "discard") { assertSelectedTaskBackend(arg("--task")); const result = core.discardTask({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter() }); syncHeartbeatAfter(home); output(result); return; }
   if (command === "task" && action === "brief") {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
@@ -299,11 +325,12 @@ function main() {
     assertSelectedTaskBackend(arg("--task"));
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
-    if (!text) throw new Error("task continue requires --text or --text-file");
+    if (!text && !flag("--next")) throw new Error("task continue requires --text, --text-file, or --next");
     const original = originalText();
     if (!original) throw new Error("task continue requires --original or --original-file");
-    const result = core.continueTask({ roots: home, taskId: arg("--task"), text, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home) });
+    const result = core.continueTask({ roots: home, taskId: arg("--task"), text: text || undefined, original, type: arg("--type"), resources: resourceClaims(), interrupt: flag("--interrupt"), withOriginal: flag("--with-original"), adapter: runtimeAdapter(), images: imageSources(home), fromNext: flag("--next") });
     warnResourceConflicts(result.task);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -312,6 +339,7 @@ function main() {
     const textFile = arg("--text-file");
     const result = core.reassignWorker({ roots: home, taskId: arg("--task"), adapter: runtimeAdapter(), profile: arg("--profile"), owner: arg("--owner"), text: textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text"), original: originalText(), type: arg("--type"), resources: resourceClaims(), images: imageSources(home) });
     warnResourceConflicts(result);
+    syncHeartbeatAfter(home);
     output(result);
     return;
   }
@@ -320,7 +348,9 @@ function main() {
     const textFile = arg("--text-file");
     const text = textFile ? fs.readFileSync(path.resolve(textFile), "utf8") : arg("--text");
     if (!text) throw new Error("task message requires --text or --text-file");
-    output(core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter(), images: imageSources(home) }));
+    const result = core.sendWorkerMessage({ roots: home, taskId: arg("--task"), payload: { request: text }, adapter: runtimeAdapter(), images: imageSources(home) });
+    syncHeartbeatAfter(home);
+    output(result);
     return;
   }
   if (command === "decision" && action === "create") {
@@ -335,7 +365,56 @@ function main() {
   }
   if (command === "decision" && action === "deliver") {
     assertSelectedTaskBackend(arg("--task"));
-    output(core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() }));
+    const result = core.deliverDecision({ roots: home, taskId: arg("--task"), decisionId: arg("--decision"), adapter: runtimeAdapter() });
+    syncHeartbeatAfter(home);
+    output(result);
+    return;
+  }
+  if (command === "task" && action === "history") { output(core.taskHistory({ roots: home, taskId: arg("--task") })); return; }
+  if (command === "next") {
+    if (action === "propose") {
+      assertSelectedTaskBackend(arg("--task"));
+      const instructionFile = arg("--instruction-file");
+      const proposal = core.proposeNextAction({ roots: home, taskId: arg("--task"), kind: arg("--kind"), text: arg("--text"), instruction: instructionFile ? fs.readFileSync(path.resolve(instructionFile), "utf8") : arg("--instruction"), type: arg("--type") });
+      output(flag("--json") ? proposal : proposal.line);
+      return;
+    }
+    if (action === "show") { output(core.nextActions({ roots: home, taskId: arg("--task") })); return; }
+    if (action === "clear") { output(core.clearNextAction({ roots: home, taskId: arg("--task") })); return; }
+  }
+  if (command === "attention") {
+    const taskId = arg("--task");
+    const pointId = arg("--point");
+    if (action === "list") {
+      if (taskId) { output(core.taskAttention({ roots: home, taskId })); return; }
+      const review = core.attentionReview({ roots: home, limit: arg("--limit") === undefined ? 5 : Number(arg("--limit")) });
+      output(flag("--json") ? review : core.renderAttention(review));
+      return;
+    }
+    if (action === "add") { output(core.addAttentionPoint({ roots: home, taskId, owner: arg("--owner"), kind: arg("--kind"), text: arg("--text"), action: arg("--action"), report: arg("--report"), user: flag("--user") })); return; }
+    if (action === "resolve") { output(core.resolveAttentionPoint({ roots: home, taskId, pointId, how: arg("--how"), text: arg("--text"), report: arg("--report"), user: flag("--user") })); return; }
+    if (action === "snooze") { output(core.snoozeAttentionPoint({ roots: home, taskId, pointId, until: arg("--until") })); return; }
+    if (action === "reopen") { output(core.reopenAttentionPoint({ roots: home, taskId, pointId, why: arg("--why") })); return; }
+  }
+  if (command === "supervise") {
+    const adapter = runtimeAdapter();
+    const check = core.supervisionCheck({ roots: home, adapter });
+    const sync = adapter.backend === "paseo" ? core.syncHeartbeat({ roots: home, adapter, agentId: process.env.PASEO_AGENT_ID }) : null;
+    if (flag("--json")) { output({ ...check, unread: check.unread.map((meta) => ({ taskId: meta.taskId, projectId: meta.projectId, status: meta.status, report: meta.lastReport })), heartbeat: sync }); return; }
+    const text = core.renderSupervision(check, { sync });
+    output(check.unread.length || check.anomalies.length || check.runtimeError || check.notices.length ? text : `${text}Nothing new.\n`);
+    return;
+  }
+  if (command === "notice" && action === "ack") {
+    const result = core.ackNotices({ roots: home, keys: args("--key") });
+    syncHeartbeatAfter(home);
+    output(result);
+    return;
+  }
+  if (command === "heartbeat" && action === "sync") {
+    if (selectedBackend() !== "paseo") throw new Error("Heartbeat supervision is available only through bin/foreman-paseo");
+    if (flag("--enable") && flag("--disable")) throw new Error("heartbeat sync takes --enable or --disable, not both");
+    output(core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID, cron: arg("--cron"), enable: flag("--enable") ? true : flag("--disable") ? false : undefined }));
     return;
   }
   if (command === "status") {

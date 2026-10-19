@@ -12,7 +12,7 @@ class DoctorError extends Error {}
 const EVENT_CHARS = 2000;
 const RESULT_CHARS = 1200;
 const DEV_PROMPT = /^\s*dev\b/i;
-const RULE_PATHS = ["AGENTS.md", "SPEC.md", ".agents/skills"];
+const RULE_PATHS = ["AGENTS.md", "SPEC.md", ".agents/skills", "docs/product", "docs/decisions"];
 
 function within(root, candidate) {
   const relative = path.relative(root, candidate);

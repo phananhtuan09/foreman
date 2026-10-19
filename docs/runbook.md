@@ -149,7 +149,7 @@ To check a delivery, open the paths listed in the message under `data/messages/`
 It stops the Herdr pane or archives the Paseo agent, verifies endpoint closure, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk.
 
-`task discard` removes a queued task that was never assigned, or an assigned task whose worker `status` confirms `dead` or `missing`; it refuses live or `unknown` workers and tasks that others depend on.
+`task discard` removes a queued task that was never assigned, an assigned task whose worker `status` confirms `dead` or `missing`, or a pending task whose dispatch stopped before any endpoint or prompt was recorded while no runtime worker carries its owner; it refuses live or `unknown` workers and tasks that others depend on.
 For a confirmed dead Herdr worker it stops the pane before cleanup; a missing endpoint is already absent.
 It releases the lease and deletes the task's records, reports, and decisions; the project workspace stays on disk.
 Use it to drop work that should not continue; use `task recover` instead to hand it to a new worker.
@@ -201,6 +201,36 @@ It flags `worker.idle-without-report`, `worker.waiting-input`, `worker.dead`, `w
 No background process runs; supervision happens only when Foreman handles a prompt.
 Commands wait up to 5 seconds for the home lock before failing.
 A lock left by a process that died on this host is removed automatically; a lock from another host or a live process is never broken.
+
+### Next action
+
+`next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--json]` records the one next step Foreman shows after a report and prints its highlight block by default: a heading by kind, the step, any mode change, and the reply that approves it.
+Use `--json` to print the full proposal object, including its instruction, basis, and `line`.
+`next show [--task ID]` lists shown next actions with `current` and the reasons one is out of date; `next clear --task ID` drops one the user declined or postponed.
+If a task's pending points cannot be read, `next show` marks its proposal `current: false` with the read error and still lists the other tasks; the unreadable state is never rewritten or treated as permission to send.
+`task continue --task ID --next --original "gửi bước này"` sends the stored instruction of a current round proposal and refuses after a newer report, round, generation, status, decision, or changed pending points.
+It refuses a different `--type` or an explicit `--resources`; proposals saved without a pending-point digest must be proposed and approved again.
+`task history --task ID` prints, read-only, the user's words, every delivered round, recent reports, decisions, pending points, and the shown next action.
+
+### Pending points
+
+`attention list` reviews every unfinished task on every project and prints a highlight block of at most five open points, grouped into points that need the user and points waiting on a worker, with the count of the rest; `--limit N`, `--json`, and `--task ID` show more.
+`attention add --task ID --owner user|worker --kind decision|obligation|check --text TEXT [--action TEXT] [--report FILE|--user]` records a point; the same words as an existing point are refused.
+`attention resolve --task ID --point P1 --how answered|verified|dropped|limit-accepted --text TEXT [--report FILE|--user]` closes it, `attention snooze --task ID --point P1 --until tomorrow|TIME` hides it until then, and `attention reopen --task ID --point P1 --why TEXT` reopens a closed point.
+Points live in `data/tasks/<id>/attention.json` and are deleted with the task at acceptance or discard.
+
+### Notices and the Paseo heartbeat
+
+The session context and `supervise` list `Not yet told to the user` notices: a review-ready result, a blocker, a waiting decision, an anomaly, or a failed check, each with a key such as `T-000001/review-ready/generation-1-001-done.md`.
+After telling the user, record them with `notice ack --key KEY [--key KEY]...`; a told notice is not listed again, and an untold one stays listed after a reset or restart.
+`supervise [--json]` runs Paseo collection, one status check, and prints the same context for a turn without the prompt hook.
+
+In a Foreman session that runs inside Paseo, `bin/foreman-paseo heartbeat sync` keeps one native Paseo heartbeat for that agent while a Paseo task is `working` or a notice is untold, and deletes it otherwise.
+The prompt hook and the Paseo task commands that start or end watched work run it, so it needs no manual step; it prints `foreman: heartbeat ...` on standard error when it changes something.
+`heartbeat sync --cron "*/10 * * * *"` changes the cadence (default every five minutes), and `--disable` or `--enable` turns recurring checks off or on.
+Its ID is stored in `data/supervision.json`; Paseo cannot list heartbeats, so a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only if Paseo no longer has it.
+Each heartbeat turn arrives as `<paseo-system>Schedule "foreman-supervision" fired (id=...)`; the prompt hook already ran collection and one status check for it.
+Paseo 0.11 still marks the agent `finished` and may send a push notification after a heartbeat turn that wrote nothing.
 
 If a worker is dead or missing, run the selected wrapper's `status` again to confirm, then `task recover`.
 Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handoff.json`; it does not guess that an `unknown` endpoint is dead.

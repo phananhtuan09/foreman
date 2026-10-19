@@ -4,6 +4,9 @@ Foreman keeps global fleet state in a private file home and identifies each regi
 An explicitly selected Git worktree is checked against that registered project.
 `src/foreman.js` owns task, assignment, decision, resource, acceptance, and scheduler transitions.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
+`src/next-action.js` builds a task's shown next action and decides whether it still matches the task.
+`src/attention.js` owns the pending points of each task in `data/tasks/<taskId>/attention.json` and the read-only review across all live tasks.
+`src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
 `src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
 `bin/foreman-herdr` and `bin/foreman-paseo` set a process-scoped `FOREMAN_BACKEND`; the core CLI defaults to Herdr and selects the matching runtime adapter.
@@ -42,6 +45,8 @@ The report records `lastReport` in task metadata and moves a `done` task to `rev
 The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
 The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
 It never writes state or interrupts a worker.
+The prompt hook also derives notices from task state and that status check, and lists those not yet marked told; `notice ack` writes the mark after Foreman tells the user.
+In Paseo mode, `heartbeat sync` creates or deletes the Foreman agent's one Paseo heartbeat through the Paseo CLI as watched work starts and ends, and the hook recognizes its `<paseo-system>` prompt.
 Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
 Herdr creates a separate workspace for each new worker and receives a concise text prompt.
 Paseo creates an agent in a verified Foreman workspace, receives the durable prompt through the SDK, and exposes turn status and timeline data for report collection.
@@ -61,7 +66,7 @@ Only recovery counts against the attempt limit.
 Acceptance is the terminal user action.
 It stops and verifies the worker endpoint, releases the resource lease, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
-An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, or assigned to a worker a status check confirms dead or missing.
+An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, a pending task whose dispatch never recorded an endpoint or sent a prompt while no runtime worker carries its owner, or assigned to a worker a status check confirms dead or missing.
 
 ## Read-only task summary and the Paseo dashboard
 

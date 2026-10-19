@@ -1,14 +1,19 @@
-const { spawnSync } = require("node:child_process");
+const { spawnSync, execFileSync } = require("node:child_process");
 const path = require("node:path");
 
 class PaseoCompatibilityError extends Error {}
+class PaseoHeartbeatError extends Error {
+  constructor(message, { notFound = false } = {}) { super(message); this.notFound = notFound; }
+}
 
 class PaseoAdapter {
-  constructor({ node = process.execPath, bridge = path.join(__dirname, "..", "bin", "foreman-paseo-bridge.js"), timeoutMs = 120000, runner } = {}) {
+  constructor({ node = process.execPath, bridge = path.join(__dirname, "..", "bin", "foreman-paseo-bridge.js"), timeoutMs = 120000, heartbeatTimeoutMs = 10000, runner, heartbeatRunner } = {}) {
     this.node = node;
     this.bridge = bridge;
     this.timeoutMs = timeoutMs;
+    this.heartbeatTimeoutMs = heartbeatTimeoutMs;
     this.runner = runner;
+    this.heartbeatRunner = heartbeatRunner;
     this.backend = "paseo";
     this.dispatchCapabilities = { provider: true, model: true, modeId: true, thinkingOptionId: true, featureValues: true };
   }
@@ -61,6 +66,28 @@ class PaseoAdapter {
   interrupt(endpoint) { return this._call("interrupt", { endpoint }); }
 
   stop(endpoint) { return this._call("archive", { endpoint }); }
+
+  // Heartbeats are not in the SDK, so they go through the Paseo CLI, which acts for the agent named by PASEO_AGENT_ID.
+  _heartbeat(agentId, args) {
+    if (this.heartbeatRunner) return this.heartbeatRunner(agentId, args);
+    const home = process.env.FOREMAN_PASEO_HOME || process.env.PASEO_HOME;
+    try {
+      const stdout = execFileSync(process.env.FOREMAN_PASEO_COMMAND || "paseo", ["heartbeat", ...args, "--json", ...(home ? ["--home", home] : [])], {
+        encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: agentId }, stdio: ["ignore", "pipe", "pipe"], timeout: this.heartbeatTimeoutMs,
+      });
+      return JSON.parse(stdout);
+    } catch (error) {
+      let message = error.message;
+      try { message = JSON.parse(error.stdout || error.stderr || "").error?.message || message; } catch (_) {}
+      throw new PaseoHeartbeatError(`Paseo heartbeat ${args[0]} failed: ${String(message).split("\n")[0]}`, { notFound: /not found/i.test(String(message)) });
+    }
+  }
+
+  heartbeatCreate({ agentId, cron, name, prompt }) { return this._heartbeat(agentId, ["create", "--cron", cron, "--name", name, prompt]); }
+
+  heartbeatUpdate({ agentId, heartbeatId, cron }) { return this._heartbeat(agentId, ["update", heartbeatId, "--cron", cron]); }
+
+  heartbeatDelete({ agentId, heartbeatId }) { return this._heartbeat(agentId, ["delete", heartbeatId]); }
 }
 
-module.exports = { PaseoAdapter, PaseoCompatibilityError };
+module.exports = { PaseoAdapter, PaseoCompatibilityError, PaseoHeartbeatError };
