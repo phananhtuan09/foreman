@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync: runSync } = require("node:child_process");
+const { isSupportedDaemonVersion } = require("./paseo-daemon");
 
 class PaseoProfileError extends Error {}
 
@@ -149,12 +150,6 @@ function selectedPaseoHome(env = process.env) {
 
 function comparableHome(home) {
   try { return fs.realpathSync(home); } catch (_) { return path.resolve(home); }
-}
-
-// The floor is the oldest daemon Foreman supports; newer releases pass, and the SDK calls fail closed if one is incompatible.
-function isSupportedDaemonVersion(version) {
-  const match = /^(\d+)\.(\d+)\./.exec(String(version || ""));
-  return Boolean(match) && (Number(match[1]) > 0 || Number(match[2]) >= 10);
 }
 
 function verifySelectedDaemon(options = {}) {
