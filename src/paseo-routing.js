@@ -151,6 +151,12 @@ function comparableHome(home) {
   try { return fs.realpathSync(home); } catch (_) { return path.resolve(home); }
 }
 
+// The floor is the oldest daemon Foreman supports; newer releases pass, and the SDK calls fail closed if one is incompatible.
+function isSupportedDaemonVersion(version) {
+  const match = /^(\d+)\.(\d+)\./.exec(String(version || ""));
+  return Boolean(match) && (Number(match[1]) > 0 || Number(match[2]) >= 10);
+}
+
 function verifySelectedDaemon(options = {}) {
   const expectedHome = selectedPaseoHome(options.env);
   const statusOutput = paseoCommand(["daemon", "status", "--json", ...paseoHomeArgs(options.env)], options);
@@ -161,8 +167,8 @@ function verifySelectedDaemon(options = {}) {
   if (!status.home || comparableHome(status.home) !== comparableHome(expectedHome)) {
     throw new PaseoProfileError(`Paseo daemon home mismatch: expected ${expectedHome}, found ${status.home || "unknown"}`);
   }
-  if (typeof status.daemonVersion !== "string" || !/^0\.1[01]\./.test(status.daemonVersion)) {
-    throw new PaseoProfileError(`Paseo profile sync requires daemon 0.10.x or 0.11.x; found ${status.daemonVersion || "unknown"}`);
+  if (!isSupportedDaemonVersion(status.daemonVersion)) {
+    throw new PaseoProfileError(`Paseo profile sync requires daemon 0.10.0 or newer; found ${status.daemonVersion || "unknown"}`);
   }
   return { home: expectedHome, daemonVersion: status.daemonVersion || null };
 }

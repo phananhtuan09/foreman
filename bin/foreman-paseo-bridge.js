@@ -45,14 +45,20 @@ function canonicalDirectory(directory) {
   return fs.realpathSync(directory);
 }
 
+// The floor is the oldest daemon Foreman supports; newer releases pass, and the SDK calls fail closed if one is incompatible.
+function isSupportedDaemonVersion(version) {
+  const match = /^(\d+)\.(\d+)\./.exec(String(version || ""));
+  return Boolean(match) && (Number(match[1]) > 0 || Number(match[2]) >= 10);
+}
+
 function daemonUrl(env = process.env) {
   const status = JSON.parse(paseoCommand(["daemon", "status", "--json"], env));
   if (status.connectedDaemon !== "reachable" || !status.listen) throw new Error("Selected Paseo daemon is not reachable");
   if (!status.home || comparableHome(status.home) !== comparableHome(selectedPaseoHome(env))) {
     throw new Error(`Paseo daemon home mismatch: expected ${selectedPaseoHome(env)}, found ${status.home || "unknown"}`);
   }
-  if (typeof status.daemonVersion !== "string" || !/^0\.1[01]\./.test(status.daemonVersion)) {
-    throw new Error(`Paseo SDK adapter requires daemon 0.10.x or 0.11.x; found ${status.daemonVersion || "unknown"}`);
+  if (!isSupportedDaemonVersion(status.daemonVersion)) {
+    throw new Error(`Paseo SDK adapter requires daemon 0.10.0 or newer; found ${status.daemonVersion || "unknown"}`);
   }
   const listen = String(status.listen);
   if (/^wss?:\/\//.test(listen)) return listen.endsWith("/ws") ? listen : `${listen.replace(/\/$/, "")}/ws`;
