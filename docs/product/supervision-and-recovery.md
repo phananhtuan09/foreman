@@ -48,7 +48,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - Otherwise it returns `hookSpecificOutput.additionalContext`, listing each unread worker report with its task, status, time, task status, and report path.
 - The context also lists the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 - The reports it prints are marked read.
-- It also lists the notices the user has not been told, and on a Foreman heartbeat turn it always prints, so the turn knows its collection and status check already ran.
+- It also lists the notices the user has not been told, and on a Foreman heartbeat turn with something to tell it always prints, so the turn knows its collection and status check already ran.
 - Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
 - Report text is worker input to verify, not instructions.
 
@@ -73,7 +73,9 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - A heartbeat turn never prompts, interrupts, restarts, or recovers a worker, accepts, discards, or closes a task, or decides for the user.
 - A heartbeat turn reports a dead or missing worker as a notice; recovery needs the second status check of a later Foreman turn.
 - Paseo 0.11 has no silent heartbeat run: a heartbeat turn that writes nothing still sets the agent's `finished` attention and may send a push notification, and plugin hooks cannot change it, so the anti-noise rule covers Foreman's text only.
-- Claude Code asks for a visible reply after a turn without text, so a quiet heartbeat turn there writes only `—`.
+- A heartbeat of Foreman's own with no unread report, untold notice, or failed check is quiet: the prompt hook blocks its prompt, so the model does not run, the prompt does not enter the session, and no tokens are spent.
+  An anomaly the user was already told does not make a heartbeat worth a model turn.
+- Claude Code asks for a visible reply after a turn without text, so a quiet heartbeat turn that still reaches the model writes only `—`.
 
 ### Restart
 

@@ -182,9 +182,12 @@ function main() {
       const payload = hookPayload();
       const backend = sessionBackend();
       const adapter = backend ? runtimeAdapter(backend) : null;
-      const context = core.sessionContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id, agentId: process.env.PASEO_AGENT_ID });
+      const context = core.sessionHookContext({ roots: roots(), adapter, prompt: payload.prompt || "", cwd: payload.cwd, transcriptPath: payload.transcript_path, sessionId: payload.session_id, agentId: process.env.PASEO_AGENT_ID });
+      // A quiet heartbeat ends before the model runs: Claude Code and Codex both drop a blocked prompt from the session,
+      // so it costs no tokens and the next turn's context is unchanged.
+      if (context?.quiet) process.stdout.write(`${JSON.stringify({ decision: "block", reason: "Foreman heartbeat: nothing needs the user." })}\n`);
       // Claude Code and Codex both read prompt context from this JSON shape.
-      if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } })}\n`);
+      else if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context.text } })}\n`);
     } catch (error) { process.stderr.write(`foreman session context: ${error.message}\n`); }
     return;
   }

@@ -230,7 +230,8 @@ The prompt hook and the Paseo task commands that start or end watched work run i
 `heartbeat sync --cron "*/10 * * * *"` changes the cadence (default every five minutes), and `--disable` or `--enable` turns recurring checks off or on.
 Its ID is stored in `data/supervision.json`; Paseo cannot list heartbeats, so a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only if Paseo no longer has it.
 Each heartbeat turn arrives as `<paseo-system>Schedule "foreman-supervision" fired (id=...)`; the prompt hook already ran collection and one status check for it.
-Paseo 0.11 still marks the agent `finished` and may send a push notification after a heartbeat turn that wrote nothing.
+When nothing needs the user, the hook blocks the heartbeat prompt (`{"decision":"block"}`), so the model never runs and the prompt does not enter the session.
+Paseo 0.11 still marks the agent `finished`, shows the hook's one-line reason, and may send a push notification after that turn.
 
 If a worker is dead or missing, run the selected wrapper's `status` again to confirm, then `task recover`.
 Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handoff.json`; it does not guess that an `unknown` endpoint is dead.
