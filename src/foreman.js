@@ -2262,6 +2262,15 @@ function sessionHookContext({ roots, adapter, prompt = "", cwd, transcriptPath, 
   return { text: renderSupervision(check, { heartbeat, sync }), quiet };
 }
 
+// The prompt hook's stdout for one session context. A quiet heartbeat is blocked before the model runs: Claude Code and
+// Codex both drop a blocked prompt from the session, so it costs no tokens and the next turn's context is unchanged.
+// Both clients read prompt context from the `hookSpecificOutput` shape.
+function sessionHookOutput(context) {
+  if (!context) return null;
+  if (context.quiet) return { decision: "block", reason: "Foreman heartbeat: nothing needs the user." };
+  return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context.text } };
+}
+
 function ackNotices({ roots, keys }) {
   return withHomeLock(roots.foremanHome, () => supervision.ackNoticesUnlocked(roots.foremanHome, keys, now()));
 }
@@ -2406,7 +2415,7 @@ module.exports = {
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
-  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, sessionHookContext, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
+  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, sessionHookContext, sessionHookOutput, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
   proposeNextAction, nextActions, clearNextAction, taskHistory,
   addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention: attention.renderAttention,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
