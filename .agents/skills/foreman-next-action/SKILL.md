@@ -42,7 +42,8 @@ Prefer a step the worker can do; ask the user only for a decision, permission, o
 Record it before showing it:
 `next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT] [--type ship|scout]`.
 For `round`, `--instruction` is the worker's instruction for that step, written by the rewriting rules of `foreman-control`: only the user's words, the task's rounds, and the reports; it carries the limits still in force and adds no technical decision or scope.
-Show the returned `line` on its own right after the result, for example `> **▶ T-42 · Đề xuất: Kiểm chứng migration còn thiếu.**`.
+The command prints the highlight line by default; use `--json` only when the full saved proposal is needed.
+Show that line on its own right after the result, for example `> **▶ T-42 · Đề xuất: Kiểm chứng migration còn thiếu.**`.
 Show no reason paragraph, no instruction block, and no list of three options by default.
 Add one short sentence only when missing information would make the user approve the wrong scope, risk, or trade-off.
 Write "chốt task" or "accept task" for acceptance, never "merge".

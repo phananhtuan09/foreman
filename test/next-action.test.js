@@ -1,5 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const {
   resolveRoots, collectPaseoReports, continueTask, sendWorkerMessage, acceptTask, reconstructTask, addAttentionPoint, createDecision,
   proposeNextAction, nextActions, clearNextAction, taskHistory, resolveAttentionPoint, reopenAttentionPoint,
@@ -12,6 +14,25 @@ function report(f, assignment, status, summary) {
 }
 
 const VERIFY = "Verify the data migration from step 2 of your last report against a copy of the old records. Do not change the PR description. Report the evidence.";
+
+test("next propose prints its highlight line by default and preserves the full object with --json", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Implementation complete; verification remains.");
+    const args = [path.join(__dirname, "..", "bin", "foreman"), "next", "propose", "--task", task.id, "--kind", "round", "--text", "Kiểm chứng migration còn thiếu", "--instruction", VERIFY];
+    const env = { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" };
+    const printed = execFileSync(process.execPath, args, { encoding: "utf8", env });
+    assert.equal(printed, `> **▶ ${task.id} · Đề xuất: Kiểm chứng migration còn thiếu.**\n`);
+    const json = JSON.parse(execFileSync(process.execPath, [...args, "--json"], { encoding: "utf8", env }));
+    assert.equal(json.line, printed.trim());
+    assert.equal(json.taskId, task.id);
+    assert.equal(json.kind, "round");
+    assert.equal(json.instruction, VERIFY);
+    assert.deepEqual(reconstructTask({ roots: f.roots, taskId: task.id }).meta.nextAction.basis, json.basis);
+    assert.equal(f.adapter.sent.length, 1, "neither output mode sends the proposed instruction");
+  } finally { f.cleanup(); }
+});
 
 test("the one shown next action is sent verbatim when the user agrees, and only once", () => {
   const f = fixture();

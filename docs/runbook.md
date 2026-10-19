@@ -204,7 +204,8 @@ A lock left by a process that died on this host is removed automatically; a lock
 
 ### Next action
 
-`next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout]` records the one next step Foreman shows after a report and prints its highlight line.
+`next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--json]` records the one next step Foreman shows after a report and prints its highlight line by default.
+Use `--json` to print the full proposal object, including its instruction, basis, and `line`.
 `next show [--task ID]` lists shown next actions with `current` and the reasons one is out of date; `next clear --task ID` drops one the user declined or postponed.
 `task continue --task ID --next --original "gửi bước này"` sends the stored instruction of a current round proposal and refuses after a newer report, round, generation, status, decision, or changed pending points.
 It refuses a different `--type` or an explicit `--resources`; proposals saved without a pending-point digest must be proposed and approved again.
