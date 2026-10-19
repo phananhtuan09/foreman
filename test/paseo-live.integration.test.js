@@ -372,6 +372,20 @@ test("live Paseo refuses changed or outdated approved steps and preserves eviden
     core.proposeNextAction(proposal);
     const messages = () => core.listMessages({ roots }).filter((item) => item.taskId === task.id).length;
     const before = messages();
+    const other = core.createTask({ roots, projectId: "paseo-live", type: "scout", backend: "paseo", brief: "Wait for the user to clarify the README scope.", routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }) });
+    core.proposeNextAction({ roots, taskId: other.id, kind: "clarify", text: "Chọn phần README cần đọc" });
+    const attentionFile = path.join(roots.foremanHome, "data", "tasks", task.id, "attention.json");
+    const savedPoints = fs.readFileSync(attentionFile, "utf8");
+    try {
+      fs.writeFileSync(attentionFile, "{ not json");
+      const shown = JSON.parse(execFileSync(path.join(sourceRoot, "bin", "foreman-paseo"), ["next", "show"], { encoding: "utf8", env: { ...f.env, FOREMAN_ROOT: roots.foremanRoot, FOREMAN_HOME: roots.foremanHome } }));
+      assert.equal(shown.find((item) => item.taskId === other.id).current, true);
+      const unreadable = shown.find((item) => item.taskId === task.id);
+      assert.equal(unreadable.current, false);
+      assert.match(unreadable.stale.join("; "), /pending points could not be read/);
+      assert.equal(messages(), before, "a read error never prompts the real worker");
+    } finally { fs.writeFileSync(attentionFile, savedPoints); }
+    core.discardTask({ roots, taskId: other.id, adapter });
     assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", type: "ship", adapter }), /stored mode/);
     assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", resources: [{ key: "workspace/paseo-live", mode: "exclusive" }], adapter }), /stored resources/);
     core.resolveAttentionPoint({ ...opts, pointId: "P1", how: "dropped", text: "Bỏ bước đếm dòng", user: true });

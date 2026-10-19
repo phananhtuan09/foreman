@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
 const {
   resolveRoots, collectPaseoReports, continueTask, sendWorkerMessage, acceptTask, reconstructTask, addAttentionPoint, createDecision,
   proposeNextAction, nextActions, clearNextAction, taskHistory, resolveAttentionPoint, reopenAttentionPoint,
@@ -183,5 +184,33 @@ test("a changed pending point makes the shown step stale across a restart", () =
     assert.equal(nextActions(opts)[0].current, true, "a new proposal uses the changed points");
     reopenAttentionPoint({ ...opts, pointId: "P1", why: "New data requires verification" });
     assert.equal(nextActions(opts)[0].current, false, "reopening also invalidates an acceptance proposal");
+  } finally { f.cleanup(); }
+});
+
+test("next show keeps readable tasks and marks unreadable points unsafe without changing state", () => {
+  const f = fixture();
+  try {
+    const tasks = [routeAndAssign(f), routeAndAssign(f)];
+    for (const { task, assignment } of tasks) {
+      report(f, assignment, "done", "Inspection complete.");
+      proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc thêm README", instruction: "Read the next section of README.md." });
+    }
+    const [broken, healthy] = tasks.map(({ task }) => task);
+    const file = require("../src/attention").attentionFile(f.roots.foremanHome, broken.id);
+    const metaBefore = JSON.stringify(reconstructTask({ roots: f.roots, taskId: broken.id }).meta);
+    const messagesBefore = f.adapter.sent.length;
+    for (const content of ["{ not json", JSON.stringify({ schemaVersion: 99, taskId: broken.id, points: [] })]) {
+      fs.writeFileSync(file, content);
+      const shown = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, "..", "bin", "foreman"), "next", "show"], { encoding: "utf8", env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" } }));
+      assert.equal(shown.find((item) => item.taskId === healthy.id).current, true);
+      const unreadable = shown.find((item) => item.taskId === broken.id);
+      assert.equal(unreadable.current, false);
+      assert.match(unreadable.stale.join("; "), /pending points could not be read/);
+      assert.deepEqual(nextActions({ roots: f.roots, taskId: broken.id }), [unreadable]);
+      assert.throws(() => continueTask({ roots: f.roots, taskId: broken.id, fromNext: true, original: "gửi bước này", adapter: f.adapter }));
+      assert.equal(JSON.stringify(reconstructTask({ roots: f.roots, taskId: broken.id }).meta), metaBefore);
+      assert.equal(fs.readFileSync(file, "utf8"), content, "show never rewrites unreadable state");
+      assert.equal(f.adapter.sent.length, messagesBefore, "unsafe proposals never reach the worker");
+    }
   } finally { f.cleanup(); }
 });

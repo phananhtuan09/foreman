@@ -2337,7 +2337,15 @@ function proposeNextAction({ roots, taskId, kind, text, instruction, type }) {
 // Each live task's shown next action and whether it still matches the task.
 function nextActions({ roots, taskId } = {}) {
   const metas = taskId ? [readMeta(roots.foremanHome, taskId)] : listTasks({ roots });
-  return metas.map((meta) => nextAction.describe(meta, meta.nextAction ? attention.readAttention(roots.foremanHome, meta.taskId).points : [])).filter(Boolean);
+  return metas.map((meta) => {
+    if (!meta.nextAction) return null;
+    let points;
+    try { points = attention.readAttention(roots.foremanHome, meta.taskId).points; }
+    catch (error) {
+      return { taskId: meta.taskId, projectId: meta.projectId, ...meta.nextAction, current: false, stale: [`The task's pending points could not be read: ${error.message}`] };
+    }
+    return nextAction.describe(meta, points);
+  }).filter(Boolean);
 }
 
 // The user declined or postponed the step; the request itself is untouched.
