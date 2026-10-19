@@ -65,13 +65,23 @@ function describe(meta, points) {
   return { taskId: meta.taskId, projectId: meta.projectId, ...proposal, current: stale.length === 0, stale };
 }
 
-// The one line the user sees right after the report.
-// A round that switches the task's mode says so, because approving the line approves that change too.
+// The highlight block the user sees at the end of the answer that presents the report; `line` keeps it in the proposal output.
+// A round that switches the task's mode says so, because approving the block approves that change too.
+const HEADINGS = { round: "▶ BƯỚC TIẾP", decision: "❓ CẦN BẠN QUYẾT", accept: "✅ CÓ THỂ CHỐT TASK", clarify: "🔎 CẦN LÀM RÕ" };
+const REPLIES = {
+  round: '👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua',
+  decision: "👉 Trả lời lựa chọn của bạn",
+  accept: '👉 Trả lời **"chốt"** để accept task · **"bỏ"** để bỏ qua',
+  clarify: "👉 Trả lời câu hỏi trên",
+};
+
 function renderLine(taskId, proposal) {
-  const mode = proposal.type && proposal.type !== proposal.basis.taskType
-    ? ` (đổi sang chế độ ${proposal.type}${proposal.type === "ship" ? ": worker được ghi vào workspace" : ": worker chỉ đọc"})`
-    : "";
-  return `> **▶ ${taskId} · Đề xuất: ${proposal.text.replace(/[.。]$/u, "")}${mode}.**`;
+  const lines = [`> ### ${HEADINGS[proposal.kind]} · ${taskId}`, ">", `> **${proposal.text.replace(/[.。]$/u, "")}**`];
+  if (proposal.type && proposal.type !== proposal.basis.taskType) {
+    lines.push(">", `> ⚠️ Đổi sang chế độ ${proposal.type}: ${proposal.type === "ship" ? "worker được ghi vào workspace" : "worker chỉ đọc"}`);
+  }
+  lines.push(">", `> ${REPLIES[proposal.kind]}`);
+  return lines.join("\n");
 }
 
 module.exports = { KINDS, NextActionError, proposalBasis, buildProposal, staleReasons, describe, renderLine };

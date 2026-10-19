@@ -14,7 +14,7 @@ They are not tasks or subtasks, and the user never manages them as a checklist.
 ## Review on request
 
 1. Run `attention list` once; it reads every task that has not ended on every project, so never ask the user to pick a project or task.
-2. Show its output as printed: a separate block between horizontal rules, at most three points, with the count of the rest and of snoozed points.
+2. Show its output as printed: a separate block between horizontal rules, at most five points grouped into those that need the user and those waiting on a worker, with the count of the rest and of snoozed points.
    Show nothing else from the review unless the user asks for more; `attention list --limit N` or `--json` gives the rest, and `attention list --task ID` gives one task's points with their sources and history.
 3. If the user asks for fresher worker status, run the active wrapper's `status` once; it never interrupts a worker.
 

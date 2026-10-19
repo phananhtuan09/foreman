@@ -295,7 +295,7 @@ test("a real Foreman agent reviews pending points on request and records a clear
     const foremanAgent = await startForemanAgent(f, "foreman-attention-live");
     const review = askForeman(f, foremanAgent, "foreman-paseo còn gì tôi bỏ sót?");
     t.diagnostic(`review turn:\n${review}`);
-    assert.match(review, /📌 CÒN TREO · 3 điểm cần chú ý/);
+    assert.match(review, /📌 CÒN TREO · 1 cần bạn · 2 chờ worker/);
     assert.match(review, /chọn A \(chuyển tại chỗ\)/);
     assert.match(review, /Migration chưa được kiểm chứng/);
     assert.doesNotMatch(review, /Tên file export mặc định/, "a snoozed point stays hidden");
@@ -311,7 +311,7 @@ test("a real Foreman agent reviews pending points on request and records a clear
 
     const again = askForeman(f, foremanAgent, "còn gì tôi bỏ sót không?");
     t.diagnostic(`second review turn:\n${again}`);
-    assert.match(again, /📌 CÒN TREO · 2 điểm cần chú ý/);
+    assert.match(again, /📌 CÒN TREO · 2 chờ worker/);
     assert.doesNotMatch(again, /chọn A \(chuyển tại chỗ\) hay B/, "an answered decision is not asked again");
   });
 });
@@ -335,7 +335,7 @@ test("a real Foreman agent proposes the missing step after a report and sends ex
     t.diagnostic(`report turn:\n${presented}`);
     const proposal = core.reconstructTask({ roots, taskId: task.id }).meta.nextAction;
     assert.ok(proposal, "the Foreman agent recorded the next action it showed");
-    assert.match(presented, new RegExp(`▶ ${task.id} · Đề xuất:`));
+    assert.match(presented, new RegExp(`▶ BƯỚC TIẾP · ${task.id}`));
     assert.equal(proposal.kind, "round");
     assert.match(proposal.instruction, /line/i, "the missing line count is the next step");
     assert.equal(core.listMessages({ roots }).filter((message) => message.taskId === task.id).length, 1, "proposing sends nothing");

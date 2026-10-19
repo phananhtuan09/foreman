@@ -359,7 +359,7 @@ function main() {
     const pointId = arg("--point");
     if (action === "list") {
       if (taskId) { output(core.taskAttention({ roots: home, taskId })); return; }
-      const review = core.attentionReview({ roots: home, limit: arg("--limit") === undefined ? 3 : Number(arg("--limit")) });
+      const review = core.attentionReview({ roots: home, limit: arg("--limit") === undefined ? 5 : Number(arg("--limit")) });
       output(flag("--json") ? review : core.renderAttention(review));
       return;
     }

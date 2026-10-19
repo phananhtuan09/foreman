@@ -55,13 +55,13 @@ Every Foreman-to-worker message is durable before delivery and every worker repo
 
 ### Next action
 
-- When Foreman presents a new worker report, it may show one next action for that task in a single highlight line: a round the worker can do, a decision for the user, a clarification, or accepting the task.
+- When Foreman presents a new worker report, it may show one next action for that task in a highlight block at the end of the answer: a round the worker can do, a decision for the user, a clarification, or accepting the task.
 - `next propose` records it in task metadata as `nextAction` with its kind, the line shown, the worker instruction of a round (rewritten as the user-confirmation rule for rewritten instructions allows, keeping the limits still in force), and the state it was based on: last report, round, generation, lifecycle status, decision, and a digest of the task's pending points.
 - A stored next action is not permission to act.
 - When the user approves the shown step, `task continue --next` sends exactly its stored instruction together with the user's words, and refuses once the task has moved on: a newer report, another round or generation, a different status, a changed decision, or changed pending points.
 - `task continue --next` refuses a different `--type` or an explicit `--resources`; a mode or resource change requires a newly approved instruction.
 - Proposals saved before pending-point digests were recorded must be proposed and approved again before sending.
-- The shown line stands for its instruction, so the user's approval of a current next action is the confirmation a rewritten instruction requires.
+- The shown block stands for its instruction, so the user's approval of a current next action is the confirmation a rewritten instruction requires.
 - Any delivered round clears the next action, `next clear` drops a declined or postponed one without dropping the request, and it leaves with the task at acceptance.
 - Proposing never prompts, interrupts, or accepts anything, and an accept proposal is allowed only for a `review-ready` task.
 - `task history` is the read-only view a next action is chosen from: the user's words, rounds, recent reports, decisions, pending points, and the shown next action.

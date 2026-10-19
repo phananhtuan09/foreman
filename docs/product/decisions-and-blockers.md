@@ -34,7 +34,8 @@ Blockers and decisions are persisted with the human response verbatim so authori
 - An answer is recorded when the user gives it, independently of delivering it to the worker.
 - A point can be snoozed until a time, `tomorrow` meaning the start of the next local day, without being closed.
 - A worker report is input to evaluate and never closes or overrides a point by itself; a worker's "Next steps" suggestion becomes a point only when the request or the user requires it.
-- `attention list` reviews every task that has not ended on every project and shows at most three open, unsnoozed points in a separate highlight block, user points first, then decisions, obligations, and checks, oldest first, with the count of the rest.
+- `attention list` reviews every task that has not ended on every project and shows at most five open, unsnoozed points in a separate highlight block, user points first, then decisions, obligations, and checks, oldest first, with the count of the rest.
+- The block groups the points that need the user apart from those waiting on a worker, and puts each point's project, task, and round on its own line.
 - `attention list` reads durable state only and never prompts or interrupts a worker or changes a task.
 
 ## References

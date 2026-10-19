@@ -2313,7 +2313,7 @@ function reopenAttentionPoint({ roots, taskId, pointId, why }) {
 }
 
 // Reads durable state only: it never prompts, interrupts, or changes a task.
-function attentionReview({ roots, limit = 3 }) {
+function attentionReview({ roots, limit = 5 }) {
   initHome(roots);
   return attention.reviewAttention({ home: roots.foremanHome, metas: listTasks({ roots }), projects: loadProjects(roots.foremanHome), at: now(), limit });
 }

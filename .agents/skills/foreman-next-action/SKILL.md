@@ -1,6 +1,6 @@
 ---
 name: foreman-next-action
-description: Use within foreman-supervisor whenever Foreman presents a new worker report, to choose the one most useful next step for that task, show it as one highlight line, and send it when the user agrees. Not a user-invoked skill.
+description: Use within foreman-supervisor whenever Foreman presents a new worker report, to choose the one most useful next step for that task, show it as one highlight block, and send it when the user agrees. Not a user-invoked skill.
 ---
 
 # Foreman next action
@@ -42,8 +42,17 @@ Prefer a step the worker can do; ask the user only for a decision, permission, o
 Record it before showing it:
 `next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT] [--type ship|scout]`.
 For `round`, `--instruction` is the worker's instruction for that step, written by the rewriting rules of `foreman-control`: only the user's words, the task's rounds, and the reports; it carries the limits still in force and adds no technical decision or scope.
-The command prints the highlight line by default; use `--json` only when the full saved proposal is needed.
-Show that line on its own right after the result, for example `> **▶ T-42 · Đề xuất: Kiểm chứng migration còn thiếu.**`.
+The command prints the highlight block by default; use `--json` only when the full saved proposal is needed.
+Show that block exactly as printed at the end of the answer, after the result; for a round it reads:
+
+```markdown
+> ### ▶ BƯỚC TIẾP · T-42
+>
+> **Kiểm chứng migration còn thiếu**
+>
+> 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua
+```
+
 Show no reason paragraph, no instruction block, and no list of three options by default.
 Add one short sentence only when missing information would make the user approve the wrong scope, risk, or trade-off.
 Write "chốt task" or "accept task" for acceptance, never "merge".
@@ -53,16 +62,16 @@ Write "chốt task" or "accept task" for acceptance, never "merge".
 - "gửi bước này", "ok làm đi", or similar approves exactly the shown step.
   Run `next show --task ID`; if it is still `current`, act by its `kind`:
   - `round`: send it with `task continue --task ID --next --original "<the user's words>"`.
-    The shown line stands for its stored instruction, so this approval is the confirmation `foreman-control` requires; show the instruction only when the user asks for it.
-    When the line names a mode change, the approval covers that change too.
+    The shown block stands for its stored instruction, so this approval is the confirmation `foreman-control` requires; show the instruction only when the user asks for it.
+    When the block names a mode change, the approval covers that change too.
   - `accept`: `task continue --next` refuses it.
     Treat the approval as the user's intent to accept, follow the acceptance flow of `foreman-control` (`task accept`), and clear the proposal.
   - `decision` or `clarify`: nothing is sent to the worker.
-    Put the question to the user through the Decision Package or the clarifying question the line announced, then clear the proposal.
+    Put the question to the user through the Decision Package or the clarifying question the block announced, then clear the proposal.
 - If the user edits the step, rewrite the instruction, record it again with `next propose`, and ask before sending.
-- If `next show` reports the step out of date, or the task moved on, re-check the history and propose again; when the step changed materially, show the new line and ask again.
+- If `next show` reports the step out of date, or the task moved on, re-check the history and propose again; when the step changed materially, show the new block and ask again.
 - When several tasks have current next actions and the reference is vague, ask which task in one short question.
-- A declined or postponed step is cleared with `next clear --task ID`; that does not drop the request it came from.
+- A declined ("bỏ") or postponed step is cleared with `next clear --task ID`; that does not drop the request it came from.
 
 Proposing never sends a prompt, opens a round, interrupts a worker, creates or accepts a task, or changes anything outside Foreman.
 An optional next action is not a pending point of `foreman-attention`.

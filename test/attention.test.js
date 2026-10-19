@@ -85,7 +85,7 @@ test("snoozing hides exactly one point until tomorrow and survives a restart", (
   } finally { f.cleanup(); }
 });
 
-test("the review reads every live task on every project, highlights three points, and never touches a worker", () => {
+test("the review reads every live task on every project, highlights up to five points grouped by owner, and never touches a worker", () => {
   const f = fixture();
   try {
     const otherRoot = path.join(f.base, "billing");
@@ -99,20 +99,26 @@ test("the review reads every live task on every project, highlights three points
     addAttentionPoint({ roots: f.roots, taskId: queued.id, owner: "user", kind: "decision", text: "Đang chờ bạn chọn định dạng CSV hay XLSX" });
     addAttentionPoint({ roots: f.roots, taskId: queued.id, owner: "user", kind: "check", text: "Bạn cần xác nhận quyền truy cập S3" });
     const callsBefore = f.adapter.calls.length;
-    const review = attentionReview({ roots: f.roots });
+    const review = attentionReview({ roots: f.roots, limit: 3 });
     assert.equal(f.adapter.calls.length, callsBefore, "the review never calls the runtime");
     assert.deepEqual([review.tasksRead, review.open, review.user, review.worker, review.remaining], [2, 4, 2, 2, 1]);
     assert.deepEqual(review.highlight.map((point) => `${point.taskId}/${point.id}`), [`${queued.id}/P1`, `${queued.id}/P2`, `${first.task.id}/P2`], "user points first, then decisions, obligations, checks");
     const block = renderAttention(review);
-    assert.match(block, /^---\n\n> \*\*📌 CÒN TREO · 4 điểm cần chú ý\*\*/);
-    assert.match(block, new RegExp(`> \\*\\*Billing · ${queued.id}:\\*\\* Đang chờ bạn chọn định dạng CSV hay XLSX — còn từ vòng 1 · cần bạn\\.`));
-    assert.match(block, new RegExp(`> \\*\\*fixture · ${first.task.id}:\\*\\* Chưa cập nhật tài liệu API — còn từ vòng 1 · chờ worker\\.`));
-    assert.match(block, /> _còn 1 điểm khác\._\n\n---\n$/);
+    assert.equal(block, [
+      "---", "", "### 📌 CÒN TREO · 2 cần bạn · 2 chờ worker", "",
+      "**🔴 CẦN BẠN**", "",
+      "1. **Đang chờ bạn chọn định dạng CSV hay XLSX**", "", `   \`Billing · ${queued.id} · từ vòng 1\``, "",
+      "2. **Bạn cần xác nhận quyền truy cập S3**", "", `   \`Billing · ${queued.id} · từ vòng 1\``, "",
+      "**🟡 CHỜ WORKER**", "",
+      "3. Chưa cập nhật tài liệu API", "", `   \`fixture · ${first.task.id} · từ vòng 1\``, "",
+      "_+1 điểm khác_", "", "---", "",
+    ].join("\n"));
+    assert.match(renderAttention(attentionReview({ roots: f.roots })), /4\. Migration chưa được kiểm chứng → chờ worker chạy migration\n/, "the default shows five points and the action after an arrow");
     assert.equal(reconstructTask({ roots: f.roots, taskId: first.task.id }).meta.status, "working");
 
     const json = JSON.parse(execFileSync(process.execPath, [bin, "attention", "list", "--json", "--limit", "10"], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" }, encoding: "utf8" }));
     assert.equal(json.highlight.length, 4);
-    const rendered = execFileSync(process.execPath, [bin, "attention", "list"], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" }, encoding: "utf8" });
+    const rendered = execFileSync(process.execPath, [bin, "attention", "list", "--limit", "3"], { env: { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" }, encoding: "utf8" });
     assert.equal(rendered, block);
   } finally { f.cleanup(); }
 });
@@ -147,7 +153,7 @@ test("a task whose points cannot be read is never reported as all clear, and a b
     const review = attentionReview({ roots: f.roots });
     assert.deepEqual(review.skipped.map((item) => item.taskId), [task.id]);
     const block = renderAttention(review);
-    assert.match(block, /^Chưa thể kết luận: Không đọc được điểm treo của /);
+    assert.match(block, /^⚠️ \*\*CHƯA THỂ KẾT LUẬN\*\* · không đọc được điểm treo của /);
     assert.doesNotMatch(block, /Không còn điểm treo nào/);
     for (const limit of [Number.NaN, -1, 1.5]) assert.throws(() => attentionReview({ roots: f.roots, limit }), /non-negative whole number/);
   } finally { f.cleanup(); }

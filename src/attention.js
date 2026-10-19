@@ -116,7 +116,7 @@ function snoozeUntil(value, at = new Date()) {
  * ordered user before worker, decision before obligation before check, oldest first.
  * The limit applies only to the highlight; every task is read.
  */
-function reviewAttention({ home, metas, projects, at, limit = 3 }) {
+function reviewAttention({ home, metas, projects, at, limit = 5 }) {
   if (!Number.isInteger(limit) || limit < 0) throw new Error(`Attention limit must be a non-negative whole number: ${limit}`);
   const time = Date.parse(at);
   const names = new Map((projects || []).map((project) => [project.id, project.name || project.id]));
@@ -139,25 +139,36 @@ function reviewAttention({ home, metas, projects, at, limit = 3 }) {
   return { reviewedAt: at, tasksRead, open: open.length, user: open.filter((point) => point.owner === "user").length, worker: open.filter((point) => point.owner === "worker").length, snoozed, highlight: open.slice(0, limit), remaining: Math.max(0, open.length - limit), points: open, skipped };
 }
 
+// One point: what is open and what to do, then where it comes from on its own dimmed line.
+// Only the user's points are bold, so they stand out from what waits on a worker.
+function renderPoint(point, number) {
+  const text = point.text.replace(/[.。]$/u, "");
+  const action = point.action ? ` → ${point.action.replace(/[.。]$/u, "")}` : "";
+  return [`${number}. ${point.owner === "user" ? `**${text}**` : text}${action}`, "", `   \`${point.projectName} · ${point.taskId} · từ vòng ${point.source.round}\``];
+}
+
 function renderAttention(review) {
   // A task whose points could not be read was not checked, so the review must never read as an all-clear.
-  const unchecked = (review.skipped || []).length ? `Không đọc được điểm treo của ${review.skipped.map((item) => item.taskId).join(", ")}; các task này chưa được rà soát.` : null;
+  const unchecked = (review.skipped || []).length ? `không đọc được điểm treo của ${review.skipped.map((item) => item.taskId).join(", ")}; các task này chưa được rà soát.` : null;
   if (!review.open) {
-    const lines = [unchecked ? `Chưa thể kết luận: ${unchecked}` : "Không còn điểm treo nào cần nhắc."];
-    if (review.snoozed) lines.push(`(${review.snoozed} điểm đang hoãn nhắc.)`);
+    const lines = [unchecked ? `⚠️ **CHƯA THỂ KẾT LUẬN** · ${unchecked}` : `✅ Không còn điểm treo · đã rà ${review.tasksRead} task`];
+    if (review.snoozed) lines.push("", `_${review.snoozed} điểm đang hoãn nhắc._`);
     return `${lines.join("\n")}\n`;
   }
-  const lines = ["---", "", `> **📌 CÒN TREO · ${review.open} điểm cần chú ý**`];
-  for (const point of review.highlight) {
-    const who = point.owner === "user" ? "cần bạn" : "chờ worker";
-    const action = point.action ? ` ${point.action}` : "";
-    lines.push(">", `> **${point.projectName} · ${point.taskId}:** ${point.text.replace(/[.。]$/u, "")}${action ? ` —${action.replace(/[.。]$/u, "")}` : ""} — còn từ vòng ${point.source.round} · ${who}.`);
+  const counts = [review.user && `${review.user} cần bạn`, review.worker && `${review.worker} chờ worker`].filter(Boolean);
+  const lines = ["---", "", `### 📌 CÒN TREO · ${counts.join(" · ")}`];
+  if (unchecked) lines.push("", `⚠️ **CHƯA ĐẦY ĐỦ** · ${unchecked}`);
+  let number = 0;
+  for (const [owner, title] of [["user", "**🔴 CẦN BẠN**"], ["worker", "**🟡 CHỜ WORKER**"]]) {
+    const points = review.highlight.filter((point) => point.owner === owner);
+    if (!points.length) continue;
+    lines.push("", title, "");
+    points.forEach((point, index) => lines.push(...(index ? [""] : []), ...renderPoint(point, ++number)));
   }
   const tail = [];
-  if (review.remaining) tail.push(`còn ${review.remaining} điểm khác`);
-  if (review.snoozed) tail.push(`${review.snoozed} điểm đang hoãn`);
-  if (tail.length) lines.push(">", `> _${tail.join("; ")}._`);
-  if (unchecked) lines.push(">", `> **Chưa đầy đủ:** ${unchecked}`);
+  if (review.remaining) tail.push(`+${review.remaining} điểm khác`);
+  if (review.snoozed) tail.push(`${review.snoozed} đang hoãn`);
+  if (tail.length) lines.push("", `_${tail.join(" · ")}_`);
   lines.push("", "---");
   return `${lines.join("\n")}\n`;
 }
