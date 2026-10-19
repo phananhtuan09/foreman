@@ -8,6 +8,8 @@ const coordination = require("./coordination");
 const paseoRouting = require("./paseo-routing");
 const attachments = require("./attachments");
 const supervision = require("./supervision");
+const attention = require("./attention");
+const nextAction = require("./next-action");
 
 class ForemanError extends Error {}
 class HomeLockError extends ForemanError {}
@@ -1616,17 +1618,30 @@ function sameClaims(left, right) {
  * `text` is the instruction sent to the worker and `original` is the user's own wording; both are stored.
  * The lease follows the round's mode, but a task that was ever a ship keeps write access until acceptance.
  */
-function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter, images }) {
-  if (typeof text !== "string" || !text.trim()) throw new ValidationError("A round needs non-empty instruction text");
+function continueTask({ roots, taskId, text, original, type, resources, interrupt = false, withOriginal = false, adapter, images, fromNext = false }) {
+  if (fromNext && text !== undefined) throw new ValidationError("A round sent from the next action uses its stored instruction; do not pass --text");
+  if (!fromNext && (typeof text !== "string" || !text.trim())) throw new ValidationError("A round needs non-empty instruction text");
   if (typeof original !== "string" || !original.trim()) throw new ValidationError("A round needs the user's original wording");
   const prepared = prepareImages(images);
-  const requestedType = type === undefined ? undefined : normalizeTaskType(type);
+  let requestedType = type === undefined ? undefined : normalizeTaskType(type);
   initHome(roots);
   // A report that already finished must be on disk before the task is judged to be waiting for the user.
   if (adapter?.backend === "paseo") collectPaseoReports({ roots, adapter });
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const backend = assertAdapterBackend(meta, adapter, "continuing it");
+    if (fromNext) {
+      // Only the exact step the user saw, while the task is still where it was, may be sent from the proposal.
+      const proposal = meta.nextAction;
+      if (!proposal || proposal.kind !== "round") throw new ValidationError(`Task ${taskId} has no proposed round to send`);
+      const stale = nextAction.staleReasons(proposal, meta, attention.readAttention(roots.foremanHome, taskId).points);
+      if (stale.length) throw new ValidationError(`The next action of ${taskId} is out of date: ${stale.join("; ")}; propose it again and ask the user`);
+      text = proposal.instruction;
+      const proposedType = proposal.type || proposal.basis.taskType;
+      if (requestedType !== undefined && requestedType !== proposedType) throw new ValidationError("A round sent from the next action uses its stored mode; propose the mode change again before sending");
+      if (resources !== undefined) throw new ValidationError("A round sent from the next action uses its stored resources; do not pass --resources");
+      requestedType = proposedType;
+    }
     if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
     if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
@@ -1688,7 +1703,8 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
     }
     coordination.writeRoundUnlocked({ roots, record: { ...record, status: "delivered", deliveredAt: now(), messageId: delivery.message.messageId } });
     const { interruptedRound: _interrupted, interruptUnconfirmed: _unconfirmed, ...current } = prospective;
-    const next = { ...current, status: "working", completionReport: null, round, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
+    // A delivered round answers whatever next action was shown, so it is never offered again.
+    const next = { ...current, status: "working", completionReport: null, round, nextAction: null, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: stopTurn };
   });
@@ -2247,6 +2263,119 @@ function syncHeartbeat({ roots, adapter, agentId, anomalies, cron, enable }) {
   return supervision.syncHeartbeat({ home: roots.foremanHome, adapter, agentId, metas, anomalies, cron, enable, at: now(), withLock });
 }
 
+// Pending points belong to a live task; an accepted or discarded task has none.
+function liveTask(home, taskId) {
+  const meta = readMeta(home, taskId);
+  if (["accepted", "cleaned"].includes(meta.status)) throw new ValidationError(`Task ${taskId} has ended`);
+  return meta;
+}
+
+// A point taken from a worker report names that report, which must be one of the task's own reports.
+function attentionSource(home, meta, { report, user }) {
+  if (report && user) throw new ValidationError("A point comes from a report or from the user, not both");
+  if (!report) return { type: user ? "user" : "request", ref: null, round: meta.round || 1, generation: meta.generation };
+  const file = path.resolve(report);
+  const reports = path.join(taskDir(home, meta.taskId), "reports");
+  if (!isWithin(reports, file) || !fs.existsSync(file)) throw new ValidationError(`Report is not a report of ${meta.taskId}: ${report}`);
+  const header = fs.readFileSync(file, "utf8").split("\n\n")[0];
+  const round = Number(/^ROUND: (\d+)$/m.exec(header)?.[1] || 1);
+  const generation = Number(/^GENERATION: (\d+)$/m.exec(header)?.[1]);
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new ValidationError(`Report generation is invalid: ${report}`);
+  return { type: "report", ref: file, round, generation };
+}
+
+function addAttentionPoint({ roots, taskId, owner, kind, text, action, report, user }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = liveTask(roots.foremanHome, taskId);
+    try { return attention.addPointUnlocked({ home: roots.foremanHome, meta, owner, kind, text, action, source: attentionSource(roots.foremanHome, meta, { report, user }), at: now() }); }
+    catch (error) { throw error instanceof ForemanError ? error : new ValidationError(error.message); }
+  });
+}
+
+function changeAttentionPoint(roots, taskId, change) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = liveTask(roots.foremanHome, taskId);
+    try { return change(meta); }
+    catch (error) { throw error instanceof ForemanError ? error : new ValidationError(error.message); }
+  });
+}
+
+function resolveAttentionPoint({ roots, taskId, pointId, how, text, report, user }) {
+  return changeAttentionPoint(roots, taskId, (meta) => attention.resolvePointUnlocked({ home: roots.foremanHome, taskId, pointId, how, text, source: report || user ? attentionSource(roots.foremanHome, meta, { report, user }) : null, at: now() }));
+}
+
+function snoozeAttentionPoint({ roots, taskId, pointId, until }) {
+  return changeAttentionPoint(roots, taskId, () => attention.snoozePointUnlocked({ home: roots.foremanHome, taskId, pointId, until: attention.snoozeUntil(until), at: now() }));
+}
+
+function reopenAttentionPoint({ roots, taskId, pointId, why }) {
+  return changeAttentionPoint(roots, taskId, () => attention.reopenPointUnlocked({ home: roots.foremanHome, taskId, pointId, why, at: now() }));
+}
+
+// Reads durable state only: it never prompts, interrupts, or changes a task.
+function attentionReview({ roots, limit = 5 }) {
+  initHome(roots);
+  return attention.reviewAttention({ home: roots.foremanHome, metas: listTasks({ roots }), projects: loadProjects(roots.foremanHome), at: now(), limit });
+}
+
+function taskAttention({ roots, taskId }) {
+  liveTask(roots.foremanHome, taskId);
+  return attention.readAttention(roots.foremanHome, taskId);
+}
+
+function proposeNextAction({ roots, taskId, kind, text, instruction, type }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    let proposal;
+    try { proposal = nextAction.buildProposal({ meta, kind, text, instruction, type: type === undefined ? undefined : String(type).toLowerCase(), at: now(), points: attention.readAttention(roots.foremanHome, taskId).points }); }
+    catch (error) { throw new ValidationError(error.message); }
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, nextAction: proposal });
+    return { taskId, ...proposal, line: nextAction.renderLine(taskId, proposal) };
+  });
+}
+
+// Each live task's shown next action and whether it still matches the task.
+function nextActions({ roots, taskId } = {}) {
+  const metas = taskId ? [readMeta(roots.foremanHome, taskId)] : listTasks({ roots });
+  return metas.map((meta) => {
+    if (!meta.nextAction) return null;
+    let points;
+    try { points = attention.readAttention(roots.foremanHome, meta.taskId).points; }
+    catch (error) {
+      return { taskId: meta.taskId, projectId: meta.projectId, ...meta.nextAction, current: false, stale: [`The task's pending points could not be read: ${error.message}`] };
+    }
+    return nextAction.describe(meta, points);
+  }).filter(Boolean);
+}
+
+// The user declined or postponed the step; the request itself is untouched.
+function clearNextAction({ roots, taskId }) {
+  return withHomeLock(roots.foremanHome, () => {
+    const meta = readMeta(roots.foremanHome, taskId);
+    atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, nextAction: null });
+    return { taskId, cleared: Boolean(meta.nextAction) };
+  });
+}
+
+// Everything a next step is chosen from, read-only: the user's words, every delivered round, the last report of
+// recent rounds, decisions, pending points, and the shown next action.
+function taskHistory({ roots, taskId }) {
+  const meta = readMeta(roots.foremanHome, taskId);
+  const handoff = coordination.buildHandoffPackage({ roots, taskId, reason: "history" });
+  const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null);
+  return {
+    taskId, projectId: meta.projectId, type: meta.type, status: meta.status, round: meta.round || 1, generation: meta.generation,
+    brief: read(path.join(taskDir(roots.foremanHome, taskId), "brief.md")),
+    original: handoff.original,
+    rounds: handoff.rounds,
+    roundReports: handoff.roundReports,
+    lastReport: meta.lastReport ? { ...meta.lastReport, text: reportBody(meta.lastReport.file) } : null,
+    decisions: handoff.decisions.map(({ decisionId, finding, options, recommendation, status, humanResponse, answeredAt }) => ({ decisionId, finding, options, recommendation, status, humanResponse, answeredAt })),
+    attention: attention.readAttention(roots.foremanHome, taskId).points,
+    nextAction: nextAction.describe(meta, attention.readAttention(roots.foremanHome, taskId).points),
+  };
+}
+
 function validateDispatchProfile(profile, capabilities = {}) {
   if (profile === undefined || profile === null) return null;
   if (typeof profile !== "object" || !profile.name) throw new ValidationError("Dispatch profile must have a name");
@@ -2268,6 +2397,8 @@ module.exports = {
   registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
   recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
+  proposeNextAction, nextActions, clearNextAction, taskHistory,
+  addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention: attention.renderAttention,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, taskSummaries, fleetStatus, briefStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,

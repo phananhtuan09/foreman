@@ -78,6 +78,19 @@ function report(f, assignment, status, summary) {
   return recordReport({ roots: f.roots, paneId: assignment.paneId, status, summary });
 }
 
+test("round history stays in numeric order beyond round 999", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "app", brief: "Inspect the README." });
+    const delivered = [1001, 101, 999, 1000, 99];
+    for (const round of [...delivered, 1050]) {
+      coordination.writeRoundUnlocked({ roots: f.roots, record: { schemaVersion: 1, taskId: task.id, round, generation: 1, status: round === 1050 ? "pending" : "delivered", sent: `Inspect section ${round}.`, original: `Read section ${round}.` } });
+    }
+    assert.deepEqual(coordination.listRounds({ roots: f.roots, taskId: task.id }).map((record) => record.round), [99, 101, 999, 1000, 1001, 1050]);
+    assert.deepEqual(core.taskHistory({ roots: f.roots, taskId: task.id }).rounds.map((record) => record.round), [99, 101, 999, 1000, 1001], "history excludes undelivered rounds and retains numeric order");
+  } finally { f.cleanup(); }
+});
+
 test("task creation stores the user's original wording beside the brief and the router reads it", () => {
   const f = fixture();
   try {

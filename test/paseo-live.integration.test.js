@@ -15,8 +15,8 @@ const enabled = process.env.RUN_PASEO_LIVE === "1";
 const paseoCommand = process.env.FOREMAN_PASEO_COMMAND || "paseo";
 const sourceRoot = path.resolve(__dirname, "..");
 
-function paseo(args, env) {
-  return execFileSync(paseoCommand, args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout: 30000 }).trim();
+function paseo(args, env, timeout = 30000) {
+  return execFileSync(paseoCommand, args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout }).trim();
 }
 
 async function freePort() {
@@ -209,6 +209,26 @@ async function waitFor(check, label, timeoutMs = 300000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+// A real Claude Foreman agent in this checkout, pointed at the fixture home and the isolated daemon.
+async function startForemanAgent(f, title) {
+  // `init` in the agent must not rewrite the user's shell startup file.
+  const foremanEnv = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${f.roots.foremanHome}`, "FOREMAN_BACKEND=paseo", `FOREMAN_PASEO_HOME=${f.paseoHome}`, `FOREMAN_PASEO_COMMAND=${paseoCommand}`, `FOREMAN_SHELL_RC=${path.join(path.dirname(f.paseoHome), "shell-rc")}`];
+  const created = JSON.parse(paseo(["run", "-d", "--json", "--provider", "claude", "--model", process.env.FOREMAN_LIVE_FOREMAN_MODEL || "claude-sonnet-5-5", "--mode", "bypassPermissions",
+    "--cwd", sourceRoot, "--title", title, ...foremanEnv.flatMap((entry) => ["--env", entry]), "--home", f.paseoHome,
+    "DEV live fixture: reply with the single word READY and do nothing else."], f.env));
+  f.agents.push(created.agentId);
+  await waitFor(() => !f.adapter.inspect(created.agentId).activeTurn, "the Foreman agent to finish its first turn");
+  return created.agentId;
+}
+
+// Sends one user prompt to the Foreman agent and returns the text it wrote in that turn.
+function askForeman(f, agentId, prompt) {
+  const before = paseo(["logs", agentId, "--home", f.paseoHome], f.env);
+  paseo(["send", agentId, "--prompt", prompt, "--home", f.paseoHome], f.env, 600000);
+  const after = paseo(["logs", agentId, "--home", f.paseoHome], f.env);
+  return after.slice(before.length);
+}
+
 // The Foreman agent runs in this checkout, so its Claude Code prompt hook is the repository's session-context hook.
 test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects the worker report without prompting the worker", { skip: !enabled, timeout: 1200000 }, async (t) => {
   await withLiveFixture(async (f) => {
@@ -221,14 +241,7 @@ test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects th
     core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
     f.assigned = core.assignTask({ roots, taskId: task.id, adapter });
 
-    // `init` in the agent must not rewrite the user's shell startup file.
-    const foremanEnv = [`FOREMAN_ROOT=${sourceRoot}`, `FOREMAN_HOME=${roots.foremanHome}`, "FOREMAN_BACKEND=paseo", `FOREMAN_PASEO_HOME=${f.paseoHome}`, `FOREMAN_PASEO_COMMAND=${paseoCommand}`, `FOREMAN_SHELL_RC=${path.join(path.dirname(f.paseoHome), "shell-rc")}`];
-    const created = JSON.parse(paseo(["run", "-d", "--json", "--provider", "claude", "--model", process.env.FOREMAN_LIVE_FOREMAN_MODEL || "claude-sonnet-5-5", "--mode", "bypassPermissions",
-      "--cwd", sourceRoot, "--title", "foreman-heartbeat-live", ...foremanEnv.flatMap((entry) => ["--env", entry]), "--home", f.paseoHome,
-      "DEV live heartbeat fixture: reply with the single word READY and do nothing else."], f.env));
-    const foremanAgent = created.agentId;
-    f.agents.push(foremanAgent);
-    await waitFor(() => !adapter.inspect(foremanAgent).activeTurn, "the Foreman agent to finish its first turn");
+    const foremanAgent = await startForemanAgent(f, "foreman-heartbeat-live");
 
     const sync = core.syncHeartbeat({ roots, adapter, agentId: foremanAgent, cron: "* * * * *" });
     assert.equal(sync.action, "created");
@@ -261,6 +274,144 @@ test("a Paseo heartbeat wakes a real Foreman agent whose prompt hook collects th
 
     const accepted = core.acceptTask({ roots, taskId: task.id, adapter });
     assert.equal(accepted.deleted, true);
+    f.assigned = null;
+  });
+});
+
+test("a real Foreman agent reviews pending points on request and records a clear answer without asking again", { skip: !enabled, timeout: 1200000 }, async (t) => {
+  await withLiveFixture(async (f) => {
+    const { roots } = f;
+    const route = () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." });
+    const migrate = core.createTask({ roots, projectId: "paseo-live", backend: "paseo", brief: "Migrate the old records and test the migration.", routingRunner: route });
+    const exportTask = core.createTask({ roots, projectId: "paseo-live", backend: "paseo", brief: "Add an export command.", routingRunner: route });
+    core.addAttentionPoint({ roots, taskId: migrate.id, owner: "user", kind: "decision", text: "Đang chờ bạn chọn A (chuyển tại chỗ) hay B (đọc song song) cho dữ liệu cũ" });
+    core.addAttentionPoint({ roots, taskId: migrate.id, owner: "worker", kind: "check", text: "Migration chưa được kiểm chứng" });
+    core.addAttentionPoint({ roots, taskId: exportTask.id, owner: "worker", kind: "obligation", text: "Chưa viết tài liệu cho lệnh export" });
+    core.addAttentionPoint({ roots, taskId: exportTask.id, owner: "user", kind: "decision", text: "Tên file export mặc định" });
+    core.snoozeAttentionPoint({ roots, taskId: exportTask.id, pointId: "P2", until: "tomorrow" });
+    const statuses = () => core.listTasks({ roots }).map((meta) => `${meta.taskId}:${meta.status}:${meta.round || 1}`);
+    const before = statuses();
+
+    const foremanAgent = await startForemanAgent(f, "foreman-attention-live");
+    const review = askForeman(f, foremanAgent, "foreman-paseo còn gì tôi bỏ sót?");
+    t.diagnostic(`review turn:\n${review}`);
+    assert.match(review, /📌 CÒN TREO · 1 cần bạn · 2 chờ worker/);
+    assert.match(review, /chọn A \(chuyển tại chỗ\)/);
+    assert.match(review, /Migration chưa được kiểm chứng/);
+    assert.doesNotMatch(review, /Tên file export mặc định/, "a snoozed point stays hidden");
+    assert.deepEqual(statuses(), before, "the review changes no task");
+
+    const answer = askForeman(f, foremanAgent, `${migrate.id} chọn A`);
+    t.diagnostic(`answer turn:\n${answer}`);
+    const point = core.taskAttention({ roots, taskId: migrate.id }).points.find((item) => item.id === "P1");
+    assert.equal(point.status, "resolved", "a clear answer closes its point");
+    assert.equal(point.resolution.how, "answered");
+    assert.match(point.resolution.text, /chọn A/);
+    assert.equal(core.taskAttention({ roots, taskId: migrate.id }).points.find((item) => item.id === "P2").status, "open", "answering one point leaves the others");
+
+    const again = askForeman(f, foremanAgent, "còn gì tôi bỏ sót không?");
+    t.diagnostic(`second review turn:\n${again}`);
+    assert.match(again, /📌 CÒN TREO · 2 chờ worker/);
+    assert.doesNotMatch(again, /chọn A \(chuyển tại chỗ\) hay B/, "an answered decision is not asked again");
+  });
+});
+
+test("a real Foreman agent proposes the missing step after a report and sends exactly that step when the user agrees", { skip: !enabled, timeout: 1500000 }, async (t) => {
+  await withLiveFixture(async (f) => {
+    const { roots, adapter } = f;
+    // The user's request has two parts; the first round asked only the first, so the second is still required.
+    const task = core.createTask({
+      roots, projectId: "paseo-live", type: "scout", backend: "paseo",
+      brief: "Read README.md and report only its first line. Do not edit any file.",
+      original: "Đọc README.md, báo dòng đầu tiên, sau đó cho tôi biết file có bao nhiêu dòng. Không sửa file nào.",
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
+    });
+    core.confirmTaskProfile({ roots, taskId: task.id, profile: "claude-sonnet" });
+    f.assigned = core.assignTask({ roots, taskId: task.id, adapter });
+    await waitForReport(f, task.id, 1);
+
+    const foremanAgent = await startForemanAgent(f, "foreman-next-action-live");
+    const presented = askForeman(f, foremanAgent, "foreman-paseo tình hình sao rồi?");
+    t.diagnostic(`report turn:\n${presented}`);
+    const proposal = core.reconstructTask({ roots, taskId: task.id }).meta.nextAction;
+    assert.ok(proposal, "the Foreman agent recorded the next action it showed");
+    assert.match(presented, new RegExp(`▶ BƯỚC TIẾP · ${task.id}`));
+    assert.equal(proposal.kind, "round");
+    assert.match(proposal.instruction, /line/i, "the missing line count is the next step");
+    assert.equal(core.listMessages({ roots }).filter((message) => message.taskId === task.id).length, 1, "proposing sends nothing");
+
+    const sent = askForeman(f, foremanAgent, "gửi bước này");
+    t.diagnostic(`send turn:\n${sent}`);
+    const meta = core.reconstructTask({ roots, taskId: task.id }).meta;
+    assert.equal(meta.round, 2, "the approved step became the next round");
+    assert.equal(meta.nextAction, null);
+    const round = JSON.parse(fs.readFileSync(path.join(roots.foremanHome, "data", "tasks", task.id, "rounds", "round-002.json"), "utf8"));
+    assert.equal(round.sent, proposal.instruction, "the worker received exactly the step the user approved");
+    assert.match(round.original, /gửi bước này/);
+    await waitForReport(f, task.id, 2);
+    assert.match(core.reconstructTask({ roots, taskId: task.id }).report, /\d/, "the worker reported the line count");
+    core.acceptTask({ roots, taskId: task.id, adapter });
+    f.assigned = null;
+  });
+});
+
+test("live Paseo refuses changed or outdated approved steps and preserves evidence from the replaced worker", { skip: !enabled, timeout: 600000 }, async () => {
+  await withLiveFixture(async (f) => {
+    const { roots, adapter } = f;
+    const task = core.createTask({
+      roots, projectId: "paseo-live", type: "scout", backend: "paseo",
+      brief: "Read README.md and report its first line. Do not edit any file.",
+      routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }),
+    });
+    const opts = { roots, taskId: task.id };
+    core.confirmTaskProfile({ ...opts, profile: "claude-sonnet" });
+    f.assigned = core.assignTask({ ...opts, adapter });
+    const firstReport = (await waitForReport(f, task.id)).lastReport.file;
+    core.addAttentionPoint({ ...opts, owner: "worker", kind: "check", text: "Count the README lines", report: firstReport });
+    const proposal = { ...opts, kind: "round", text: "Đếm số dòng README", instruction: "Count the lines in README.md and report the count. Do not edit any file.", type: "scout" };
+    core.proposeNextAction(proposal);
+    const messages = () => core.listMessages({ roots }).filter((item) => item.taskId === task.id).length;
+    const before = messages();
+    const other = core.createTask({ roots, projectId: "paseo-live", type: "scout", backend: "paseo", brief: "Wait for the user to clarify the README scope.", routingRunner: () => ({ profile: "claude-sonnet", reason: "Use the configured test profile." }) });
+    core.proposeNextAction({ roots, taskId: other.id, kind: "clarify", text: "Chọn phần README cần đọc" });
+    const attentionFile = path.join(roots.foremanHome, "data", "tasks", task.id, "attention.json");
+    const savedPoints = fs.readFileSync(attentionFile, "utf8");
+    try {
+      fs.writeFileSync(attentionFile, "{ not json");
+      const shown = JSON.parse(execFileSync(path.join(sourceRoot, "bin", "foreman-paseo"), ["next", "show"], { encoding: "utf8", env: { ...f.env, FOREMAN_ROOT: roots.foremanRoot, FOREMAN_HOME: roots.foremanHome } }));
+      assert.equal(shown.find((item) => item.taskId === other.id).current, true);
+      const unreadable = shown.find((item) => item.taskId === task.id);
+      assert.equal(unreadable.current, false);
+      assert.match(unreadable.stale.join("; "), /pending points could not be read/);
+      assert.equal(messages(), before, "a read error never prompts the real worker");
+    } finally { fs.writeFileSync(attentionFile, savedPoints); }
+    core.discardTask({ roots, taskId: other.id, adapter });
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", type: "ship", adapter }), /stored mode/);
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", resources: [{ key: "workspace/paseo-live", mode: "exclusive" }], adapter }), /stored resources/);
+    core.resolveAttentionPoint({ ...opts, pointId: "P1", how: "dropped", text: "Bỏ bước đếm dòng", user: true });
+    assert.equal(core.nextActions(opts)[0].current, false);
+    assert.throws(() => core.continueTask({ ...opts, fromNext: true, original: "gửi bước này", adapter }), /out of date: .*pending points changed/);
+    assert.equal(messages(), before, "refused steps never reach the real worker");
+    assert.equal(core.reconstructTask(opts).meta.round || 1, 1);
+
+    // A new user request restores the check, then a fresh proposal can be approved.
+    core.reopenAttentionPoint({ ...opts, pointId: "P1", why: "Người dùng yêu cầu đếm dòng trở lại" });
+    core.proposeNextAction(proposal);
+    const sent = core.continueTask({ ...opts, fromNext: true, original: "gửi bước đếm dòng mới", adapter });
+    assert.equal(sent.round.sent, proposal.instruction);
+    assert.equal(sent.round.mode, "scout");
+    assert.ok(sent.round.resources.every((claim) => claim.mode === "read"));
+    const secondReport = (await waitForReport(f, task.id, 2)).lastReport.file;
+
+    f.assigned = core.reassignWorker({ ...opts, adapter });
+    await waitForReport(f, task.id, 3);
+    const generation = core.reconstructTask(opts).meta.generation;
+    assert.equal(generation, 2);
+    const point = core.addAttentionPoint({ ...opts, owner: "worker", kind: "check", text: "Review the previous worker's evidence", report: firstReport }).point;
+    assert.deepEqual([point.source.round, point.source.generation], [1, 1]);
+    const resolved = core.resolveAttentionPoint({ ...opts, pointId: point.id, how: "verified", text: "Earlier worker reported the line count", report: secondReport }).point;
+    assert.deepEqual([resolved.resolution.source.round, resolved.resolution.source.generation], [2, 1]);
+    core.acceptTask({ ...opts, adapter });
     f.assigned = null;
   });
 });
