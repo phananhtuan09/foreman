@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync: runSync } = require("node:child_process");
+const { isSupportedDaemonVersion } = require("./paseo-daemon");
 
 class PaseoProfileError extends Error {}
 
@@ -161,8 +162,8 @@ function verifySelectedDaemon(options = {}) {
   if (!status.home || comparableHome(status.home) !== comparableHome(expectedHome)) {
     throw new PaseoProfileError(`Paseo daemon home mismatch: expected ${expectedHome}, found ${status.home || "unknown"}`);
   }
-  if (typeof status.daemonVersion !== "string" || !/^0\.1[01]\./.test(status.daemonVersion)) {
-    throw new PaseoProfileError(`Paseo profile sync requires daemon 0.10.x or 0.11.x; found ${status.daemonVersion || "unknown"}`);
+  if (!isSupportedDaemonVersion(status.daemonVersion)) {
+    throw new PaseoProfileError(`Paseo profile sync requires daemon 0.10.0 or newer; found ${status.daemonVersion || "unknown"}`);
   }
   return { home: expectedHome, daemonVersion: status.daemonVersion || null };
 }

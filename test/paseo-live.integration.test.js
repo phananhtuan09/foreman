@@ -337,7 +337,7 @@ test("a real Foreman agent proposes the missing step after a report and sends ex
     assert.ok(proposal, "the Foreman agent recorded the next action it showed");
     assert.match(presented, new RegExp(`▶ BƯỚC TIẾP · ${task.id}`));
     assert.equal(proposal.kind, "round");
-    assert.match(proposal.instruction, /line/i, "the missing line count is the next step");
+    assert.match(proposal.instruction, /line|dòng/i, "the missing line count is the next step");
     assert.equal(core.listMessages({ roots }).filter((message) => message.taskId === task.id).length, 1, "proposing sends nothing");
 
     const sent = askForeman(f, foremanAgent, "gửi bước này");

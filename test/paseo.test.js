@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots,
@@ -44,7 +44,7 @@ test("Paseo profile sync replaces only repo-owned profiles and verifies the sele
 
     const fakeHome = path.join(f.base, "paseo-home");
     const fakeCommand = path.join(f.base, "paseo-fake.js");
-    fs.writeFileSync(fakeCommand, `#!/usr/bin/env node\nconst fs=require('node:fs');const path=require('node:path');const a=process.argv.slice(2);const i=a.indexOf('--home');const h=path.resolve(process.env.PASEO_FAKE_HOME||(i>=0?a[i+1]:process.env.HOME));const target=path.resolve(i>=0?a[i+1]:process.env.HOME);const f=path.join(target,'profiles.json');if(a[0]==='daemon'&&a[1]==='status'){process.stdout.write(JSON.stringify({home:h,connectedDaemon:'reachable',daemonVersion:'0.10.0'}));}else if(a[0]==='daemon'&&a[1]==='config'&&a[2]==='get'){process.stdout.write(JSON.stringify(fs.existsSync(f)?{set:true,value:JSON.parse(fs.readFileSync(f,'utf8'))}:{set:false}));}else if(a[0]==='daemon'&&a[1]==='config'&&a[2]==='set'){fs.mkdirSync(target,{recursive:true});fs.writeFileSync(f,JSON.stringify(JSON.parse(a[4])));process.stdout.write('ok');}else{process.exit(2);}\n`);
+    fs.writeFileSync(fakeCommand, `#!/usr/bin/env node\nconst fs=require('node:fs');const path=require('node:path');const a=process.argv.slice(2);const i=a.indexOf('--home');const h=path.resolve(process.env.PASEO_FAKE_HOME||(i>=0?a[i+1]:process.env.HOME));const target=path.resolve(i>=0?a[i+1]:process.env.HOME);const f=path.join(target,'profiles.json');if(a[0]==='daemon'&&a[1]==='status'){process.stdout.write(JSON.stringify({home:h,connectedDaemon:'reachable',listen:'127.0.0.1:1',daemonVersion:process.env.PASEO_FAKE_VERSION||'0.10.0'}));}else if(a[0]==='daemon'&&a[1]==='config'&&a[2]==='get'){process.stdout.write(JSON.stringify(fs.existsSync(f)?{set:true,value:JSON.parse(fs.readFileSync(f,'utf8'))}:{set:false}));}else if(a[0]==='daemon'&&a[1]==='config'&&a[2]==='set'){fs.mkdirSync(target,{recursive:true});fs.writeFileSync(f,JSON.stringify(JSON.parse(a[4])));process.stdout.write('ok');}else{process.exit(2);}\n`);
     fs.chmodSync(fakeCommand, 0o755);
     const env = { ...process.env, FOREMAN_PASEO_HOME: fakeHome, FOREMAN_PASEO_COMMAND: fakeCommand };
     const options = { command: fakeCommand, env };
@@ -70,6 +70,18 @@ test("Paseo profile sync replaces only repo-owned profiles and verifies the sele
 
     const wrongHome = { ...env, FOREMAN_PASEO_HOME: path.join(f.base, "other-home"), PASEO_FAKE_HOME: fakeHome };
     assert.throws(() => syncPaseoProfiles({ foremanRoot: f.projectRoot, commandOptions: { command: fakeCommand, env: wrongHome } }), /home mismatch/);
+
+    const withVersion = (version) => ({ command: fakeCommand, env: { ...env, PASEO_FAKE_VERSION: version } });
+    for (const version of ["0.10.0", "0.11.1", "0.12.0", "1.0.0"]) {
+      assert.equal(syncPaseoProfiles({ foremanRoot: f.projectRoot, dryRun: true, commandOptions: withVersion(version) }).daemonVersion, version);
+    }
+    for (const version of ["0.9.9", "unknown"]) {
+      assert.throws(() => syncPaseoProfiles({ foremanRoot: f.projectRoot, dryRun: true, commandOptions: withVersion(version) }), /requires daemon 0.10.0 or newer/);
+    }
+    const bridge = path.join(__dirname, "../bin/foreman-paseo-bridge.js");
+    const bridgeRun = (version) => spawnSync(process.execPath, [bridge, "verify"], { input: "{}", encoding: "utf8", env: { ...env, PASEO_FAKE_VERSION: version } });
+    assert.match(bridgeRun("0.9.9").stderr, /requires daemon 0.10.0 or newer; found 0.9.9/);
+    assert.doesNotMatch(bridgeRun("0.12.0").stderr, /requires daemon/);
   } finally { f.cleanup(); }
 });
 

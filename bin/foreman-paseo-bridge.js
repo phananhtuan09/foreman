@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createPaseoClient } = require("@getpaseo/client");
+const { isSupportedDaemonVersion } = require("../src/paseo-daemon");
 
 function readInput() {
   try { return JSON.parse(fs.readFileSync(0, "utf8") || "{}"); }
@@ -51,8 +52,8 @@ function daemonUrl(env = process.env) {
   if (!status.home || comparableHome(status.home) !== comparableHome(selectedPaseoHome(env))) {
     throw new Error(`Paseo daemon home mismatch: expected ${selectedPaseoHome(env)}, found ${status.home || "unknown"}`);
   }
-  if (typeof status.daemonVersion !== "string" || !/^0\.1[01]\./.test(status.daemonVersion)) {
-    throw new Error(`Paseo SDK adapter requires daemon 0.10.x or 0.11.x; found ${status.daemonVersion || "unknown"}`);
+  if (!isSupportedDaemonVersion(status.daemonVersion)) {
+    throw new Error(`Paseo SDK adapter requires daemon 0.10.0 or newer; found ${status.daemonVersion || "unknown"}`);
   }
   const listen = String(status.listen);
   if (/^wss?:\/\//.test(listen)) return listen.endsWith("/ws") ? listen : `${listen.replace(/\/$/, "")}/ws`;
