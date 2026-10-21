@@ -70,6 +70,7 @@ Every Foreman-to-worker message is durable before delivery and every worker repo
 
 - Herdr workers report through `"$FOREMAN_ROOT/bin/foreman" report --status done|blocked|progress`, giving the summary as `--summary`, `--summary-file`, or standard input; every Herdr worker prompt states this command.
 - Paseo workers return one JSON object with `status` and a non-empty `summary` at the end of each turn.
+- The Paseo worker prompt forbids ending a turn without that object: no timer, wakeup, or scheduled follow-up, and no background command left to report on later; a command that cannot finish is stopped and the turn reports `progress`.
 - Foreman tolerates a leading Markdown horizontal rule emitted by the Paseo timeline and preserves the full original response.
 - Paseo workers do not invoke `foreman report` or depend on a stop hook.
 - Foreman collects Paseo reports using the persisted timeline cursor and current endpoint, workspace, generation, and turn evidence.

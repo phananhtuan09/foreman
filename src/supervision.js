@@ -13,7 +13,7 @@ const DEFAULT_HEARTBEAT_CRON = "*/5 * * * *";
 const HEARTBEAT_NAME = "foreman-supervision";
 const HEARTBEAT_PROMPT = [
   "Foreman supervision heartbeat.",
-  "Follow the heartbeat turn in .agents/skills/foreman-paseo-heartbeat/SKILL.md: use the supervision context the prompt hook added,",
+  "Follow \"Heartbeat turn (Paseo)\" in .agents/skills/foreman-supervisor/SKILL.md: use the supervision context the prompt hook added,",
   "tell the user only what needs them, and end the turn without any text when nothing does.",
 ].join(" ");
 // A heartbeat Foreman has not seen fire or confirmed for this long is checked again, because Paseo cannot list heartbeats.

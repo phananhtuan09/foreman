@@ -166,7 +166,12 @@ function main() {
     const initialized = core.initHome(home);
     const routing = core.initRoutingConfig({ roots: home, backend: selectedBackend() });
     const shell = installShellEnv({ vars: { FOREMAN_ROOT: home.foremanRoot, FOREMAN_HOME: home.foremanHome } });
-    output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed } });
+    // init cannot change the environment of the process that runs it, so an inherited home keeps winning in this session.
+    // resolveRoots resolves symlinks, so an inherited path that reaches the same directory through one is not a mismatch.
+    const real = (p) => fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p);
+    const inherited = ["FOREMAN_ROOT", "FOREMAN_HOME"].filter((key) => process.env[key] && real(process.env[key]) !== real(key === "FOREMAN_ROOT" ? home.foremanRoot : home.foremanHome));
+    const warning = inherited.length ? `This session inherited ${inherited.map((key) => `${key}=${process.env[key]}`).join(" and ")}, so its Foreman commands keep using that checkout and home until it starts with the new values; open a new terminal or agent session before running Foreman commands.` : undefined;
+    output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed }, ...(warning ? { warning } : {}) });
     return;
   }
   if (command === "worker" && action === "hook") {
@@ -387,6 +392,7 @@ function main() {
       assertSelectedTaskBackend(arg("--task"));
       const instructionFile = arg("--instruction-file");
       const proposal = core.proposeNextAction({ roots: home, taskId: arg("--task"), kind: arg("--kind"), text: arg("--text"), instruction: instructionFile ? fs.readFileSync(path.resolve(instructionFile), "utf8") : arg("--instruction"), type: arg("--type") });
+      if (proposal.told.length) syncHeartbeatAfter(home);
       output(flag("--json") ? proposal : proposal.line);
       return;
     }

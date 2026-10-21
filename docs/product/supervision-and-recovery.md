@@ -48,6 +48,9 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - Otherwise it returns `hookSpecificOutput.additionalContext`, listing each unread worker report with its task, status, time, task status, and report path.
 - The context also lists the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 - The reports it prints are marked read.
+- On a user prompt in a Claude Code session, it reads the context size of the last model call from the session transcript; each time that size passes another 150k tokens, it adds one `Foreman session size: nudge N` line asking Foreman to suggest a new session at the end of that answer.
+  The line stays in the transcript, so each step is suggested once; a heartbeat turn and a transcript without Claude Code usage get no line.
+  The suggestion warns that a rewritten instruction still waiting for confirmation must be confirmed first or asked again, because confirmation lives only in the conversation.
 - It also lists the notices the user has not been told, and on a Foreman heartbeat turn with something to tell it always prints, so the turn knows its collection and status check already ran.
 - Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
 - The entry of a `done` report that made its task review-ready also carries the task's review size, and so does the task's `review-ready` notice.
@@ -62,6 +65,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - A mark is kept only while its event is current, so an anomaly or failure that ends and later recurs is told again; a failed status check is not evidence that an anomaly ended.
 - A check prunes marks only for tasks on the backend it observed.
 - A Decision Package is recorded as told when Foreman creates it, because Foreman asks it in the same answer.
+- `next propose` records the task's `review-ready` or `blocked` notice as told, because its block closes the answer that presents that report.
 - `heartbeat sync` keeps exactly one native Paseo heartbeat for the current Foreman agent (`PASEO_AGENT_ID`), every five minutes by default.
 - The heartbeat exists while a Paseo task is `working` or a notice is untold, and is deleted when neither remains or the user disables it.
 - The prompt hook and every `bin/foreman-paseo` command that starts, changes, or ends watched work run `heartbeat sync`, including `notice ack`.
