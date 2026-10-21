@@ -10,6 +10,7 @@ const attachments = require("./attachments");
 const supervision = require("./supervision");
 const attention = require("./attention");
 const nextAction = require("./next-action");
+const history = require("./history");
 
 class ForemanError extends Error {}
 class HomeLockError extends ForemanError {}
@@ -782,7 +783,7 @@ function createTaskUnlocked({ roots, projectId, brief, original, notes, type = "
   if (notes) atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
   const imageRefs = attachments.storeTaskImagesUnlocked({ roots, taskId: id, images: prepared });
   if (imageRefs.length) attachments.setBriefImagesUnlocked({ roots, taskId: id, refs: imageRefs });
-  atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
+  atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing", createdAt: now() });
   return { id, projectId: project.id, type: normalizedType, dependencies: normalizedDependencies, brief, original: original || null, notes: notes || null, ...(imageRefs.length ? { attachments: imageRefs } : {}) };
 }
 
@@ -894,6 +895,9 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       ...Object.fromEntries(ROUTING_EVIDENCE_FIELDS.filter((key) => prior[key] !== undefined).map((key) => [key, prior[key]])),
       ...(prior.round ? { round: prior.round } : {}),
       ...(prior.everShip ? { everShip: true } : {}),
+      ...(prior.createdAt ? { createdAt: prior.createdAt } : {}),
+      // The history line of an adopted task needs its adoption after a later worker replaces the adopted one.
+      ...(prior.adoption ? { adoption: prior.adoption } : {}),
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
@@ -1337,6 +1341,8 @@ function acceptTask({ roots, taskId, adapter }) {
     meta = { ...meta, status: "accepted", acceptedAt: meta.acceptedAt || now(), resourceLease: null };
     atomicJson(metaFile(roots.foremanHome, taskId), meta);
     applyDependencyDetach(dependencyUpdates);
+    // The history line is written before any record it reads is deleted; a failed write keeps the task for a retry.
+    history.appendHistoryUnlocked({ home: roots.foremanHome, record: history.historyRecord({ home: roots.foremanHome, meta, outcome: "accepted", at: meta.acceptedAt }) });
     coordination.purgeTaskRecordsUnlocked({ roots, taskId });
 
     const workspace = meta.workspace || null;
@@ -1386,6 +1392,7 @@ function discardTask({ roots, taskId, adapter }) {
       if ((dependent.dependencies || []).includes(taskId)) throw new ValidationError(`Task is still a dependency of ${id}`);
     }
     const workerStopped = workerState === "dead" ? stopEndpointForAcceptance({ roots, meta, adapter }) : false;
+    history.appendHistoryUnlocked({ home: roots.foremanHome, record: history.historyRecord({ home: roots.foremanHome, meta, outcome: "discarded", at: now() }) });
     coordination.purgeTaskRecordsUnlocked({ roots, taskId });
     const imageCleanupError = attachments.removeWorkspaceImages({ workspace: meta.workspace, taskId });
     fs.rmSync(taskDir(roots.foremanHome, taskId), { recursive: true, force: true });
@@ -1481,6 +1488,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, original, 
       status: "working",
       adopted: true,
       adoptedAt,
+      adoption: { at: adoptedAt, owner: assignmentOwner, generation },
       lastPromptAt: adoptedAt,
       ...(adapter.backend === "paseo" && typeof adapter.cursor === "function" ? { paseoCursor: adapter.cursor(endpoint) } : {}),
     };
@@ -1841,7 +1849,7 @@ function promoteScout({ roots, taskId, brief, original, dependencies = [], routi
     if (originalText) atomicWrite(path.join(taskDir(roots.foremanHome, id), "original.md"), originalText);
     atomicWrite(path.join(taskDir(roots.foremanHome, id), "notes.md"), notes);
     const backend = scout.backend || "herdr";
-    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing" });
+    atomicJson(metaFile(roots.foremanHome, id), { schemaVersion: 1, taskId: id, projectId: scout.projectId, type: "ship", dependencies: normalized, owner: null, generation: 0, workspace: null, workspaceId: null, branch: null, resources: [], resourceLease: null, backend, endpoint: null, status: "routing", createdAt: now() });
     return { id, projectId: scout.projectId, type: "ship", promotedFrom: taskId, dependencies: normalized, brief: text, notes, backend };
   });
   return { ...promoted, routing: routeTask({ roots, taskId: promoted.id, routingRunner }) };
