@@ -896,6 +896,8 @@ function assignTask({ roots, taskId, owner, adapter, workspacePath, cwd, project
       ...(prior.round ? { round: prior.round } : {}),
       ...(prior.everShip ? { everShip: true } : {}),
       ...(prior.createdAt ? { createdAt: prior.createdAt } : {}),
+      // The history line of an adopted task needs its adoption after a later worker replaces the adopted one.
+      ...(prior.adoption ? { adoption: prior.adoption } : {}),
       handoff: handoff || prior.handoff || null,
       recoveryAttempts: prior.recoveryAttempts || 0,
       handoffPending: handoff ? true : Boolean(prior.handoffPending),
@@ -1486,6 +1488,7 @@ function adoptExistingWorker({ roots, adapter, worker, taskId, brief, original, 
       status: "working",
       adopted: true,
       adoptedAt,
+      adoption: { at: adoptedAt, owner: assignmentOwner, generation },
       lastPromptAt: adoptedAt,
       ...(adapter.backend === "paseo" && typeof adapter.cursor === "function" ? { paseoCursor: adapter.cursor(endpoint) } : {}),
     };

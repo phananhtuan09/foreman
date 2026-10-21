@@ -6,7 +6,7 @@ const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport,
-  createDecision, answerDecision, deliverDecision, continueTask, acceptTask, discardTask, HerdrAdapter,
+  createDecision, answerDecision, deliverDecision, continueTask, acceptTask, discardTask, adoptExistingWorker, recoverDeadWorker, reassignWorker, HerdrAdapter,
 } = require("../src/foreman");
 const history = require("../src/history");
 
@@ -91,6 +91,27 @@ test("acceptance appends one metadata line with the task's timeline before delet
   } finally { f.cleanup(); }
 });
 
+test("an adopted task keeps its adoption after its worker is replaced, and the line counts recoveries and reassignments", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "app", brief: "adopt this requirement" });
+    f.transport.workers.set("codex-1", { endpoint: "codex-1", owner: "codex-1", cwd: path.join(f.base, "app"), status: "working" });
+    adoptExistingWorker({ roots: f.roots, adapter: f.adapter, worker: "codex-1", taskId: task.id, explicit: true });
+    f.transport.workers.get("codex-1").status = "missing";
+    const recovered = recoverDeadWorker({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    const reassigned = reassignWorker({ roots: f.roots, taskId: task.id, adapter: f.adapter, owner: "worker-three" });
+    assert.notEqual(reassigned.endpoint, recovered.endpoint);
+    recordReport({ roots: f.roots, paneId: reassigned.paneId, status: "done", summary: "workspace checked" });
+    acceptTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+
+    const record = JSON.parse(lines(f.file)[0]);
+    const adopted = record.events.find((event) => event.type === "adopted");
+    assert.deepEqual([adopted.generation, adopted.owner], [1, "codex-1"], "the adoption keeps the adopted worker, not the last one");
+    assert.deepEqual(record.events.filter((event) => event.type === "dispatch").map((event) => [event.generation, event.replaced]), [[2, "missing"], [3, "human-reassign"]]);
+    assert.deepEqual([record.generation, record.recoveryAttempts, record.reassignments], [3, 1, 1]);
+  } finally { f.cleanup(); }
+});
+
 test("discard records the task as discarded", () => {
   const f = fixture();
   try {
@@ -148,8 +169,9 @@ test("an append after a line cut short starts on its own line", () => {
   } finally { f.cleanup(); }
 });
 
-test("retention days come from FOREMAN_HISTORY_RETENTION_DAYS when it is a positive number", () => {
+test("retention days come from FOREMAN_HISTORY_RETENTION_DAYS when it is a whole number of at least one day", () => {
   assert.equal(history.retentionDays({}), 365);
   assert.equal(history.retentionDays({ FOREMAN_HISTORY_RETENTION_DAYS: "30" }), 30);
   assert.equal(history.retentionDays({ FOREMAN_HISTORY_RETENTION_DAYS: "-1" }), 365);
+  assert.equal(history.retentionDays({ FOREMAN_HISTORY_RETENTION_DAYS: "0.001" }), 365);
 });

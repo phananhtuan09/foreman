@@ -14,7 +14,7 @@ function historyFile(home) { return path.join(home, "data", "task-history.jsonl"
 
 function retentionDays(env = process.env) {
   const days = Number(env.FOREMAN_HISTORY_RETENTION_DAYS);
-  return Number.isFinite(days) && days > 0 ? days : DEFAULT_RETENTION_DAYS;
+  return Number.isInteger(days) && days >= 1 ? days : DEFAULT_RETENTION_DAYS;
 }
 
 function readOptionalJson(file) {
@@ -33,14 +33,15 @@ function reportEvents(dir) {
   });
 }
 
-// Each assignment generation starts with its task-brief message, which names the worker and its profile.
+// Each assignment generation starts with its task-brief message, which names the worker, its profile, and, for a replacement,
+// the handoff and why the previous worker was replaced (`dead`, `missing`, or `human-reassign`).
 function dispatchEvents(home, taskId) {
   const dir = coordinationDirs(home).messages;
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((name) => name.startsWith(`M-${taskId}-`) && name.endsWith(".json")).flatMap((name) => {
     const message = readOptionalJson(path.join(dir, name));
     if (!message || message.taskId !== taskId || message.kind !== "task-brief" || message.status !== "delivered") return [];
-    return [{ type: "dispatch", at: message.deliveredAt || message.createdAt, generation: message.generation, owner: message.worker, profile: message.payload?.dispatchProfile?.name || null }];
+    return [{ type: "dispatch", at: message.deliveredAt || message.createdAt, generation: message.generation, owner: message.worker, profile: message.payload?.dispatchProfile?.name || null, replaced: message.payload?.handoff?.reason || null, handoffId: message.payload?.handoff?.handoffId || null }];
   });
 }
 
@@ -60,20 +61,25 @@ function decisionEvents(dir) {
  */
 function taskTimeline(home, meta) {
   const dir = taskDir(home, meta.taskId);
+  // Tasks adopted before `adoption` was recorded still carry the adopted worker in `adoptedAt`, `owner`, and `generation`.
+  const adoption = meta.adoption || (meta.adoptedAt ? { at: meta.adoptedAt, owner: meta.owner, generation: meta.generation } : null);
   const rounds = listRounds({ roots: { foremanHome: home }, taskId: meta.taskId, statuses: ["delivered"] })
     .map((round) => ({ type: "round", at: round.createdAt, round: round.round, generation: round.generation, mode: round.mode || null, deliveredAt: round.deliveredAt || null }));
   const events = [
     ...(meta.createdAt ? [{ type: "created", at: meta.createdAt }] : []),
     ...dispatchEvents(home, meta.taskId),
-    ...(meta.adoptedAt ? [{ type: "adopted", at: meta.adoptedAt, generation: meta.generation, owner: meta.owner }] : []),
+    ...(adoption ? [{ type: "adopted", at: adoption.at, generation: adoption.generation, owner: adoption.owner }] : []),
     ...rounds,
     ...reportEvents(dir),
     ...decisionEvents(dir),
   ].filter((event) => event.at);
-  return events.sort((left, right) => left.at.localeCompare(right.at));
+  // Times are compared as instants; one that does not parse sorts last instead of being dropped.
+  const time = (event) => { const ms = Date.parse(event.at); return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER; };
+  return events.sort((left, right) => time(left) - time(right));
 }
 
 function historyRecord({ home, meta, outcome, at }) {
+  const events = taskTimeline(home, meta);
   return {
     schemaVersion: 1,
     taskId: meta.taskId,
@@ -86,7 +92,9 @@ function historyRecord({ home, meta, outcome, at }) {
     round: meta.round || 1,
     generation: meta.generation || 0,
     recoveryAttempts: meta.recoveryAttempts || 0,
-    events: [...taskTimeline(home, meta), { type: outcome, at }],
+    // A reassignment whose first dispatch failed is dispatched again with the same handoff, so it counts once.
+    reassignments: new Set(events.filter((event) => event.type === "dispatch" && event.replaced === "human-reassign").map((event) => event.handoffId)).size,
+    events: [...events, { type: outcome, at }],
   };
 }
 

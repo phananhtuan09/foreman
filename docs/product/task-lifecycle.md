@@ -72,11 +72,12 @@ Its types, dependencies, and terminal actions are defined so that Foreman never 
 ### Ended-task history
 
 - Before acceptance or discard deletes a task's records, Foreman appends one line for the task to `data/task-history.jsonl`.
-- The line holds the task's identity, project, type, backend, outcome (`accepted` or `discarded`), creation and end times, final round and generation, recovery attempts, and a timeline of its dispatches, adoption, later rounds, reports, and decisions with their times.
-- Each dispatch names its generation, worker, and profile; each report its status, round, and generation; each decision when it was created, answered, and delivered.
+- The line holds the task's identity, project, type, backend, outcome (`accepted` or `discarded`), creation and end times, final round and generation, recovery attempts, user-requested reassignments, and a timeline of its dispatches, adoption, later rounds, reports, and decisions with their times.
+- Each dispatch names its generation, worker, and profile, and for a replacement why the previous worker was replaced; each report its status, round, and generation; each decision when it was created, answered, and delivered.
+- An adoption names the adopted worker and its generation, also after a later worker replaced it.
 - The line holds no brief, user wording, report text, decision text, or human response.
 - If the line cannot be written, the task records are not deleted, and a retried acceptance or discard writes the line once.
-- Lines whose task ended more than `FOREMAN_HISTORY_RETENTION_DAYS` days (default 365) before the newest line are dropped when that line is written.
+- Lines whose task ended more than `FOREMAN_HISTORY_RETENTION_DAYS` days (a whole number of at least 1; default 365) before the newest line are dropped when that line is written.
 - An unreadable line is skipped when the history is read and kept when it is rewritten.
 
 ### Workspace retention
