@@ -1,6 +1,6 @@
 ---
 name: foreman-paseo-heartbeat
-description: Handle a Foreman Paseo heartbeat turn, and change, pause, or resume the heartbeat that Foreman manages for recurring Paseo supervision.
+description: Change, pause, or resume the heartbeat that Foreman manages for recurring Paseo supervision, and explain how it is managed. A heartbeat turn itself follows foreman-supervisor.
 ---
 
 # Foreman Paseo heartbeat
@@ -27,34 +27,7 @@ Do not implement recurring checks with repository code, shell polling, operating
 
 ## Heartbeat turn
 
-A heartbeat prompt arrives as a `<paseo-system>` message naming the schedule and ID, and the prompt hook adds a supervision context that says this turn is the Foreman heartbeat.
-
-1. Use that context: its Paseo collection and status check already ran in this turn.
-   Run `bin/foreman-paseo supervise` once only when the context is missing because the hook failed.
-2. Read the reports and the `Not yet told to the user` list.
-3. Tell the user only those notices, merged into one short message:
-   - `review-ready`: the outcome, the evidence (as worker claims), and what the user must review;
-   - `blocked` or a decision: what the user must do;
-   - an anomaly or a failed check: what is new and what it does not prove.
-4. After telling them, record each told notice with `bin/foreman-paseo notice ack --key KEY` (several `--key` at once).
-5. When nothing needs the user, the prompt hook blocks the heartbeat prompt before the model runs, so no turn reaches you.
-   If the context still reaches you and says nothing needs the user, end the turn without writing any text.
-   Claude Code insists on a visible reply after a turn without text; then write only `—`, never a status sentence or a reminder of something already told.
-
-| Situation | Behavior |
-| --- | --- |
-| Worker still running | Silent. |
-| Progress report that needs nothing from the user | Silent; it is stored. |
-| New review-ready result | Tell once with outcome, evidence, and what to review. |
-| New blocker, decision, or permission request | Tell once with what the user must do. |
-| The same blocker or decision still waiting | Not repeated; it is already acked. |
-| New or materially changed anomaly | Tell what is new. |
-| Nothing worth telling | No text at all, or only `—` when the client insists: no "checked", "still running", or "nothing new". |
-
-A heartbeat turn never sends a prompt to a worker, interrupts, restarts, recovers, accepts, discards, or closes anything, makes no decision for the user, and does not widen the task.
-An idle, finished, or prompt-accepted worker is not a completed task; only a valid report is.
-A failed collection or status check is not evidence that workers are fine, dead, or done.
-Dead or missing workers are told as anomalies; recovery waits for a user turn, where the supervisor procedure confirms them with a second status check.
+A heartbeat turn follows "Heartbeat turn (Paseo)" in `.agents/skills/foreman-supervisor/SKILL.md`.
 
 ## Paseo limits
 

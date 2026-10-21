@@ -5,7 +5,7 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const {
   resolveRoots, collectPaseoReports, continueTask, sendWorkerMessage, acceptTask, reconstructTask, addAttentionPoint, createDecision,
-  proposeNextAction, nextActions, clearNextAction, taskHistory, resolveAttentionPoint, reopenAttentionPoint,
+  proposeNextAction, nextActions, clearNextAction, taskHistory, resolveAttentionPoint, reopenAttentionPoint, supervisionCheck,
 } = require("../src/foreman");
 const { fixture, routeAndAssign } = require("./support/paseo-fixture");
 
@@ -212,5 +212,28 @@ test("next show keeps readable tasks and marks unreadable points unsafe without 
       assert.equal(fs.readFileSync(file, "utf8"), content, "show never rewrites unreadable state");
       assert.equal(f.adapter.sent.length, messagesBefore, "unsafe proposals never reach the worker");
     }
+  } finally { f.cleanup(); }
+});
+
+test("next propose records the review-ready or blocked notice of the report it closes as told", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    const untold = () => supervisionCheck({ roots: f.roots, adapter: f.adapter }).notices.map((notice) => notice.key);
+    report(f, assignment, "blocked", "Need A or B.");
+    const blocked = `${task.id}/blocked/generation-1-001-blocked.md`;
+    assert.deepEqual(untold(), [blocked]);
+    assert.deepEqual(proposeNextAction({ roots: f.roots, taskId: task.id, kind: "decision", text: "Chọn A hay B?" }).told, [blocked]);
+    assert.deepEqual(untold(), [], "the block is shown with the report, so the blocker is not told twice");
+
+    continueTask({ roots: f.roots, taskId: task.id, text: "Use option A.", original: "dùng A", adapter: f.adapter });
+    report(f, assignment, "progress", "Half done.");
+    assert.deepEqual(proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Làm tiếp", instruction: "Finish option A." }).told, [], "a progress report has no notice");
+    report(f, assignment, "done", "Done with A.");
+    const ready = untold();
+    assert.equal(ready.length, 1);
+    assert.match(ready[0], new RegExp(`^${task.id}/review-ready/`));
+    proposeNextAction({ roots: f.roots, taskId: task.id, kind: "accept", text: "Chốt task" });
+    assert.deepEqual(untold(), []);
   } finally { f.cleanup(); }
 });

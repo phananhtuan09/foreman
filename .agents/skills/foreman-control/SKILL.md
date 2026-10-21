@@ -8,6 +8,7 @@ description: "Shared operational workflow used by foreman-herdr or foreman-paseo
 Use the backend-specific entrypoint selected by `foreman-herdr` or `foreman-paseo` for every Foreman CLI command.
 In the shared procedures below, replace `bin/foreman` with the active wrapper name; the worker `report` command remains tied to the worker runtime.
 On the first operational request of a session, run the active backend entrypoint's `init` command from the Foreman checkout; it points `FOREMAN_ROOT` and `FOREMAN_HOME` at it and does not persist `FOREMAN_BACKEND`.
+If `init` prints a `warning`, tell the user and run no other Foreman command in this session, because its commands would still use the inherited checkout and home.
 Before every answer to the user, follow `.agents/skills/foreman-supervisor/SKILL.md` to check new worker reports and worker health.
 The everyday commands are listed under "Common commands" below; read `docs/runbook.md` only when the request needs another command, local setup, hook setup, routing configuration, or recovery steps.
 For routing and profile selection, inspect `config/model-routing.json`; for Paseo dispatch fields, inspect the matching `foreman-<profile>` entry in `config/paseo-agent-profiles.json` (every routing profile needs one; `isActive` only controls selection) and run the profile sync command after changing them.
@@ -50,8 +51,19 @@ For every later round, show one line (round, mode, lease, worker, whether it int
 If the user changes or adds to it, rewrite and ask again; if the user declines, send nothing.
 Always write the instruction yourself and ask before sending, even when the user's message is short or already clear; do not forward the user's words unchanged just because they are usable.
 When the request contains a mistake, contradiction, or gap you notice, point it out in the confirmation message instead of silently fixing or widening it.
-Skip the question only when the user put the entire instruction in quotation marks, or when the user approves a shown next action that is still current; send that one with `task continue --next` as `.agents/skills/foreman-next-action/SKILL.md` describes.
+Skip the question only when the user put the entire instruction in quotation marks, or when the user approves a shown next action that is still current, as "Approving a shown next action" below describes.
 Confirmation lives only in the conversation; if the session was cleared before the user agreed, nothing was sent, so ask the user to say it again.
+
+## Approving a shown next action
+
+"gửi", "ok làm đi", or similar approves exactly the shown block; run `next show --task ID`, and if it is still `current`, act by its `kind`:
+- `round`: `task continue --task ID --next --original "<the user's words>"`; the block stands for its stored instruction, so this is the confirmation, and it covers a mode change the block names;
+- `accept`: run `task accept --task ID`; `task continue --next` refuses it;
+- `decision` or `clarify`: send nothing to the worker; ask the question the block announced, then `next clear --task ID`.
+
+If the step is out of date, or the user edits it, re-check `task history`, propose again with `next propose`, and ask before sending.
+"bỏ" or a postponed step is cleared with `next clear --task ID`; that does not drop the request it came from.
+When several tasks have a current next action and the reference is vague, ask which task in one short question.
 
 ## Rounds
 
@@ -101,6 +113,8 @@ bin/foreman task dispatch --task ID
 bin/foreman task continue --task ID --text TEXT --original "the user's words" [--type ship|scout] [--interrupt]
 bin/foreman task continue --task ID --next --original "the user's words"
 bin/foreman task history --task ID
+bin/foreman next show --task ID
+bin/foreman next clear --task ID
 bin/foreman task accept --task ID
 bin/foreman status
 bin/foreman notice ack --key KEY [--key KEY]
@@ -109,4 +123,5 @@ bin/foreman notice ack --key KEY [--key KEY]
 ## Session hygiene
 
 Every Foreman turn re-reads the whole session, so keep the session for intake and supervision only.
-Do not mix `DEV` work or long investigations into it, and suggest a fresh session after the user accepts a task.
+Do not mix `DEV` work or long investigations into it.
+When the context's `Foreman session size` line asks for it, end that answer with the one-line suggestion of a new session it describes; do not suggest it at other times.
