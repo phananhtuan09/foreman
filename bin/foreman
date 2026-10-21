@@ -231,6 +231,13 @@ function main() {
     output(core.taskSummaries({ roots: { foremanHome: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome } }));
     return;
   }
+  // Statistics are read-only like the summary above, so a missing home is reported as empty instead of being created.
+  if (command === "stats") {
+    const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
+    const result = stats.fleetStats({ home: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome, since: arg("--since") });
+    output(flag("--json") ? result : stats.renderStats(result));
+    return;
+  }
   const home = roots();
   if (command === "profiles" && action === "sync") {
     if (selectedBackend() !== "paseo") throw new Error("Profile sync is available only through bin/foreman-paseo");
@@ -419,11 +426,6 @@ function main() {
     if (selectedBackend() !== "paseo") throw new Error("Heartbeat supervision is available only through bin/foreman-paseo");
     if (flag("--enable") && flag("--disable")) throw new Error("heartbeat sync takes --enable or --disable, not both");
     output(core.syncHeartbeat({ roots: home, adapter: runtimeAdapter(), agentId: process.env.PASEO_AGENT_ID, cron: arg("--cron"), enable: flag("--enable") ? true : flag("--disable") ? false : undefined }));
-    return;
-  }
-  if (command === "stats") {
-    const result = stats.fleetStats({ home: home.foremanHome, since: arg("--since") });
-    output(flag("--json") ? result : stats.renderStats(result));
     return;
   }
   if (command === "status") {

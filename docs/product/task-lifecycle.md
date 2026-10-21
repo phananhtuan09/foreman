@@ -57,7 +57,8 @@ Its types, dependencies, and terminal actions are defined so that Foreman never 
 - A `done` report moves the task to `review-ready`, and Foreman waits for the user.
 - A `done` report on a task with a review base records its review size: files changed and lines added and removed since the base, counting commits, staged and unstaged edits, and untracked new files.
 - Tracked files are measured from Git's line counts only; an untracked text file up to 2 MB has its lines counted, and a larger or binary file is counted as a binary file.
-- Paths already dirty at dispatch are left out and their count is shown; when another live task is bound to the same workspace, the size is marked approximate and names those tasks.
+- An untracked symbolic link counts as one line, as Git stores it, and its target is not read.
+- Paths already dirty at dispatch, including both sides of a staged rename, are left out and their count is shown; when another live task is bound to the same workspace, the size is marked approximate and names those tasks.
 - A read-only scout and a project without Git get no review size; a size that cannot be measured is recorded with its reason and never blocks the report.
 - Acceptance verifies the worker endpoint is stopped, releases the resource lease, and deletes the task records and task-scoped coordination records.
 - Acceptance removes the task directory, its task messages, and the task's image copies in the workspace instead of archiving them.

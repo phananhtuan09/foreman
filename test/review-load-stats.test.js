@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const {
   resolveRoots, initHome, registerProject, createTask, assignTask, recordReport, acceptTask, renderUserReport, HerdrAdapter,
@@ -69,6 +69,25 @@ test("review load counts commits, edits, and new files since dispatch, and leave
     assert.deepEqual(load, { files: 3, insertions: 5, deletions: 1, binary: 1, excluded: 3, sharedWith: [], approximate: false, at: "2026-10-21T01:00:00.000Z" });
     assert.equal(formatReviewLoad(load), "3 files, +5/−1 (1 binary; 3 files already changed before dispatch not counted)");
     assert.equal(formatReviewLoad({ ...load, excluded: 0, binary: 0, sharedWith: ["T-000009"] }, "vi"), "3 file, +5/−1 · gần đúng: workspace dùng chung với T-000009");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("review load leaves out a rename and a tabbed name dirty before dispatch, and measures links without following them", () => {
+  const { base, root } = repo();
+  try {
+    fs.writeFileSync(path.join(root, "tab\tname.txt"), "first\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "tabbed name");
+    git(root, "mv", "a.txt", "renamed.txt");
+    fs.writeFileSync(path.join(root, "tab\tname.txt"), "user edit before dispatch\n");
+    const reviewBase = captureReviewBase(root, "t0");
+    assert.deepEqual(reviewBase.dirty.sort(), ["a.txt", "renamed.txt", "tab\tname.txt"]);
+
+    fs.writeFileSync(path.join(root, "tab\tname.txt"), "worker edit on a dirty file\n");
+    fs.symlinkSync("b.txt", path.join(root, "link-to-b"));
+    fs.symlinkSync("nowhere.txt", path.join(root, "dangling"));
+    const load = measureReviewLoad({ base: reviewBase, at: "t1" });
+    assert.deepEqual(load, { files: 2, insertions: 2, deletions: 0, binary: 0, excluded: 3, sharedWith: [], approximate: false, at: "t1" });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
@@ -179,6 +198,51 @@ test("stats sum response times and waiting time from ended and live tasks inside
     assert.deepEqual(clipped.response.decision, { count: 0, averageMs: null });
     assert.deepEqual(clipped.waiting, { userMs: 2 * 60 * 60 * 1000, workerMs: 60 * 60 * 1000 });
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("stats count one answer once, start waiting at the first worker, and skip damaged or duplicate history", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-stats-edges-")));
+  try {
+    const at = (hour) => new Date(Date.UTC(2026, 9, 20, hour)).toISOString();
+    const line = (taskId, events) => ({ schemaVersion: 1, taskId, projectId: "app", outcome: "accepted", endedAt: events[events.length - 1].at, events });
+    const resumed = line("T-000001", [
+      { type: "decision", at: at(0), answeredAt: at(1) },
+      { type: "dispatch", at: at(2) },
+      { type: "report", at: at(3), status: "blocked" },
+      { type: "report", at: at(4), status: "blocked" },
+      { type: "report", at: at(5), status: "done" },
+      { type: "accepted", at: at(7) },
+    ]);
+    const damaged = { ...line("T-000002", [{ type: "accepted", at: at(7) }]), events: {} };
+    fs.mkdirSync(path.join(home, "data"), { recursive: true });
+    fs.writeFileSync(history.historyFile(home), `${JSON.stringify(resumed)}\n${JSON.stringify(damaged)}\n`);
+    // A task whose line is written but whose records are not deleted yet is counted once, from its line.
+    writeLiveTask(home, "T-000001", { status: "review-ready", createdAt: at(0) }, {
+      messages: [{ messageId: "M-T-000001-1-brief", createdAt: at(2), deliveredAt: at(2) }],
+      reports: [{ status: "done", at: at(5) }],
+    });
+
+    const result = stats.fleetStats({ home, since: "2026-10-19", now: new Date(at(10)) });
+    assert.deepEqual(result.response.blocked, { count: 0, averageMs: null }, "blocked reports the worker moved past are not user answers");
+    assert.deepEqual(result.response.review, { count: 1, averageMs: 2 * 60 * 60 * 1000 });
+    assert.deepEqual(result.response.decision, { count: 1, averageMs: 60 * 60 * 1000 });
+    // Worker 2-3, user 3-4 and 4-5 (blocked), user 5-7 (review); the decision before dispatch adds nothing.
+    assert.deepEqual(result.waiting, { userMs: 4 * 60 * 60 * 1000, workerMs: 60 * 60 * 1000 });
+    assert.deepEqual(result.sources, { endedTasks: 1, liveTasks: 0, historyFile: true });
+    assert.deepEqual(result.skipped.historyLines, [{ taskId: "T-000002", error: "the line's events are not a valid timeline" }]);
+    assert.match(stats.renderStats(result), /bỏ qua 1 dòng lịch sử không đọc được/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("the stats command does not create a missing home", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-stats-cli-")));
+  try {
+    const home = path.join(base, "missing-home");
+    const run = spawnSync(path.join(__dirname, "..", "bin", "foreman"), ["stats", "--json"], { env: { ...process.env, FOREMAN_HOME: home, FOREMAN_ROOT: base }, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(JSON.parse(run.stdout).sources.historyFile, false);
+    assert.equal(fs.existsSync(home), false);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
 test("stats on an empty home write nothing and say no history exists yet", () => {

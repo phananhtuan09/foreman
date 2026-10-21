@@ -16,13 +16,17 @@ function git(cwd, args) {
 function nulFields(output) { return output.split("\0").filter(Boolean); }
 
 // `status --porcelain -z` lists one path per entry; a rename or copy carries its source as the next field.
+// A rename's source is dirty too: measurement runs with `--no-renames`, where it shows up as a deleted file.
 function dirtyPaths(workspace) {
   const fields = nulFields(git(workspace, ["status", "--porcelain=v1", "-z"]));
   const paths = [];
   for (let index = 0; index < fields.length; index += 1) {
     const entry = fields[index];
     paths.push(entry.slice(3));
-    if (/^[RC]/.test(entry)) index += 1;
+    if (/^[RC]/.test(entry)) {
+      index += 1;
+      if (entry[0] === "R" && fields[index] !== undefined) paths.push(fields[index]);
+    }
   }
   return paths;
 }
@@ -40,8 +44,10 @@ function excludedBy(dirty, file) {
   return dirty.some((entry) => (entry.endsWith("/") ? file.startsWith(entry) : file === entry));
 }
 
+// A symbolic link is measured as Git stores it, one line naming its target, without reading the target.
 function untrackedLines(file) {
-  const stat = fs.statSync(file);
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink()) return 1;
   if (!stat.isFile() || stat.size > UNTRACKED_COUNT_LIMIT) return null;
   const content = fs.readFileSync(file);
   if (content.subarray(0, 8000).includes(0)) return null;
@@ -66,7 +72,9 @@ function measureReviewLoad({ base, sharedWith = [], at }) {
     let excluded = 0;
     const tracked = nulFields(git(workspace, ["diff", "--numstat", "--no-renames", "-z", base.commit, "--"]));
     for (const entry of tracked) {
-      const [added, removed, file] = entry.split("\t");
+      // With -z the path is not quoted and may itself contain tabs.
+      const [added, removed, ...pathParts] = entry.split("\t");
+      const file = pathParts.join("\t");
       if (excludedBy(dirty, file)) { excluded += 1; continue; }
       files += 1;
       if (added === "-") { binary += 1; continue; }
