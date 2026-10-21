@@ -1,6 +1,6 @@
 # Foreman dashboard (Paseo plugin)
 
-A sidebar button and a Command Center item ("Mở Foreman dashboard") that open the read-only Foreman web dashboard.
+A sidebar button and a Command Center item ("Mở Foreman dashboard") that open the read-only Foreman web dashboard, and a "Tắt" button beside it (Command Center: "Tắt Foreman dashboard") that stops it.
 The plugin shows no board of its own; the board is `foreman dashboard serve` (see `docs/product/web-dashboard.md`).
 
 ## Install
@@ -34,7 +34,8 @@ The daemon needs `node` on its `PATH` to run `bin/foreman`.
 2. Otherwise the daemon side runs `node <foremanRoot>/bin/foreman dashboard serve --port <port>` without a shell and waits up to 5 s for it to answer.
 3. The app opens the address with the platform's external link opener (the system browser on desktop).
 
-The process the plugin starts stops when the plugin is stopped, reloaded or removed; a dashboard you started yourself is never stopped.
+The process the plugin starts stops when you press "Tắt" or when the plugin is stopped, reloaded or removed.
+A dashboard you started yourself is never stopped; pressing "Tắt" then reports that the plugin has none.
 A failure (no `foremanRoot`, port taken by something else, `bin/foreman` missing) shows as the button label.
 
 ## Tests
@@ -43,5 +44,5 @@ A failure (no `foremanRoot`, port taken by something else, `bin/foreman` missing
 npm test
 ```
 
-Covers reuse of a running dashboard, a single shared start for concurrent presses, stopping with the plugin, a process that exits early, a missing setup, and a dashboard that never answers.
+Covers reuse of a running dashboard, a single shared start for concurrent presses, stopping on request and with the plugin, never stopping a dashboard it did not start, a process that exits early, a missing setup, and a dashboard that never answers.
 The root `npm test` runs only `test/*.test.js` and does not pick these up.

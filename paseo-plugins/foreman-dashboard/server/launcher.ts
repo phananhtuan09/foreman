@@ -48,9 +48,12 @@ export class DashboardLauncher {
     return this.pending;
   }
 
-  stop(): void {
+  // True when this plugin had a dashboard running and asked it to stop; one started elsewhere is never touched.
+  stop(): boolean {
+    const running = this.child !== null;
     this.child?.kill();
     this.child = null;
+    return running;
   }
 
   private async ensure(): Promise<string> {

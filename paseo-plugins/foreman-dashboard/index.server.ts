@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { DashboardLauncher, probeDashboard, startDashboardProcess } from "./server/launcher";
-import { foremanSettings, openDashboardRpc } from "./shared/foreman";
+import { foremanSettings, openDashboardRpc, stopDashboardRpc } from "./shared/foreman";
 
 // The runtime exposes no plugin path, so an unset foremanRoot falls back to the checkout this plugin was installed from,
 // read from the daemon config (<foreman>/paseo-plugins/foreman-dashboard).
@@ -34,5 +34,6 @@ export default function contribute(server: PluginServerContext) {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   server.handle(openDashboardRpc, async () => ({ url: await launcher.open() }));
+  server.handle(stopDashboardRpc, async () => ({ stopped: launcher.stop() }));
   return () => { launcher.stop(); };
 }

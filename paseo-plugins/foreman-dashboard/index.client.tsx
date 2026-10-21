@@ -1,7 +1,7 @@
 import { openExternalUrl, type PluginClientContext } from "@getpaseo/plugin/client";
 import { ForemanSettings } from "./client/settings";
 import { ForemanButton } from "./client/sidebar";
-import { openDashboardRpc } from "./shared/foreman";
+import { openDashboardRpc, stopDashboardRpc } from "./shared/foreman";
 
 export default function contribute(client: PluginClientContext) {
   const removers = [
@@ -12,6 +12,13 @@ export default function contribute(client: PluginClientContext) {
       icon: "LayoutDashboard",
       context: "global",
       onSelect: async ({ rpc }) => { await openExternalUrl((await rpc(openDashboardRpc, {})).url); },
+    }),
+    client.addCommandCenterItem({
+      id: "stop-foreman",
+      title: "Tắt Foreman dashboard",
+      icon: "Power",
+      context: "global",
+      onSelect: async ({ rpc }) => { await rpc(stopDashboardRpc, {}); },
     }),
     client.addSettingsScreen({ id: "foreman-settings", title: "Foreman", icon: "LayoutDashboard", Component: ForemanSettings }),
   ];

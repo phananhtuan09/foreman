@@ -30,6 +30,7 @@ test("an already running dashboard is reused without starting another process", 
   const { instance, started } = launcher({ probe: async () => true });
   assert.equal(await instance.open(), "http://127.0.0.1:18789/");
   assert.equal(started.length, 0);
+  assert.equal(instance.stop(), false, "a dashboard the plugin did not start is never stopped");
 });
 
 test("a missing dashboard is started once and its address returned when it answers", async () => {
@@ -39,8 +40,9 @@ test("a missing dashboard is started once and its address returned when it answe
   assert.equal(first, "http://127.0.0.1:18789/");
   assert.equal(second, first);
   assert.equal(started.length, 1, "concurrent presses share one start");
-  instance.stop();
+  assert.equal(instance.stop(), true, "stopping reports that a dashboard was running");
   assert.equal(started[0].killed, true, "stopping the plugin stops the dashboard");
+  assert.equal(instance.stop(), false, "a second stop finds nothing to stop");
 });
 
 test("a dashboard that exits reports its error instead of waiting for the timeout", async () => {

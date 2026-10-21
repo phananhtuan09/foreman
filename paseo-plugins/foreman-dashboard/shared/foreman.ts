@@ -8,6 +8,13 @@ export const openDashboardRpc = defineRpc({
   output: z.object({ url: z.string() }),
 });
 
+// Stops the dashboard this plugin started; `stopped` is false when it has none (for example one started from a terminal).
+export const stopDashboardRpc = defineRpc({
+  name: "foreman.dashboard.stop",
+  input: z.object({}),
+  output: z.object({ stopped: z.boolean() }),
+});
+
 export const foremanSettings = defineSettings({
   id: "foreman",
   scope: "host",

@@ -263,5 +263,5 @@ To reach it from another machine, forward the port over SSH (`ssh -L 18789:127.0
 `paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that adds a "Foreman dashboard" button to the Paseo sidebar and a Command Center item.
 Pressing either starts `foreman dashboard serve` on the daemon machine when no dashboard answers on the plugin's port (default 18789), then opens it in the browser.
 Install it once per Paseo daemon with `paseo plugin install <abs path>`; set `foremanRoot`, `foremanHome` and `port` in its settings when the defaults do not fit.
-The dashboard it starts is read-only, so the plugin never initializes, migrates, locks, or marks anything in the home, and the process stops when the plugin stops or reloads.
+The dashboard it starts is read-only, so the plugin never initializes, migrates, locks, or marks anything in the home, and the process stops when you press "Tắt" (or "Tắt Foreman dashboard" in the Command Center) or when the plugin stops or reloads; one started from a terminal is never stopped.
 The plugin has its own tests: `npm test` inside the plugin folder; the root `npm test` does not run them.
