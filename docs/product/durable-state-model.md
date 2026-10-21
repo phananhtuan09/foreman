@@ -44,6 +44,7 @@ Every record has a stable identity and a single writer so stale or foreign input
 - `foreman status` and `foreman task list` render the task list from those records.
 - `foreman task list --json --summary` is the read-only view for external tooling: it lists every task except `accepted` and `cleaned` with the fields a board shows and the user's own wording of each round.
 - The summary view never initializes the home, migrates a record, or takes the home lock.
+- The web dashboard reads the same records, the kept status check, the outbox, and the ended-task history under the same limits.
 - A malformed record is skipped and reported instead of failing the list.
 - Task IDs are globally unique across projects: `T-` identifies requested change or investigation work, and `B-` identifies an observed defect.
 - Task lifecycle is the `status` field of task metadata.
@@ -80,6 +81,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── inbox/            images staged from the Foreman session, kept seven days
   ├── sessions/         the Foreman session transcript path recorded by the prompt hook
   ├── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
+  ├── status-check.json the last fleet-wide status check and Paseo collection per backend, kept for the web dashboard
   └── task-history.jsonl
                         one metadata line per accepted or discarded task, kept 365 days by default
   ```

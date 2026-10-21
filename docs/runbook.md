@@ -248,6 +248,13 @@ Pull-request delivery, remote homes, relay channels, additional runtime backends
 An ID is looked up only among Foreman sessions, while a FILE path is read as given, without that filter.
 Both are read-only and never touch `data/`; the `foreman-doctor` skill analyzes their output.
 
+## Web dashboard
+
+Run `bin/foreman dashboard serve` (add `--open` to open the browser, `--port N` when 18789 is taken) with the same `FOREMAN_HOME` as the Foreman session, then open `http://127.0.0.1:18789/`.
+It runs in the foreground until Ctrl C, reads `data/` without the lock, and pushes changes to the page about a second after Foreman writes them.
+Runtime state on the page is the last status check the Foreman session ran; a task dispatched after that check shows no runtime state until the next one.
+To reach it from another machine, forward the port over SSH (`ssh -L 18789:127.0.0.1:18789 host`); the server refuses requests addressed to any other host name.
+
 ## Paseo dashboard plugin
 
 `paseo-plugins/foreman-dashboard/` is an optional, read-only Paseo plugin that shows running workers and open tasks in the Paseo sidebar.

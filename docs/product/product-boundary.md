@@ -60,6 +60,7 @@ This boundary keeps Foreman's global operational context separate from each mana
 
 - The optional `paseo-plugins/foreman-dashboard/` plugin is local tooling that only reads durable state through the read-only task summary.
   It is not a relay channel or a runtime backend, and it never sends to a worker, mutates Foreman state, or takes the home lock.
+- The [web dashboard](web-dashboard.md) served by `foreman dashboard serve` is local tooling under the same limits: it binds `127.0.0.1`, only reads durable state, and offers only copyable prompts and commands.
 
 ## References
 

@@ -1,0 +1,3 @@
+/* Real Foreman task IDs have eight characters (T-000123); the design sized the ID column for short sample IDs. */
+.fm-fleet:not(.cards) col:first-child { width: 112px !important; }
+.fm-fleet .tid { white-space: nowrap; }

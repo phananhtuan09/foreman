@@ -176,8 +176,13 @@ test("Paseo waits while active and records invalid reports when idle providers s
     const agent = f.adapter.agents.get(assignment.endpoint);
     agent.cursor = { ...agent.cursor, seq: agent.cursor.seq + 1 };
     agent.entries.push({ seq: agent.cursor.seq, turnId: "turn-active", item: { type: "assistant_message", text: JSON.stringify({ status: "done", summary: "too early" }) } });
-    assert.equal(collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks[0].pending, true);
+    const pending = collectPaseoReports({ roots: f.roots, adapter: f.adapter });
+    assert.equal(pending.tasks[0].pending, true);
     assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.status, "working");
+    // The collection is kept for the dashboard, which never reads a runtime itself.
+    const kept = require("../src/coordination").readStatusCheck(f.roots.foremanHome).backends.paseo;
+    assert.equal(kept.collectedAt, pending.collectedAt);
+    assert.deepEqual(kept.collection[task.id], { generation: 1, state: pending.tasks[0].state });
 
     agent.status = "idle";
     agent.activeTurn = null;
