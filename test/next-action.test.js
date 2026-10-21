@@ -220,11 +220,15 @@ test("next propose records the review-ready or blocked notice of the report it c
   try {
     const { task, assignment } = routeAndAssign(f);
     const untold = () => supervisionCheck({ roots: f.roots, adapter: f.adapter }).notices.map((notice) => notice.key);
+    const notified = () => JSON.parse(fs.readFileSync(path.join(f.roots.foremanHome, "data", "tasks", task.id, "meta.json"), "utf8")).notified;
     report(f, assignment, "blocked", "Need A or B.");
     const blocked = `${task.id}/blocked/generation-1-001-blocked.md`;
     assert.deepEqual(untold(), [blocked]);
     assert.deepEqual(proposeNextAction({ roots: f.roots, taskId: task.id, kind: "decision", text: "Chọn A hay B?" }).told, [blocked]);
     assert.deepEqual(untold(), [], "the block is shown with the report, so the blocker is not told twice");
+    const firstTold = notified()[blocked];
+    assert.deepEqual(proposeNextAction({ roots: f.roots, taskId: task.id, kind: "decision", text: "Chọn A hay B nhé?" }).told, [], "a reworded proposal does not tell the blocker again");
+    assert.equal(notified()[blocked], firstTold, "the first told time is kept");
 
     continueTask({ roots: f.roots, taskId: task.id, text: "Use option A.", original: "dùng A", adapter: f.adapter });
     report(f, assignment, "progress", "Half done.");

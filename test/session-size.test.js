@@ -61,5 +61,7 @@ test("init warns when the session inherited another checkout or home", () => {
     assert.match(inherited.warning, /inherited FOREMAN_ROOT=.*other and FOREMAN_HOME=.*other/);
     assert.match(fs.readFileSync(path.join(base, "rc"), "utf8"), new RegExp(`FOREMAN_HOME='${path.join(base, "home")}'`), "the startup file still points at the new home");
     assert.equal(run({ FOREMAN_ROOT: path.resolve(root), FOREMAN_HOME: path.join(base, "home") }).warning, undefined, "matching values need no warning");
+    fs.symlinkSync(path.join(base, "home"), path.join(base, "link"));
+    assert.equal(run({ FOREMAN_ROOT: path.resolve(root), FOREMAN_HOME: path.join(base, "link") }).warning, undefined, "a symlink to the same home needs no warning");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
