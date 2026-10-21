@@ -1280,7 +1280,17 @@ function collectPaseoReports({ roots, adapter }) {
     const result = recordPaseoReport({ roots, taskId: meta.taskId, endpoint: meta.endpoint, generation: meta.generation, turnId, cursor: snapshot.cursor, raw });
     collected.push({ state: result.issue ? "report-invalid" : result.duplicate ? "duplicate" : result.status, ...result });
   }
-  return { backend: "paseo", collectedAt: now(), tasks: collected };
+  const collectedAt = now();
+  const generations = new Map(active.map((meta) => [meta.taskId, meta.generation]));
+  recordStatusCheck(roots, "paseo", { collectedAt, collection: Object.fromEntries(collected.map((item) => [item.taskId, { generation: generations.get(item.taskId), state: item.state, ...(paseoCollectionIssue(item) ? { issue: paseoCollectionIssue(item) } : {}) }])) });
+  return { backend: "paseo", collectedAt, tasks: collected };
+}
+
+// The anomaly one collected task stands for, or null when its collection went as expected.
+function paseoCollectionIssue(item) {
+  if (!["unavailable", "mismatch", "gap", "report-missing"].includes(item.state)) return null;
+  const detail = item.error || item.issue?.reason || item.issue || "Paseo report collection did not validate the assigned turn";
+  return { type: `worker.paseo-${item.state}`, reason: typeof detail === "string" ? detail : JSON.stringify(detail) };
 }
 
 /**
@@ -1985,9 +1995,32 @@ function listTasks({ roots, projectId, statuses } = {}) {
   return taskIds(roots.foremanHome).map((id) => readMeta(roots.foremanHome, id)).filter((meta) => (!projectId || meta.projectId === projectId) && (!allowed || allowed.has(meta.status)));
 }
 
+// Keeps the result of one fleet-wide check for read-only viewers; failing to keep it never fails the check.
+function recordStatusCheck(roots, backend, entry) {
+  try { withHomeLock(roots.foremanHome, () => coordination.recordStatusCheckUnlocked(roots.foremanHome, backend, entry)); }
+  catch (_) {}
+}
+
+function statusCheckEntry(reconciliation, at) {
+  const tasks = {};
+  for (const item of reconciliation.tasks) {
+    if (item.state === "unobserved") continue;
+    tasks[item.taskId] = { generation: item.meta.generation, endpoint: item.meta.endpoint || null, state: item.state, issues: (item.issues || []).map(({ type, reason }) => ({ type, ...(reason ? { reason } : {}) })) };
+  }
+  return { checkedAt: at, failedAt: null, error: null, workers: reconciliation.workers.length, tasks };
+}
+
 function fleetStatus({ roots, adapter, projectId } = {}) {
   initHome(roots);
-  const reconciliation = coordination.reconcileFleet({ roots, adapter });
+  const backend = adapter?.backend || "herdr";
+  let reconciliation;
+  try { reconciliation = coordination.reconcileFleet({ roots, adapter }); }
+  catch (error) {
+    if (!projectId) recordStatusCheck(roots, backend, { failedAt: now(), error: error.message });
+    throw error;
+  }
+  const observedAt = now();
+  if (!projectId) recordStatusCheck(roots, backend, statusCheckEntry(reconciliation, observedAt));
   const reconciledById = new Map(reconciliation.tasks.map((item) => [item.taskId, item]));
   const tasks = listTasks({ roots, projectId }).map((meta) => reconciledById.get(meta.taskId) || ({ taskId: meta.taskId, meta, worker: null, state: meta.status, issues: [] }));
   const workers = projectId ? reconciliation.workers.filter((worker) => tasks.some((item) => item.worker === worker)) : reconciliation.workers;
@@ -1995,7 +2028,7 @@ function fleetStatus({ roots, adapter, projectId } = {}) {
   for (const item of tasks) byStatus[item.state] = (byStatus[item.state] || 0) + 1;
   return {
     scope: projectId ? { projectId } : { fleet: true },
-    observedAt: now(),
+    observedAt,
     workers,
     tasks,
     counts: { tasks: tasks.length, workers: workers.length, states: byStatus },
@@ -2188,11 +2221,10 @@ function supervisionCheck({ roots, adapter }) {
   const unread = taskRecords.filter((meta) => meta.lastReport && !meta.lastReport.readAt);
   const reportIssues = taskRecords.filter((meta) => meta.paseoReportError).map((meta) => ({ taskId: meta.taskId, projectId: meta.projectId, owner: meta.owner, type: meta.paseoReportError.type, reason: meta.paseoReportError.reason, reportFile: meta.paseoReportError.file }));
   const paseoCollectionIssues = (paseoCollection?.tasks || [])
-    .filter((item) => ["unavailable", "mismatch", "gap", "report-missing"].includes(item.state))
+    .filter((item) => paseoCollectionIssue(item))
     .map((item) => {
       const meta = taskRecords.find((record) => record.taskId === item.taskId);
-      const detail = item.error || item.issue?.reason || item.issue || "Paseo report collection did not validate the assigned turn";
-      return { taskId: item.taskId, projectId: meta?.projectId || "unknown", owner: meta?.owner || null, type: `worker.paseo-${item.state}`, reason: typeof detail === "string" ? detail : JSON.stringify(detail) };
+      return { taskId: item.taskId, projectId: meta?.projectId || "unknown", owner: meta?.owner || null, ...paseoCollectionIssue(item) };
     });
   const anomalies = [...(status?.anomalies || []), ...reportIssues, ...paseoCollectionIssues];
   const notices = supervision.collectNotices({ metas: taskRecords, anomalies, runtimeError });
@@ -2484,7 +2516,7 @@ module.exports = {
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
   recoverDeadWorker, reassignWorker, buildHandoff,
   listTasks, taskSummaries, fleetStatus, briefStatus, projectStatus, dispatchReadyTasks, validateDispatchProfile, renderUserReport,
-  listResourceLeases, normalizeResourceClaims,
+  listResourceLeases, normalizeResourceClaims, resourceOverlaps, resourceModesConflict,
   findProject, validateWorkspace, isWithin, assertRealWithin,
   canonical, gitBranch, gitTop, gitCommonDir, projectVcs, workspaceBelongsToProject,
   stageImages: attachments.stageImages,

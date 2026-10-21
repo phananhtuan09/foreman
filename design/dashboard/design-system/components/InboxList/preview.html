@@ -1,0 +1,13 @@
+<!-- @dsCard group="Nội dung task" height=330 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+function Demo(){ var c=useState('T-42:d'); return h('div',{style:{maxWidth:380}},h(F.InboxList,{current:c[0],onPick:c[1],groups:[{key:'d',label:'Quyết định',items:[{key:'T-42:d',id:'T-42',question:'Khi cache hết hạn giữa chừng, cần chọn cách nối tiếp.',age:'1 ngày 2 giờ',urgent:true,overdue:true,status:'waiting-decision',project:'foreman'}]},{key:'r',label:'Chờ duyệt',items:[{key:'T-37:r',id:'T-37',question:'Scout xong: Audit link gãy trong docs-site',age:'2 giờ 9 phút',urgent:false,isNew:true,status:'review-ready',project:'docs-site'},{key:'T-38:r',id:'T-38',question:'Xong: Skill diagnosing-bugs',age:'53 phút',urgent:false,status:'review-ready',project:'ai-agent-workflow'}]}]})); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

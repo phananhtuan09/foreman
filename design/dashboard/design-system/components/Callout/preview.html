@@ -1,0 +1,12 @@
+<!-- @dsCard group="Nội dung task" height=170 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h('div',{style:{display:'grid',gap:8}},h(F.Callout,{lead:'Đề xuất:'},'duyệt codex-luna — quota còn nhiều.'),h(F.Callout,{variant:'warn',lead:'Bất thường khác:'},'hở timeline.'),h(F.Callout,{variant:'note',lead:'Task đã chốt:'},'Foreman xoá bản ghi khi accept.'),h(F.Callout,{variant:'danger',lead:'Không đọc được:'},'2 bản ghi sai schema.'))));
+</script>
+</body>
+</html>

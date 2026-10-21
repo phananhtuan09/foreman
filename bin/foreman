@@ -9,6 +9,7 @@ const paseoRouting = require("../src/paseo-routing");
 const { installShellEnv } = require("../src/shell-env");
 const doctor = require("../src/doctor");
 const stats = require("../src/stats");
+const { createDashboardServer, DEFAULT_PORT: DEFAULT_DASHBOARD_PORT } = require("../src/dashboard-server");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
 function arg(name, fallback) {
@@ -73,6 +74,11 @@ function syncHeartbeatAfter(home) {
     // Starting and stopping the heartbeat is housekeeping the Foreman session must not narrate; only a failure is shown.
     if (result.action === "error") process.stderr.write(`foreman: heartbeat ${result.action}${result.heartbeatId ? ` ${result.heartbeatId}` : ""}${result.reason ? `: ${result.reason}` : ""}\n`);
   } catch (error) { process.stderr.write(`foreman: heartbeat sync failed: ${error.message}\n`); }
+}
+// Opening the browser is a convenience; when no opener exists the printed URL is enough.
+function openInBrowser(url) {
+  const opener = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  try { require("node:child_process").spawn(opener[0], opener[1], { detached: true, stdio: "ignore" }).on("error", () => {}).unref(); } catch (_) {}
 }
 function output(value) {
   if (typeof value === "string") { process.stdout.write(value.endsWith("\n") ? value : `${value}\n`); return; }
@@ -142,6 +148,7 @@ const usage = [
   "  attention reopen --task ID --point P1 --why TEXT",
   "  attention list [--json] [--limit N] [--task ID]   (review every live task on every project; --task shows one task's points, open and closed)",
   "  status [--project ID] [--json [--brief]]",
+  "  dashboard serve [--port 18789] [--open]   (read-only web dashboard on 127.0.0.1, live over Server-Sent Events; runs until Ctrl C)",
   "  stats [--since 7d|24h|DATE] [--json]   (read-only: tasks ended, how long the user took to answer, and time waiting on the user versus the worker)",
   "  supervise [--json]   (one supervision check for a turn without the prompt hook: Paseo collection, one status check, and the notices not yet told)",
   "  notice ack --key KEY [--key KEY]...   (record that the user was told these notices)",
@@ -234,6 +241,22 @@ function main() {
   if (command === "task" && action === "list" && flag("--summary")) {
     const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
     output(core.taskSummaries({ roots: { foremanHome: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome } }));
+    return;
+  }
+  // The dashboard only reads the home like the summary above; it runs in the foreground until Ctrl C.
+  if (command === "dashboard" && action === "serve") {
+    const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
+    const foremanRoot = path.resolve(process.env.FOREMAN_ROOT || path.join(__dirname, ".."));
+    const port = Number(arg("--port", String(DEFAULT_DASHBOARD_PORT)));
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`--port must be a port number: ${arg("--port")}`);
+    const dashboard = createDashboardServer({ roots: { foremanRoot, foremanHome: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome }, port });
+    dashboard.listen().then((url) => {
+      process.stdout.write(`Foreman dashboard (read-only) for ${foremanHome}: ${url}\nPress Ctrl C to stop.\n`);
+      if (flag("--open")) openInBrowser(url);
+      const stop = () => { dashboard.close().then(() => process.exit(0)); };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    }, (error) => die(error.code === "EADDRINUSE" ? `port ${port} is in use; pass --port to choose another` : error.message));
     return;
   }
   // Statistics are read-only like the summary above, so a missing home is reported as empty instead of being created.

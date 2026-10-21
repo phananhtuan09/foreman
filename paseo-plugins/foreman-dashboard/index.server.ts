@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { SnapshotStore, runSummaryCommand } from "./server/snapshot";
-import { foremanSettings, snapshotRpc } from "./shared/foreman";
+import { DashboardLauncher, probeDashboard, startDashboardProcess } from "./server/launcher";
+import { foremanSettings, openDashboardRpc, stopDashboardRpc } from "./shared/foreman";
 
 // The runtime exposes no plugin path, so an unset foremanRoot falls back to the checkout this plugin was installed from,
 // read from the daemon config (<foreman>/paseo-plugins/foreman-dashboard).
@@ -22,18 +22,18 @@ function defaultForemanRoot(): string {
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(foremanSettings);
-  const store = new SnapshotStore({
+  const launcher = new DashboardLauncher({
     async readConfig() {
       const state = await settings.read();
-      return state.status === "ready" ? { foremanRoot: state.values.foremanRoot.trim() || defaultForemanRoot(), foremanHome: state.values.foremanHome.trim() } : null;
+      if (state.status !== "ready") return null;
+      const foremanRoot = state.values.foremanRoot.trim() || defaultForemanRoot();
+      return foremanRoot ? { foremanRoot, foremanHome: state.values.foremanHome.trim(), port: state.values.port } : null;
     },
-    runSummary: runSummaryCommand,
-    now: () => Date.now(),
-    minIntervalMs: 3000,
+    probe: probeDashboard,
+    start: startDashboardProcess,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
-  server.handle(snapshotRpc, () => store.get());
-  // The hook only sets a flag; it never blocks or touches a worker.
-  const stopTurnEnded = server.on("agent.turn_ended", () => { store.markDirty(); });
-  const stopSettings = settings.subscribe(() => { store.markDirty(); });
-  return () => { stopTurnEnded(); stopSettings(); };
+  server.handle(openDashboardRpc, async () => ({ url: await launcher.open() }));
+  server.handle(stopDashboardRpc, async () => ({ stopped: launcher.stop() }));
+  return () => { launcher.stop(); };
 }

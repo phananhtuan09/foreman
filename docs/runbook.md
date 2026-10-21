@@ -251,9 +251,17 @@ Pull-request delivery, remote homes, relay channels, additional runtime backends
 An ID is looked up only among Foreman sessions, while a FILE path is read as given, without that filter.
 Both are read-only and never touch `data/`; the `foreman-doctor` skill analyzes their output.
 
+## Web dashboard
+
+Run `bin/foreman dashboard serve` (add `--open` to open the browser, `--port N` when 18789 is taken) with the same `FOREMAN_HOME` as the Foreman session, then open `http://127.0.0.1:18789/`.
+It runs in the foreground until Ctrl C, reads `data/` without the lock, and pushes changes to the page about a second after Foreman writes them.
+Runtime state on the page is the last status check the Foreman session ran; a task dispatched after that check shows no runtime state until the next one.
+To reach it from another machine, forward the port over SSH (`ssh -L 18789:127.0.0.1:18789 host`); the server refuses requests addressed to any other host name.
+
 ## Paseo dashboard plugin
 
-`paseo-plugins/foreman-dashboard/` is an optional, read-only Paseo plugin that shows running workers and open tasks in the Paseo sidebar.
-Install it once per Paseo daemon with `paseo plugin install <abs path>`, then set `foremanRoot` (and `foremanHome` when different) in its settings.
-It runs only `task list --json --summary`, so it never initializes, migrates, locks, or marks anything in the home.
+`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that adds a "Foreman dashboard" button to the Paseo sidebar and a Command Center item.
+Pressing either starts `foreman dashboard serve` on the daemon machine when no dashboard answers on the plugin's port (default 18789), then opens it in the browser.
+Install it once per Paseo daemon with `paseo plugin install <abs path>`; set `foremanRoot`, `foremanHome` and `port` in its settings when the defaults do not fit.
+The dashboard it starts is read-only, so the plugin never initializes, migrates, locks, or marks anything in the home, and the process stops when you press "Tắt" (or "Tắt Foreman dashboard" in the Command Center) or when the plugin stops or reloads; one started from a terminal is never stopped.
 The plugin has its own tests: `npm test` inside the plugin folder; the root `npm test` does not run them.

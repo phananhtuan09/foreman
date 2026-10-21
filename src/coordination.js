@@ -277,6 +277,49 @@ function purgeTaskRecordsUnlocked({ roots, taskId }) {
       // Preserve malformed external records for later inspection.
     }
   }
+  forgetStatusCheckTaskUnlocked(roots.foremanHome, taskId);
+}
+
+// The latest runtime evidence of each backend in `data/status-check.json`, kept for read-only viewers such as the dashboard,
+// which must never call a runtime. The Foreman CLI is its only writer, under the home lock: a fleet-wide status check
+// replaces its backend's result, a Paseo collection replaces its collection result, and acceptance or discard drops the task.
+function statusCheckFile(home) { return path.join(home, "data", "status-check.json"); }
+
+function readStatusCheck(home) {
+  const file = statusCheckFile(home);
+  if (!fs.existsSync(file)) return { schemaVersion: 1, backends: {} };
+  const record = readJson(file);
+  assertSchemaVersion(record, "Status check");
+  if (!record.backends || typeof record.backends !== "object" || Array.isArray(record.backends)) throw new SchemaValidationError("Status check backends are invalid");
+  return record;
+}
+
+// Only evidence lives here, so a damaged record is replaced by the next check instead of failing it.
+function readStatusCheckOrEmpty(home) {
+  try { return readStatusCheck(home); } catch (_) { return { schemaVersion: 1, backends: {} }; }
+}
+
+function recordStatusCheckUnlocked(home, backend, entry) {
+  const current = readStatusCheckOrEmpty(home);
+  atomicJson(statusCheckFile(home), { schemaVersion: 1, backends: { ...current.backends, [backend]: { ...current.backends[backend], ...entry } } });
+}
+
+function forgetStatusCheckTaskUnlocked(home, taskId) {
+  if (!fs.existsSync(statusCheckFile(home))) return;
+  const current = readStatusCheckOrEmpty(home);
+  let changed = false;
+  const backends = Object.fromEntries(Object.entries(current.backends).map(([backend, entry]) => {
+    const next = { ...entry };
+    for (const field of ["tasks", "collection"]) {
+      if (next[field] && Object.prototype.hasOwnProperty.call(next[field], taskId)) {
+        const { [taskId]: _, ...rest } = next[field];
+        next[field] = rest;
+        changed = true;
+      }
+    }
+    return [backend, next];
+  }));
+  if (changed) atomicJson(statusCheckFile(home), { schemaVersion: 1, backends });
 }
 
 function activeTaskMetas(roots) {
@@ -464,4 +507,5 @@ module.exports = {
   digest, atomicWrite, atomicJson, readJson, initCoordination, coordinationDirs, taskDir, metaFile, roundsDir, roundFile, listRounds, writeRoundUnlocked, validateRoundRecord, messageFile, REPORT_COMMAND, deliveryPrompt, createMessageUnlocked,
   updateMessageUnlocked, listMessages, markMessageDeliveryUnlocked, failMessageUnlocked, purgeTaskRecordsUnlocked,
   activeTaskMetas, reconcileFleet, classifyRuntime, reportedSincePrompt, buildHandoffPackage,
+  statusCheckFile, readStatusCheck, recordStatusCheckUnlocked,
 };

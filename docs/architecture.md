@@ -9,6 +9,7 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/history.js` builds each task's timeline and owns the ended-task history in `data/task-history.jsonl`, appended under the home lock before acceptance or discard deletes the task.
 `src/review-load.js` records a task's review base at dispatch and measures its review size from Git when it reports `done`.
 `src/stats.js` computes the read-only `stats` report from the ended-task history and live task timelines.
+`src/dashboard.js` builds the web dashboard's read-only snapshot and the fingerprint that tells it when to rebuild; `src/dashboard-server.js` serves it with the static page in `dashboard/` for `foreman dashboard serve`.
 `src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
 `src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
@@ -48,7 +49,7 @@ The report records `lastReport` in task metadata and moves a `done` task to `rev
 The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
 On a user prompt it also reads the last model call's context size from the Claude Code transcript and adds a one-time nudge for each 150k-token step; the nudge line it left in the transcript is its only record.
 The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
-It never writes state or interrupts a worker.
+It never changes task state or interrupts a worker; a fleet-wide check, and each Paseo collection, keeps its result per backend in `data/status-check.json` for read-only viewers, and acceptance or discard removes the task from it.
 The prompt hook also derives notices from task state and that status check, and lists those not yet marked told; `notice ack` writes the mark after Foreman tells the user.
 In Paseo mode, `heartbeat sync` creates or deletes the Foreman agent's one Paseo heartbeat through the Paseo CLI as watched work starts and ends, and the hook recognizes its `<paseo-system>` prompt and blocks it before the model runs when nothing needs the user.
 Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
@@ -80,6 +81,17 @@ A record without a schema version is validated as version 1 in memory and left u
 It returns `{ tasks, skipped }` for every task except `accepted` and `cleaned`, with only the fields a board shows: ID, project, type, round, status, backend, endpoint, dispatch and routing profile, `needsProfileConfirmation`, a one-line title by the `taskBriefLine` rule, and the user's own wording of the task: `original.md` (else `brief.md`) plus the `original` of each delivered round.
 A missing home yields an empty result and creates nothing.
 
-`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that renders this summary and the app's cached agent state.
-Its daemon side keeps one in-memory snapshot, rebuilt only when a throttled `stat` of `data/tasks/` shows a change, and runs the summary command without a shell.
-It is local tooling over durable state, not a relay channel or a runtime backend, and it sends nothing to workers or the Foreman session.
+`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that only launches the web dashboard.
+Its sidebar button and Command Center item call one daemon-side RPC, which reuses a dashboard already answering on the configured port or else runs `bin/foreman dashboard serve` without a shell, then the app opens the address in the browser.
+The process it starts belongs to the plugin and stops with it.
+It is local tooling, not a relay channel or a runtime backend, and it sends nothing to workers or the Foreman session.
+
+## Web dashboard
+
+`foreman dashboard serve` is a foreground `node:http` server bound to `127.0.0.1` that serves `dashboard/index.html`, its ES modules in `dashboard/app/`, the fonts in `dashboard/fonts/`, and the design system bundle and React UMD files from `design/dashboard/design-system/`; there is no build step.
+`buildSnapshot` reads task metadata, the brief and the user's words, delivered rounds, report files (the `Next steps` list split from the summary, a Paseo report's JSON summary unwrapped), decisions, attention points, handoff, the outbox, the project registry, the routing config, `supervision.json`, the kept status check, and the ended-task history.
+Like `taskSummaries`, it never calls `initHome`, migrates a record, or takes the lock, and a malformed task is listed under `skipped`.
+Untold notices are derived exactly as a supervision turn derives them, from task state and the kept status check, minus the told marks.
+While at least one browser holds `/api/events`, the server compares a stat fingerprint of the files the snapshot reads every second and pushes a rebuilt snapshot when it changes; `/api/snapshot` serves the same snapshot for the page's 5-second fallback poll.
+It answers only its own host names, which keeps a page on another site from reading the home through DNS rebinding.
+

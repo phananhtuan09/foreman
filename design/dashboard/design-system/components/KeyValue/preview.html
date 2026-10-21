@@ -1,0 +1,12 @@
+<!-- @dsCard group="Nội dung task" height=150 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h(F.Card,{title:'Trạng thái'},h(F.KeyValue,{items:[['Lifecycle',h(F.StatusLabel,{status:'working',size:'sm'})],['Runtime',h(F.RuntimeBadge,{state:'working'})],['Endpoint','pane:w2.4 · gen 2',true],['Lease','write file/skills/*/SKILL.md',true]]}))));
+</script>
+</body>
+</html>

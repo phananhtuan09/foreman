@@ -1,0 +1,13 @@
+<!-- @dsCard group="Thao tác" height=70 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+function Demo(){ var v=useState('today'); return h(F.Segmented,{label:'Khoảng thời gian',value:v[0],onChange:v[1],options:[{value:'today',label:'Từ 06:00'},{value:'24h',label:'24 giờ'},{value:'72h',label:'3 ngày'}]}); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

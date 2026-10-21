@@ -1,0 +1,15 @@
+<!-- @dsCard group="Tổng quan" height=560 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+var rows={you:[{id:'T-42',type:'ship',title:'Cache rotation + handoff prompt',line:h(React.Fragment,null,h('span',{className:'q'},'Cần quyết: '),'cách nối tiếp khi cache hết hạn'),project:'foreman',profile:'claude-opus',backend:'Paseo',runtime:'idle',round:2,generation:1,age:{text:'chờ bạn 1 ngày 2 giờ',tone:'you',sub:'từ 08:40'},points:{open:2,user:1},status:'waiting-decision'},{id:'T-38',type:'ship',isNew:true,title:'Skill diagnosing-bugs: reproduce-first',line:h(React.Fragment,null,h('span',{className:'b'},'Xong: '),'12 file, 48/48 test pass'),project:'ai-agent-workflow',profile:'opencode-luna',backend:'Herdr',runtime:'idle',round:4,generation:1,age:{text:'chờ bạn 53 phút',tone:'',sub:'từ 09:47'},points:{open:0},status:'review-ready'}],anomaly:[{id:'T-45',type:'ship',title:'Viết lại trang Bắt đầu nhanh',line:h(React.Fragment,null,h('span',{className:'w'},'Đang chờ input · '),'chưa có report'),project:'docs-site',profile:'opencode-luna',backend:'Herdr',runtime:'waiting-input',round:1,generation:1,age:{text:'6 phút trước',tone:'warn',sub:'hoạt động cuối'},points:{open:0},status:'working'}],run:[{id:'T-36',type:'ship',title:'Chuẩn hoá frontmatter cho toàn bộ skills',line:'31/37 skill đã chuẩn hoá.',project:'ai-agent-workflow',profile:'codex-luna',backend:'Herdr',runtime:'working',round:5,generation:2,age:{text:'3 phút trước',sub:'hoạt động cuối'},points:{open:0},status:'working'}],queue:[{id:'T-46',type:'ship',title:'Hiển thị cảnh báo cache nguội',line:'Chờ T-41 (bị chặn) xong mới giao.',project:'foreman',profile:'claude-sonnet',backend:null,runtime:'none',round:1,generation:0,age:{text:'vào sổ 1 giờ 20 phút'},points:{open:0},status:'queued'}]};
+var G=[{key:'you',label:'Chờ bạn',tone:'red',hint:'lâu nhất trước'},{key:'anomaly',label:'Bất thường',tone:'mustard',hint:'Foreman chưa tự xử lý'},{key:'run',label:'Đang chạy',tone:'blue'},{key:'queue',label:'Hàng chờ',tone:'ink'}].map(function(g){return Object.assign({},g,{rows:rows[g.key]});});
+function Demo(){ var s=useState('T-42'), c=useState({}); return h('div',{style:{width:'100%'}},h(F.FleetTable,{groups:G,selected:s[0],onSelect:s[1],collapsed:c[0],onToggle:function(k){var n=Object.assign({},c[0]);n[k]=!n[k];c[1](n);}})); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

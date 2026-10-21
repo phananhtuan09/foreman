@@ -25,7 +25,8 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 ### Status check
 
 - `foreman status` lists the selected runtime once and classifies every assigned task.
-- A status check never writes state, interrupts a worker, or starts recovery.
+- A status check never changes task state, interrupts a worker, or starts recovery.
+- A fleet-wide status check and a Paseo collection keep their latest result in `data/status-check.json` for the [web dashboard](web-dashboard.md), which never calls a runtime.
 - In Paseo mode, `task collect` runs first; it re-reads assigned agent timelines and writes only validated finished-turn reports.
 - `status --json --brief` prints only the counts, one line per task, and the anomalies, without unbound runtime agents or full task records.
 

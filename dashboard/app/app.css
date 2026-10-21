@@ -1,0 +1,7 @@
+/* Real Foreman task IDs have eight characters (T-000123); the design sized the ID column for short sample IDs. */
+.fm-fleet:not(.cards) col:first-child { width: 112px !important; }
+.fm-fleet .tid { white-space: nowrap; }
+
+/* The design's tables keep 640px so wide tables scroll; the two half-width Health tables must fit their column and wrap long IDs. */
+.fm-tablewrap > .fm-table.compact { min-width: 0; }
+.fm-table.compact td.mono { overflow-wrap: anywhere; }

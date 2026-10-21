@@ -1,0 +1,12 @@
+<!-- @dsCard group="Trạng thái" height=130 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{display:'grid',gap:10}},h(F.LiveIndicator,{state:'live',time:'10:40:12'}),h(F.LiveIndicator,{state:'stale',time:'10:40:05'}),h(F.LiveIndicator,{state:'reconnecting',time:'10:39:58'}),h(F.LiveIndicator,{state:'offline',time:'10:31:02'})));
+</script>
+</body>
+</html>

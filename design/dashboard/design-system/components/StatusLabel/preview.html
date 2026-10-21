@@ -1,0 +1,12 @@
+<!-- @dsCard group="Trạng thái" height=150 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{display:'grid',gap:10}},[['Chờ bạn',['waiting-decision','blocked','choose-model','review-ready']],['Agent giữ',['working','pending']],['Chưa giao',['routing','queued']]].map(function(g){return h('div',{key:g[0],style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},h('span',{className:'fm-chipgroup'},h('span',{className:'fl',style:{width:100}},g[0])),g[1].map(function(s){return h(F.StatusLabel,{key:s,status:s});}));})));
+</script>
+</body>
+</html>

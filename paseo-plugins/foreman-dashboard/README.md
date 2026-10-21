@@ -1,8 +1,7 @@
 # Foreman dashboard (Paseo plugin)
 
-A read-only board in the Paseo sidebar: running Foreman workers and open tasks.
-It sends nothing to workers or the Foreman session and spawns no process unless Foreman state changed.
-The UI copy is Vietnamese, like `renderUserReport`.
+A sidebar button and a Command Center item ("Mở Foreman dashboard") that open the read-only Foreman web dashboard, and a "Tắt" button beside it (Command Center: "Tắt Foreman dashboard") that stops it.
+The plugin shows no board of its own; the board is `foreman dashboard serve` (see `docs/product/web-dashboard.md`).
 
 ## Install
 
@@ -22,40 +21,22 @@ The UI copy is Vietnamese, like `renderUserReport`.
    paseo plugin ls
    ```
 
-4. Optionally open the plugin's settings screen and set `foremanRoot` and `foremanHome`.
-   An empty `foremanRoot` falls back to the checkout the plugin was installed from (read from the daemon `config.json`); `foremanHome` defaults to `foremanRoot`.
-   If neither resolves, the board shows a setup message and creates nothing on disk.
+4. Optionally open the plugin's settings screen and set `foremanRoot`, `foremanHome` and `port`.
+   An empty `foremanRoot` falls back to the checkout the plugin was installed from (read from the daemon `config.json`); `foremanHome` defaults to `foremanRoot`; `port` defaults to 18789.
+   If no `foremanRoot` resolves, pressing the button shows a setup message and starts nothing.
 
 After editing the source, run `npm run typecheck` and `paseo plugin reload foreman-dashboard`.
 The daemon needs `node` on its `PATH` to run `bin/foreman`.
 
-## What it shows
+## What a press does
 
-- **Sidebar header item**: worker count and one peg per running worker (task number, status-colored bar).
-  Pressing it opens the screen; "Mở Foreman" in the Command Center does the same.
-- **Screen**: the workers board and the task list, ordered with tasks that need you first.
-  Clicking a task row opens a detail modal: a status-colored strip, the status stamp and current round, project and agent profile tags, the current request as the main card, and the earlier rounds collapsed on a timeline that ends at the original request.
+1. If a Foreman dashboard already answers on `127.0.0.1:<port>`, it is reused.
+2. Otherwise the daemon side runs `node <foremanRoot>/bin/foreman dashboard serve --port <port>` without a shell and waits up to 5 s for it to answer.
+3. The app opens the address with the platform's external link opener (the system browser on desktop).
 
-Agent profile labels come from the Paseo app's cached agent state through `useAgent`, so it costs no RPC or polling.
-Task data comes from one daemon-side RPC that returns an in-memory snapshot.
-The server rebuilds it only when a throttled `stat` of `data/tasks/` shows a change, by running `node <foremanRoot>/bin/foreman task list --json --summary` once.
-Clients read the snapshot every ~5 s on the screen and ~15 s in the sidebar; a fetch never spawns a process.
-
-## Worker agents
-
-Workers are the tasks that have an `endpoint` and are `working`, `blocked`, `waiting-decision`, or `review-ready`.
-Paseo workers are matched to their agent by that endpoint, which is the Paseo agent ID.
-A worker's status comes only from the Foreman task state (blocked, needs decision, review-ready, otherwise working), because the app's agent cache cannot tell an idle agent from an unloaded one.
-Herdr workers are shown as reported by Foreman.
-
-## Simplified from the mockup
-
-- Barlow Condensed → system font, weight 800, tabular numerals.
-- Tag and stamp rotation → none.
-- Dashed perforation lines → solid hairlines (dashed borders are kept for the idle tag and quiet stamps).
-- Punched hole on tags → omitted.
-- Inset double outline on "Chờ input" tags → a single thick outline.
-- The "needs you" fill is a fixed yellow because no theme token fits; all other colors come from `theme.colors`.
+The process the plugin starts stops when you press "Tắt" or when the plugin is stopped, reloaded or removed.
+A dashboard you started yourself is never stopped; pressing "Tắt" then reports that the plugin has none.
+A failure (no `foremanRoot`, port taken by something else, `bin/foreman` missing) shows as the button label.
 
 ## Tests
 
@@ -63,5 +44,5 @@ Herdr workers are shown as reported by Foreman.
 npm test
 ```
 
-Covers the status mapping, ordering, snapshot invalidation, parity of the stamps with `renderUserReport`, and a scan that the server module uses no worker, timeline, or lock APIs.
+Covers reuse of a running dashboard, a single shared start for concurrent presses, stopping on request and with the plugin, never stopping a dashboard it did not start, a process that exits early, a missing setup, and a dashboard that never answers.
 The root `npm test` runs only `test/*.test.js` and does not pick these up.

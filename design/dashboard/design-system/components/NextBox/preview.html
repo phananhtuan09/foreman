@@ -1,0 +1,12 @@
+<!-- @dsCard group="Tổng quan" height=380 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h('div',{style:{display:'grid',gap:12,gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))'}},h(F.NextBox,{tone:'red',title:'Cần bạn quyết định',why:'Agent đề xuất phương án A.',copy:{text:'T-42: chọn phương án A cho D-1.',cli:'foreman decision answer --task T-42 --decision D-1'}},'Khi cache hết hạn giữa chừng, cần chọn cách nối tiếp công việc.'),h(F.NextBox,{tone:'green',title:'Xong — chờ bạn duyệt',copy:{text:'Duyệt T-38.',cli:'foreman task accept --task T-38'}},'12 file, 48/48 test pass.'),h(F.NextBox,{tone:'mustard',title:'Bất thường: đang chờ input',copy:{text:'T-45: agent đang chờ input, xem giúp và gỡ.'}},'Runtime báo agent đứng chờ nhập.'),h(F.NextBox,{tone:'ink',title:'Không cần bạn làm gì'},'Agent đang làm round 5.'))));
+</script>
+</body>
+</html>
