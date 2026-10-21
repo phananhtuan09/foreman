@@ -1,0 +1,13 @@
+<!-- @dsCard group="Lịch sử & hệ thống" height=260 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+var H=3600000, from=Math.floor(now/H)*H-5*H, to=Math.floor(now/H)*H+H;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h(F.ShiftGantt,{from:from,to:to,now:now,rows:[{id:'T-42',segs:[{from:from,to:now,kind:'you',label:'chờ quyết định'}]},{id:'T-41',segs:[{from:from,to:now-0.8*H,kind:'run',label:'round 2'},{from:now-0.8*H,to:now,kind:'you',label:'bị chặn'}]},{id:'T-38',segs:[{from:from+H,to:now-0.9*H,kind:'run',label:'round 4'},{from:now-0.9*H,to:now,kind:'review',label:'chờ duyệt'}]},{id:'T-43',segs:[{from:now-1.2*H,to:now-0.6*H,kind:'run',label:'round 1'},{from:now-0.6*H,to:now-0.05*H,kind:'idle',label:'chờ round tiếp'},{from:now-0.05*H,to:now,kind:'warn',label:'hở timeline'}]},{id:'T-46',segs:[{from:now-1.3*H,to:now,kind:'queue',label:'chờ T-41'}]}]})));
+</script>
+</body>
+</html>

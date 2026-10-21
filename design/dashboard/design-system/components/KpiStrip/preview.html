@@ -1,0 +1,12 @@
+<!-- @dsCard group="Số liệu" height=120 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h(F.KpiStrip,{items:[{label:'Token tuần này',value:'18.7',unit:'M',sub:'14/10 – 20/10'},{label:'Cache hit',value:'73',unit:'%',sub:'trọng số theo token'},{label:'Resend full context',value:'3',unit:'lần',sub:'~1.08M token tránh được',tone:'mustard'},{label:'Token hôm nay',value:null,sub:'chưa có nguồn số liệu'}]})));
+</script>
+</body>
+</html>

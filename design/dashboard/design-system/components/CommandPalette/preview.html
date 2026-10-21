@@ -1,0 +1,13 @@
+<!-- @dsCard group="Lớp phủ & trạng thái" height=420 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+function Demo(){ var o=useState(true); var items=[{key:'t42',group:'Task',kicker:'T-42',title:'Cache rotation + handoff prompt',sub:'Cần quyết · foreman',run:function(){}},{key:'t41',group:'Task',kicker:'T-41',title:'Cache watchdog cho worker session',sub:'Bị chặn · foreman',run:function(){}},{key:'b',group:'Màn hình',kicker:'→',title:'Tổng quan',sub:'',run:function(){}},{key:'i',group:'Màn hình',kicker:'→',title:'Chờ bạn',sub:'',run:function(){}}]; return o[0]?h(F.CommandPalette,{items:items,onClose:function(){o[1](false);}}):h(F.Button,{onClick:function(){o[1](true);}},'Mở tìm nhanh (Ctrl K)'); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>
