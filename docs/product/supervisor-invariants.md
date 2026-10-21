@@ -41,7 +41,7 @@ Every feature and workflow MUST preserve them.
 - Only the user may accept a task.
 - Acceptance verifies and stops its worker, releases its resource lease, and deletes its task records and task-scoped coordination records.
 - Acceptance retains the project workspace and does not commit, merge, reset, or remove project files.
-- Foreman does not retain accepted task history.
+- Foreman keeps no task records after acceptance; it retains only the ended-task history line described in [Task lifecycle](task-lifecycle.md#ended-task-history).
 
 ### Verbatim authority transport
 

@@ -58,7 +58,7 @@ Its types, dependencies, and terminal actions are defined so that Foreman never 
 - Acceptance verifies the worker endpoint is stopped, releases the resource lease, and deletes the task records and task-scoped coordination records.
 - Acceptance removes the task directory, its task messages, and the task's image copies in the workspace instead of archiving them.
 - Acceptance closes a scout, releases its read-only runtime resources, and deletes its report and task records.
-- No accepted task history is kept.
+- Apart from the ended-task history line, no accepted task history is kept.
 
 ### Discard
 
@@ -68,6 +68,16 @@ Its types, dependencies, and terminal actions are defined so that Foreman never 
 - Discard refuses `unknown` or live workers and any task another task depends on.
 - Discard runs under the home lock and refuses if the assignment generation or endpoint changed since the status check.
 - Discard stops a `dead` worker's endpoint, releases the resource lease, and removes the task directory and its task-scoped messages, decisions, and reports without archiving them.
+
+### Ended-task history
+
+- Before acceptance or discard deletes a task's records, Foreman appends one line for the task to `data/task-history.jsonl`.
+- The line holds the task's identity, project, type, backend, outcome (`accepted` or `discarded`), creation and end times, final round and generation, recovery attempts, and a timeline of its dispatches, adoption, later rounds, reports, and decisions with their times.
+- Each dispatch names its generation, worker, and profile; each report its status, round, and generation; each decision when it was created, answered, and delivered.
+- The line holds no brief, user wording, report text, decision text, or human response.
+- If the line cannot be written, the task records are not deleted, and a retried acceptance or discard writes the line once.
+- Lines whose task ended more than `FOREMAN_HISTORY_RETENTION_DAYS` days (default 365) before the newest line are dropped when that line is written.
+- An unreadable line is skipped when the history is read and kept when it is rewritten.
 
 ### Workspace retention
 

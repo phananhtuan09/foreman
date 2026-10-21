@@ -146,12 +146,12 @@ To check a delivery, open the paths listed in the message under `data/messages/`
 `decision deliver` sends the answered decision to the worker and returns the task to `working`.
 
 `task accept` is the final task action.
-It stops the Herdr pane or archives the Paseo agent, verifies endpoint closure, releases the resource lease, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
+It stops the Herdr pane or archives the Paseo agent, verifies endpoint closure, releases the resource lease, appends one metadata line for the task to `data/task-history.jsonl`, removes task-scoped coordination records, and deletes the task from `data/tasks/`.
 The project workspace stays on disk.
 
 `task discard` removes a queued task that was never assigned, an assigned task whose worker `status` confirms `dead` or `missing`, or a pending task whose dispatch stopped before any endpoint or prompt was recorded while no runtime worker carries its owner; it refuses live or `unknown` workers and tasks that others depend on.
 For a confirmed dead Herdr worker it stops the pane before cleanup; a missing endpoint is already absent.
-It releases the lease and deletes the task's records, reports, and decisions; the project workspace stays on disk.
+It releases the lease, appends the task's `discarded` line to `data/task-history.jsonl`, and deletes the task's records, reports, and decisions; the project workspace stays on disk.
 Use it to drop work that should not continue; use `task recover` instead to hand it to a new worker.
 
 ## Routing

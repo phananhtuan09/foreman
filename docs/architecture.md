@@ -6,6 +6,7 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/coordination.js` owns the durable message outbox, the read-only status check, and handoff snapshots.
 `src/next-action.js` builds a task's shown next action and decides whether it still matches the task.
 `src/attention.js` owns the pending points of each task in `data/tasks/<taskId>/attention.json` and the read-only review across all live tasks.
+`src/history.js` builds each task's timeline and owns the ended-task history in `data/task-history.jsonl`, appended under the home lock before acceptance or discard deletes the task.
 `src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
 `src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.
@@ -64,7 +65,7 @@ Task ownership changes create a new generation.
 A confirmed dead or missing worker is replaced through `task recover`, and a healthy one at the user's request through `task reassign`, both with a durable handoff containing the original wording, every delivered round, the last report of each recent round, decisions, latest report, evidence, unresolved checks, workspace, resources, and inspect-first instructions.
 Only recovery counts against the attempt limit.
 Acceptance is the terminal user action.
-It stops and verifies the worker endpoint, releases the resource lease, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
+It stops and verifies the worker endpoint, releases the resource lease, appends the task's metadata line to `data/task-history.jsonl`, deletes task-specific Foreman records and coordination state, and removes the task's image copies from the workspace.
 The project workspace remains on disk; Foreman does not commit, merge, or remove its files.
 An explicit discard may remove, under the home lock, a task with no dependants that is either untouched and unassigned, a pending task whose dispatch never recorded an endpoint or sent a prompt while no runtime worker carries its owner, or assigned to a worker a status check confirms dead or missing.
 

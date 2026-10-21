@@ -51,7 +51,7 @@ Every record has a stable identity and a single writer so stale or foreign input
 
 ### Task records
 
-- Task records live under `data/tasks/<id>/` until user acceptance or explicit discard:
+- Task records live under `data/tasks/<id>/` until user acceptance or explicit discard, which first append the task's line to `data/task-history.jsonl`:
 
   ```text
   data/tasks/T-000123/
@@ -61,7 +61,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── attachments/      images the user sent, named by content digest
   ├── attachments.json  versioned image manifest and round one's image IDs
   ├── notes.md          optional Foreman context for the worker, kept apart from the user's words
-  ├── meta.json         lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
+  ├── meta.json         creation time, lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
   ├── decisions/        versioned Decision Packages and verbatim human responses
   ├── reports/          verbatim worker reports, one file per report
   ├── attention.json    pending points kept across rounds
@@ -79,7 +79,9 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── messages/         durable Foreman-to-worker outbox and message lifecycle
   ├── inbox/            images staged from the Foreman session, kept seven days
   ├── sessions/         the Foreman session transcript path recorded by the prompt hook
-  └── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
+  ├── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
+  └── task-history.jsonl
+                        one metadata line per accepted or discarded task, kept 365 days by default
   ```
 
 ### Assignment generation
