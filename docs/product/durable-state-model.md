@@ -61,7 +61,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── attachments/      images the user sent, named by content digest
   ├── attachments.json  versioned image manifest and round one's image IDs
   ├── notes.md          optional Foreman context for the worker, kept apart from the user's words
-  ├── meta.json         creation time, adoption, lifecycle, project, owner, generation, workspace, branch, resource lease, endpoint, worker pane, routing, and latest report
+  ├── meta.json         creation time, adoption, lifecycle, project, owner, generation, workspace, branch, review base and size, resource lease, endpoint, worker pane, routing, and latest report
   ├── decisions/        versioned Decision Packages and verbatim human responses
   ├── reports/          verbatim worker reports, one file per report
   ├── attention.json    pending points kept across rounds

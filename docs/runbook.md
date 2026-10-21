@@ -193,6 +193,8 @@ Use `routing route --task <id>` to resume a task left in `routing` after an inte
 
 `status` lists the selected runtime once and prints the grouped Vietnamese report; `status --json` and `task list --json` keep the machine-readable record.
 `status --project <id>` filters the same snapshot.
+A review-ready task shows its review size, such as `chờ duyệt (12 file, +340/−120)`; the size counts changes since the task's first dispatch, leaves out paths dirty before it, and is marked approximate when another live task shares the workspace.
+`stats [--since 7d|24h|DATE] [--json]` prints, read-only, the tasks accepted and discarded in the window, the user's average response time for decisions, `blocked` reports, and reviews, and the share of task time spent waiting on the user versus the worker.
 It never interrupts a worker or starts recovery.
 For read-only tooling, `task list --json --summary` prints the non-accepted tasks without initializing the home, migrating records, or taking the lock.
 Paseo report collection is an explicit durable write; the session prompt hook runs it before its status check, and without the hook run `task collect` before status during Paseo supervision.

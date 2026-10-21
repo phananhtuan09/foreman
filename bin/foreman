@@ -8,6 +8,7 @@ const { PaseoAdapter } = require("../src/paseo");
 const paseoRouting = require("../src/paseo-routing");
 const { installShellEnv } = require("../src/shell-env");
 const doctor = require("../src/doctor");
+const stats = require("../src/stats");
 
 function die(message) { process.stderr.write(`foreman: ${message}\n`); process.exitCode = 2; }
 function arg(name, fallback) {
@@ -141,6 +142,7 @@ const usage = [
   "  attention reopen --task ID --point P1 --why TEXT",
   "  attention list [--json] [--limit N] [--task ID]   (review every live task on every project; --task shows one task's points, open and closed)",
   "  status [--project ID] [--json [--brief]]",
+  "  stats [--since 7d|24h|DATE] [--json]   (read-only: tasks ended, how long the user took to answer, and time waiting on the user versus the worker)",
   "  supervise [--json]   (one supervision check for a turn without the prompt hook: Paseo collection, one status check, and the notices not yet told)",
   "  notice ack --key KEY [--key KEY]...   (record that the user was told these notices)",
   "  heartbeat sync [--cron EXPR] [--enable|--disable]   (Paseo: create, update, or delete this Foreman agent's heartbeat to match watched work)",
@@ -227,6 +229,13 @@ function main() {
   if (command === "task" && action === "list" && flag("--summary")) {
     const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
     output(core.taskSummaries({ roots: { foremanHome: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome } }));
+    return;
+  }
+  // Statistics are read-only like the summary above, so a missing home is reported as empty instead of being created.
+  if (command === "stats") {
+    const foremanHome = path.resolve(process.env.FOREMAN_HOME || process.env.FOREMAN_ROOT || process.cwd());
+    const result = stats.fleetStats({ home: fs.existsSync(foremanHome) ? fs.realpathSync(foremanHome) : foremanHome, since: arg("--since") });
+    output(flag("--json") ? result : stats.renderStats(result));
     return;
   }
   const home = roots();

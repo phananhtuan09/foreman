@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomicJson, readJson, metaFile, assertSchemaVersion, validateTaskMetaRecord, SchemaValidationError } = require("./coordination");
+const { formatReviewLoad } = require("./review-load");
 
 // The Paseo heartbeat that wakes the Foreman session, and the notices Foreman has already told the user.
 // `data/supervision.json` has one writer, the Foreman session through the CLI under the home lock.
@@ -55,7 +56,10 @@ function shortDigest(text) { return crypto.createHash("sha256").update(String(te
 // Notices the user needs, derived from durable task state; each key names exactly one event of one task.
 function taskNotices(meta) {
   const base = { taskId: meta.taskId, projectId: meta.projectId, generation: meta.generation, round: meta.round || 1 };
-  if (meta.status === "review-ready" && meta.completionReport) return [{ ...base, key: `${meta.taskId}/review-ready/${path.basename(meta.completionReport)}`, kind: "review-ready", report: meta.completionReport }];
+  if (meta.status === "review-ready" && meta.completionReport) {
+    const size = formatReviewLoad(meta.reviewLoad);
+    return [{ ...base, key: `${meta.taskId}/review-ready/${path.basename(meta.completionReport)}`, kind: "review-ready", report: meta.completionReport, ...(size ? { reason: `review size: ${size}` } : {}) }];
+  }
   if (meta.status === "blocked" && meta.blockerReport) return [{ ...base, key: `${meta.taskId}/blocked/${path.basename(meta.blockerReport)}`, kind: "blocked", report: meta.blockerReport }];
   if (meta.status === "waiting-decision" && meta.decisionId) return [{ ...base, key: `${meta.taskId}/decision/${meta.decisionId}`, kind: "decision", decisionId: meta.decisionId }];
   return [];

@@ -220,7 +220,7 @@ test("session context lists unread reports once, adds anomalies, and ignores DEV
     assert.equal(sessionContext({ roots: f.roots, adapter: f.adapter, prompt: "status?", cwd: f.base }), null, "a session outside the Foreman checkout gets nothing");
     assert.equal(sessionContext({ roots: f.roots, adapter: f.adapter, prompt: "status?", cwd: path.join(f.base, "gone") }), null);
     const context = sessionContext({ roots: f.roots, adapter: f.adapter, prompt: "tình hình sao rồi?", cwd: f.project });
-    assert.match(context, new RegExp(`${task.id} project app @worker generation 1: done at .+; task is review-ready; report: .+generation-1-001-done\\.md`));
+    assert.match(context, new RegExp(`${task.id} project app @worker generation 1: done at .+; task is review-ready; review size: 0 files, \\+0/−0; report: .+generation-1-001-done\\.md`));
     assert.match(context, /\n  \| .*done/, "the report text is inlined under its entry");
     assert.doesNotMatch(context, /TASK: /, "the identity header is not repeated");
     assert.ok(f.meta(task.id).lastReport.readAt);
