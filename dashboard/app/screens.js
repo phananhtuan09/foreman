@@ -5,8 +5,8 @@ import { runtimeBadge } from './board.js';
 const { STATUS, POINT_KIND, ago, clock, clockSec, dayLabel, cx, copyText } = F;
 const cap = M.cap;
 
-function table(head, rows, { wrap = true } = {}) {
-  const el = h('table', { className: 'fm-table' }, h('thead', null, h('tr', null, head.map((c, i) => h('th', { key: i, className: c.r ? 'r' : undefined }, c.label || c)))), h('tbody', null, rows));
+function table(head, rows, { wrap = true, compact = false } = {}) {
+  const el = h('table', { className: compact ? 'fm-table compact' : 'fm-table' }, h('thead', null, h('tr', null, head.map((c, i) => h('th', { key: i, className: c.r ? 'r' : undefined }, c.label || c)))), h('tbody', null, rows));
   return wrap ? h('div', { className: 'fm-tablewrap' }, el) : el;
 }
 const link = (id, onOpen, label) => h('button', { type: 'button', className: 'fm-link', onClick: () => onOpen(id) }, label || id);
@@ -175,12 +175,12 @@ export function Health({ tasks, now, snap, conn, onOpen, onCopied }) {
       h('div', null,
         h(F.SectionHeader, { title: 'Notice chưa báo', meta: untold.length }),
         untold.length ? table(['Task', 'Sự kiện'], untold.map((u) => h('tr', { key: u.key },
-          h('td', null, u.taskId ? link(u.taskId, onOpen) : '—'), h('td', { className: 'mono' }, u.kind + (u.type ? ' · ' + u.type : ''), h('div', { className: 'fm-faint', style: { fontSize: 12 } }, u.key)))), { wrap: true }) : h('p', { className: 'fm-faint' }, 'Không có.')),
+          h('td', null, u.taskId ? link(u.taskId, onOpen) : '—'), h('td', { className: 'mono' }, u.kind + (u.type ? ' · ' + u.type : ''), h('div', { className: 'fm-faint', style: { fontSize: 12 } }, u.key)))), { compact: true }) : h('p', { className: 'fm-faint' }, 'Không có.')),
       h('div', null,
         h(F.SectionHeader, { title: 'Outbox', meta: outbox.length }),
         outbox.length ? table(['Message', 'Trạng thái', { label: 'Lúc', r: true }], outbox.map((m) => h('tr', { key: m.id, className: m.state === 'pending' ? 'warn' : '' },
           h('td', { className: 'mono' }, m.id, h('div', { className: 'fm-faint', style: { fontSize: 12 } }, m.kind + (m.note ? ' · ' + m.note : ''))),
-          h('td', null, h(F.StatusLabel, { tone: messageTone(m.state), size: 'sm' }, m.state)), h('td', { className: 'r mono' }, m.at ? clock(m.at) : '—')))) : h('p', { className: 'fm-faint' }, 'Outbox trống.'))));
+          h('td', null, h(F.StatusLabel, { tone: messageTone(m.state), size: 'sm' }, m.state)), h('td', { className: 'r mono' }, m.at ? clock(m.at) : '—'))), { compact: true }) : h('p', { className: 'fm-faint' }, 'Outbox trống.'))));
 }
 
 // ================= Projects & leases =================
