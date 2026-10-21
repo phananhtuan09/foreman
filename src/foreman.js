@@ -2226,7 +2226,15 @@ function renderSupervision(check, { heartbeat = null, sync = null } = {}) {
  * except on a Foreman heartbeat turn, which always learns that the check already ran.
  * A session whose cwd is outside the Foreman checkout is not a Foreman session.
  */
-function sessionContext({ roots, adapter, prompt = "", cwd, transcriptPath, sessionId, agentId }) {
+function sessionContext(options) {
+  return sessionHookContext(options)?.text ?? null;
+}
+
+/**
+ * The same context as `sessionContext`, plus `quiet: true` on a Foreman heartbeat turn with nothing for the user,
+ * so the prompt hook can end that turn before the model reads the session.
+ */
+function sessionHookContext({ roots, adapter, prompt = "", cwd, transcriptPath, sessionId, agentId }) {
   if (/^\s*DEV\b/.test(String(prompt))) return null;
   if (cwd) {
     try { if (!isWithin(roots.foremanRoot, canonical(cwd))) return null; } catch (_) { return null; }
@@ -2249,7 +2257,18 @@ function sessionContext({ roots, adapter, prompt = "", cwd, transcriptPath, sess
   const check = supervisionCheck({ roots, adapter });
   const sync = adapter?.backend === "paseo" ? syncHeartbeat({ roots, adapter, agentId, anomalies: check.notices.filter((notice) => notice.kind === "anomaly") }) : null;
   if (!heartbeat && !check.unread.length && !check.anomalies.length && !check.runtimeError && !check.notices.length && sync?.action !== "error") return null;
-  return renderSupervision(check, { heartbeat, sync });
+  // An anomaly the user was already told stays listed while it lasts, so it does not make a heartbeat worth a model turn.
+  const quiet = Boolean(heartbeat?.managed) && !check.unread.length && !check.runtimeError && !check.notices.length && sync?.action !== "error";
+  return { text: renderSupervision(check, { heartbeat, sync }), quiet };
+}
+
+// The prompt hook's stdout for one session context. A quiet heartbeat is blocked before the model runs: Claude Code and
+// Codex both drop a blocked prompt from the session, so it costs no tokens and the next turn's context is unchanged.
+// Both clients read prompt context from the `hookSpecificOutput` shape.
+function sessionHookOutput(context) {
+  if (!context) return null;
+  if (context.quiet) return { decision: "block", reason: "Foreman heartbeat: nothing needs the user." };
+  return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context.text } };
 }
 
 function ackNotices({ roots, keys }) {
@@ -2396,7 +2415,7 @@ module.exports = {
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
-  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
+  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, sessionHookContext, sessionHookOutput, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
   proposeNextAction, nextActions, clearNextAction, taskHistory,
   addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention: attention.renderAttention,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,

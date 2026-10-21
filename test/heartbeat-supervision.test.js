@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
-  resolveRoots, withHomeLock, createTask, fleetStatus, sessionContext, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
+  resolveRoots, withHomeLock, createTask, fleetStatus, sessionContext, sessionHookContext, sessionHookOutput, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
 } = require("../src/foreman");
 const { HEARTBEAT_PROMPT, HEARTBEAT_NAME, readSupervision, supervisionFile } = require("../src/supervision");
 const { PaseoAdapter } = require("../src/paseo");
@@ -95,6 +95,40 @@ test("the heartbeat starts with watched Paseo work, is never duplicated, and sto
     continueTask({ roots: f.roots, taskId: task.id, text: "Also list the Git branch.", original: "xem thêm branch", adapter: f.adapter });
     assert.equal(syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT }).action, "created");
     assert.equal(f.adapter.heartbeats.size, 1);
+  } finally { f.cleanup(); }
+});
+
+test("a quiet Foreman heartbeat is marked quiet so the prompt hook can end it before the model runs", () => {
+  const f = heartbeatFixture();
+  try {
+    const { assignment } = routeAndAssign(f);
+    syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT });
+    const [id] = f.adapter.heartbeats.keys();
+    const hook = (heartbeatId = id) => sessionHookContext({ roots: f.roots, adapter: f.adapter, prompt: heartbeatPrompt(heartbeatId), cwd: f.projectRoot, agentId: FOREMAN_AGENT });
+
+    const quiet = hook();
+    assert.equal(quiet.quiet, true, "a running worker with nothing to tell needs no model turn");
+    assert.deepEqual(sessionHookOutput(quiet), { decision: "block", reason: "Foreman heartbeat: nothing needs the user." }, "the hook blocks the prompt instead of adding context");
+    assert.ok(readSupervision(f.roots.foremanHome).heartbeat.lastFiredAt, "a blocked heartbeat still records that it fired");
+    assert.equal(hook("foreign").quiet, false, "a heartbeat Foreman did not record still reaches the model");
+
+    const agent = f.adapter.agents.get(assignment.endpoint);
+    agent.attentionReason = "permission";
+    const anomaly = hook();
+    assert.equal(anomaly.quiet, false, "a new anomaly reaches the model");
+    ackNotices({ roots: f.roots, keys: pendingKeys(anomaly.text) });
+    const told = hook();
+    assert.match(told.text, /Worker anomalies/, "the anomaly is still listed while it lasts");
+    assert.equal(told.quiet, true, "an anomaly the user was already told does not need another model turn");
+    agent.attentionReason = null;
+
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Fixture inspected; README only." }));
+    const reported = hook();
+    assert.equal(reported.quiet, false, "a new report reaches the model");
+    assert.match(reported.text, /Fixture inspected/);
+    assert.deepEqual(sessionHookOutput(reported), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: reported.text } }, "a turn with news gets the context, not a block");
+    assert.equal(sessionHookOutput(null), null, "nothing new prints nothing");
+    assert.equal(sessionHookContext({ roots: f.roots, adapter: f.adapter, prompt: "còn gì không?", cwd: f.projectRoot, agentId: FOREMAN_AGENT }).quiet, false, "a user prompt is never quiet");
   } finally { f.cleanup(); }
 });
 

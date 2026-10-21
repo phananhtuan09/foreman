@@ -3,7 +3,8 @@
 # reports and the anomalies of one non-interrupting runtime check to the session context,
 # as {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":...}}.
 # It prints nothing for a prompt starting with DEV, when nothing is new, or when the
-# session's cwd is outside this Foreman checkout.
+# session's cwd is outside this Foreman checkout. On a Foreman Paseo heartbeat with nothing
+# for the user it prints {"decision":"block","reason":...} so the model does not run.
 # The runtime check uses FOREMAN_BACKEND when set, HERDR_ENV for Herdr workers,
 # or infers a single backend from the active task records. Paseo collection runs
 # before its status check inside the core session-context command.

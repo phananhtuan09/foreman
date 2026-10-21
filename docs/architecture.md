@@ -46,7 +46,7 @@ The Foreman session's prompt hook prints unread reports and the anomalies of one
 The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
 It never writes state or interrupts a worker.
 The prompt hook also derives notices from task state and that status check, and lists those not yet marked told; `notice ack` writes the mark after Foreman tells the user.
-In Paseo mode, `heartbeat sync` creates or deletes the Foreman agent's one Paseo heartbeat through the Paseo CLI as watched work starts and ends, and the hook recognizes its `<paseo-system>` prompt.
+In Paseo mode, `heartbeat sync` creates or deletes the Foreman agent's one Paseo heartbeat through the Paseo CLI as watched work starts and ends, and the hook recognizes its `<paseo-system>` prompt and blocks it before the model runs when nothing needs the user.
 Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
 Herdr creates a separate workspace for each new worker and receives a concise text prompt.
 Paseo creates an agent in a verified Foreman workspace, receives the durable prompt through the SDK, and exposes turn status and timeline data for report collection.

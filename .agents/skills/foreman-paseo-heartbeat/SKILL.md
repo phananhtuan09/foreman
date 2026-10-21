@@ -37,7 +37,8 @@ A heartbeat prompt arrives as a `<paseo-system>` message naming the schedule and
    - `blocked` or a decision: what the user must do;
    - an anomaly or a failed check: what is new and what it does not prove.
 4. After telling them, record each told notice with `bin/foreman-paseo notice ack --key KEY` (several `--key` at once).
-5. When the context says nothing needs the user, end the turn without writing any text.
+5. When nothing needs the user, the prompt hook blocks the heartbeat prompt before the model runs, so no turn reaches you.
+   If the context still reaches you and says nothing needs the user, end the turn without writing any text.
    Claude Code insists on a visible reply after a turn without text; then write only `—`, never a status sentence or a reminder of something already told.
 
 | Situation | Behavior |
@@ -58,8 +59,8 @@ Dead or missing workers are told as anomalies; recovery waits for a user turn, w
 ## Paseo limits
 
 - Paseo 0.11 has no silent heartbeat run: every finished heartbeat turn sets the agent's `finished` attention and the daemon sends a push notification when that attention was cleared, even when Foreman writes nothing.
-  Ending the turn without text keeps the timeline quiet but does not remove that attention or push.
-- Claude Code asks the agent for a visible reply after a turn that wrote none, so a quiet Claude heartbeat turn ends with `—`.
-- Every heartbeat turn is a model turn and costs tokens, which is why the heartbeat runs only while work is watched.
+  A blocked quiet heartbeat shows the hook's one-line reason in the timeline and does not remove that attention or push.
+- Claude Code asks the agent for a visible reply after a turn that wrote none, so a quiet Claude heartbeat turn that reaches the model ends with `—`.
+- A heartbeat that has something to tell is a model turn and costs tokens; a quiet one is blocked by the prompt hook and costs none.
 
 Paseo references: https://paseo.sh/docs/schedules and https://paseo.sh/docs/mcp
