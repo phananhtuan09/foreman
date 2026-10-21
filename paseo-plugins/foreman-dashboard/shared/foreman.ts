@@ -1,37 +1,11 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
-export const TaskSummarySchema = z.object({
-  taskId: z.string(),
-  projectId: z.string(),
-  type: z.string(),
-  round: z.number(),
-  status: z.string(),
-  backend: z.string(),
-  endpoint: z.string().nullable(),
-  profile: z.string().nullable(),
-  routingProfile: z.string().nullable(),
-  needsProfileConfirmation: z.boolean(),
-  title: z.string(),
-  brief: z.string(),
-  rounds: z.array(z.object({ round: z.number(), text: z.string() })),
-});
-export type TaskSummary = z.infer<typeof TaskSummarySchema>;
-
-export const SnapshotSchema = z.object({
-  // `ready` carries tasks; every other state carries a setup or failure message.
-  state: z.enum(["ready", "unconfigured", "missing-home", "error"]),
-  message: z.string().nullable(),
-  tasks: z.array(TaskSummarySchema),
-  skipped: z.array(z.object({ taskId: z.string(), reason: z.string() })),
-  updatedAt: z.number(),
-});
-export type Snapshot = z.infer<typeof SnapshotSchema>;
-
-export const snapshotRpc = defineRpc({
-  name: "foreman.snapshot",
+// Starts `foreman dashboard serve` on the daemon machine when it is not running and returns the address to open.
+export const openDashboardRpc = defineRpc({
+  name: "foreman.dashboard.open",
   input: z.object({}),
-  output: SnapshotSchema,
+  output: z.object({ url: z.string() }),
 });
 
 export const foremanSettings = defineSettings({
@@ -41,5 +15,6 @@ export const foremanSettings = defineSettings({
   schema: z.object({
     foremanRoot: z.string().default(""),
     foremanHome: z.string().default(""),
+    port: z.number().int().min(1024).max(65535).default(18789),
   }),
 });

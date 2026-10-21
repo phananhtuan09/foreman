@@ -1,7 +1,7 @@
 {
   "id": "foreman-dashboard",
-  "name": "Foreman",
-  "description": "Read-only board of Foreman workers and tasks.",
+  "name": "Foreman dashboard",
+  "description": "Opens the read-only Foreman web dashboard from the Paseo sidebar.",
   "media": [],
   "requirements": {
     "paseo": ">=0.11.1"

@@ -32,7 +32,7 @@ Every helper, hook, and worker must resolve the same roots so that state mutatio
   ├── dashboard/                 static page, app scripts, and self-hosted fonts of `foreman dashboard serve`
   ├── design/dashboard/          agreed dashboard design and its design system bundle, also served by the dashboard
   ├── paseo-plugins/
-  │   └── foreman-dashboard/     optional read-only Paseo plugin: running workers and open tasks
+  │   └── foreman-dashboard/     optional Paseo plugin: sidebar button that opens the web dashboard
   ├── adapters/
   │   └── herdr/                 Herdr-specific mechanics and compatibility checks
   ├── test/                      state, recovery, report, and adapter proof
