@@ -7,6 +7,8 @@ An explicitly selected Git worktree is checked against that registered project.
 `src/next-action.js` builds a task's shown next action and decides whether it still matches the task.
 `src/attention.js` owns the pending points of each task in `data/tasks/<taskId>/attention.json` and the read-only review across all live tasks.
 `src/history.js` builds each task's timeline and owns the ended-task history in `data/task-history.jsonl`, appended under the home lock before acceptance or discard deletes the task.
+`src/review-load.js` records a task's review base at dispatch and measures its review size from Git when it reports `done`.
+`src/stats.js` computes the read-only `stats` report from the ended-task history and live task timelines.
 `src/supervision.js` owns user notices, their told marks, and the Paseo heartbeat record in `data/supervision.json`.
 `src/doctor.js` reads past Foreman session transcripts and Git history, read-only, for the `foreman-doctor` skill.
 `src/shell-env.js` writes `FOREMAN_ROOT` and `FOREMAN_HOME` into the login shell's startup file for `foreman init`.

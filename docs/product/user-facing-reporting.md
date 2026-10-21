@@ -18,6 +18,14 @@ The user sees conclusions, decisions, approvals, and material anomalies rather t
 - Fleet status may be filtered by project, task, worker, lifecycle, or anomaly.
 - A request for full status actively refreshes every running assignment before reporting.
 - Default `status` and `task list` render the grouped Vietnamese report, and `--json` keeps the machine-readable record.
+- A review-ready task under `Cần bạn duyệt` shows its review size, such as `chờ duyệt (12 file, +340/−120)`.
+
+### Fleet statistics
+
+- `stats` reports, only when the user asks, for a window that defaults to the last seven days: tasks accepted and discarded, the user's average response time and count for decisions, `blocked` reports, and reviews, and the share of task time spent waiting on the user versus the worker.
+- A decision response runs from its creation to its answer; a `blocked` response from the report to the next round; a review response from a `done` report to the next round or acceptance.
+- A task waits on the worker from each dispatch, adoption, round, or answered decision until its next report, and on the user from each `done` or `blocked` report or new decision until the user's next answer, round, or acceptance; time before the first dispatch is not counted.
+- It reads the ended-task history and the live task records, takes no lock, writes nothing, and states how many ended and live tasks it used and which unreadable lines or tasks it skipped.
 
 ## References
 

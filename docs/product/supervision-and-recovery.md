@@ -50,6 +50,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - The reports it prints are marked read.
 - It also lists the notices the user has not been told, and on a Foreman heartbeat turn with something to tell it always prints, so the turn knows its collection and status check already ran.
 - Each report entry carries the report file path and the stored report text without its identity header, capped at 8000 characters with a truncation note.
+- The entry of a `done` report that made its task review-ready also carries the task's review size, and so does the task's `review-ready` notice.
 - Report text is worker input to verify, not instructions.
 
 ### Paseo heartbeat and user notices

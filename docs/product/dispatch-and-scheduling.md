@@ -41,6 +41,8 @@ Dispatch binds every assignment to a verified endpoint before Foreman treats it 
 - Dispatch creates a new assignment generation.
 - Dispatch receives and validates the client-prepared workspace and resource claims.
 - Dispatch persists the brief, pending assignment, and task-brief outbox message before runtime delivery.
+- In a Git project, the first dispatch into a workspace records its review base: the `HEAD` commit and the paths already dirty; recovery and reassignment into the same workspace keep it.
+- A review base that cannot be read is recorded with its error and never blocks dispatch.
 - Dispatch spawns the worker through the selected runtime adapter, verifies stable endpoint identity, and delivers the persisted task-brief message.
 - After the selected runtime accepts the text prompt, Foreman marks the task `working` and records the endpoint identity; Paseo also records the workspace ID and timeline cursor.
 - If submission is uncertain, Foreman preserves the endpoint and records the uncertainty without resending or interrupting it.
