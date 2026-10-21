@@ -5,4 +5,5 @@ Con dấu tổng kết: chữ condensed in hoa, viền kép, xoay nhẹ −4° �
 - Đây là chi tiết nhận diện mạnh nhất, nên dùng tiết kiệm: tối đa **một** con dấu mỗi màn và chỉ khi có kết luận đáng nói (màn yên ổn thì không đóng dấu).
 
 - Dùng ở: hành động của `PageHeader` (tổng kết màn), trang task (trạng thái), đầu `StateNotice`.
-- Không dùng trong bảng hay danh sách — ở đó dùng `StatusLabel`. Tối đa một con dấu mỗi màn.
+- Không dùng trong bảng hay danh sách — ở đó dùng `StatusLabel`.
+  Tối đa một con dấu mỗi màn.

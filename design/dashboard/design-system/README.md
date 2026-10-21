@@ -1,4 +1,7 @@
-Foreman Manifest là giao diện **theo dõi, chỉ đọc** của đội agent Foreman, chạy cục bộ bằng `foreman dashboard serve`. Người dùng vẫn ra lệnh cho Foreman qua agent trong repo. Dashboard trả lời ba câu hỏi theo thứ tự: *việc gì đang chờ tôi*, *agent nào đang chạy và có ổn không*, *vừa xảy ra chuyện gì*. Mọi hành động chỉ **copy** câu cần nói với Foreman.
+Foreman Manifest là giao diện **theo dõi, chỉ đọc** của đội agent Foreman, chạy cục bộ bằng `foreman dashboard serve`.
+Người dùng vẫn ra lệnh cho Foreman qua agent trong repo.
+Dashboard trả lời ba câu hỏi theo thứ tự: *việc gì đang chờ tôi*, *agent nào đang chạy và có ổn không*, *vừa xảy ra chuyện gì*.
+Mọi hành động chỉ **copy** câu cần nói với Foreman.
 
 ## Các màn hình
 
@@ -19,31 +22,43 @@ Foreman Manifest là giao diện **theo dõi, chỉ đọc** của đội agent 
 
 ## Giọng văn
 
-- Câu và nhãn hành động viết **tiếng Việt**. Mã, đường dẫn, lệnh, profile giữ nguyên văn: `T-41`, `codex-luna`.
-- **Giữ tiếng Anh** cho từ dev quen dùng hoặc là khái niệm của Foreman — dịch ra khó hiểu hơn: agent, task, round, report, prompt, dispatch, routing, profile, lease, workspace, endpoint, attention, outbox, notice, accept, promote, scout/ship. Hai màn cũng giữ tên tiếng Anh: **Timeline**, **Health**.
+- Câu và nhãn hành động viết **tiếng Việt**.
+  Mã, đường dẫn, lệnh, profile giữ nguyên văn: `T-41`, `codex-luna`.
+- **Giữ tiếng Anh** cho từ dev quen dùng hoặc là khái niệm của Foreman — dịch ra khó hiểu hơn: agent, task, round, report, prompt, dispatch, routing, profile, lease, workspace, endpoint, attention, outbox, notice, accept, promote, scout/ship.
+  Hai màn cũng giữ tên tiếng Anh: **Timeline**, **Health**.
 - Trạng thái runtime giữ giá trị Foreman (`running`, `idle`, `waiting input`, `unknown`, `dead`, `missing`); trạng thái task viết tiếng Việt (Cần quyết định, Bị chặn, Chọn model, Chờ duyệt, Đang làm, Đang dispatch, Đang routing, Chờ dispatch) — hai trục không lẫn nhau.
 - Gọi người dùng là **bạn**, gọi Foreman là **Foreman**.
-- Thời gian ghi tương đối kèm đơn vị: “chờ bạn 26 giờ”, “12 phút trước”. Giờ tuyệt đối dùng mono: `10:39:12`.
+- Thời gian ghi tương đối kèm đơn vị: “chờ bạn 26 giờ”, “12 phút trước”.
+  Giờ tuyệt đối dùng mono: `10:39:12`.
 - Prompt cho Foreman là câu ngắn có mã task ở đầu:
   - “Accept T-38.”
   - “T-42: chọn phương án A cho D-1.”
   - “T-41: làm theo hướng 1.”
 
   Lệnh CLI chỉ là phương án phụ, nằm ngay dưới prompt.
-- Không viết như thể dashboard tự làm. Nút luôn là “Copy …”, “Mở …”, “Xem …”.
-- Không giải thích lại cơ chế Foreman trên màn hình (lede, hint, chú thích). Chỉ ghi điều người dùng cần để quyết định, ví dụ hậu quả của accept. “Dashboard chỉ đọc” chỉ nói một lần ở footer.
-- Khi chưa có số liệu thật thì hiện “—” và nói lý do. Không bao giờ hiện số đoán.
-- Nhãn, nút và nội dung viết **chữ thường kiểu câu** (“Copy prompt”, “Mở task”). In hoa nén chỉ dành cho tiêu đề ngắn theo giọng sổ (xem Chữ), không dùng cho câu.
+- Không viết như thể dashboard tự làm.
+  Nút luôn là “Copy …”, “Mở …”, “Xem …”.
+- Không giải thích lại cơ chế Foreman trên màn hình (lede, hint, chú thích).
+  Chỉ ghi điều người dùng cần để quyết định, ví dụ hậu quả của accept.
+  “Dashboard chỉ đọc” chỉ nói một lần ở footer.
+- Khi chưa có số liệu thật thì hiện “—” và nói lý do.
+  Không bao giờ hiện số đoán.
+- Nhãn, nút và nội dung viết **chữ thường kiểu câu** (“Copy prompt”, “Mở task”).
+  In hoa nén chỉ dành cho tiêu đề ngắn theo giọng sổ (xem Chữ), không dùng cho câu.
 
 ## Hai trục trạng thái
 
-**Trạng thái task** dùng `StatusLabel`. Giá trị là `meta.status` nguyên văn, cộng `choose-model` khi `needsProfileConfirmation`. Có ba nhóm:
+**Trạng thái task** dùng `StatusLabel`.
+Giá trị là `meta.status` nguyên văn, cộng `choose-model` khi `needsProfileConfirmation`.
+Có ba nhóm:
 
 - **Chờ bạn:** `waiting-decision`, `blocked`, `choose-model`, `review-ready`
 - **Agent giữ:** `working`, `pending`
 - **Chưa giao:** `routing`, `queued`
 
-**Trạng thái runtime** dùng `RuntimeBadge`, lấy từ lần status check gần nhất. Các giá trị: `working`, `idle`, `waiting-input`, `unknown`, `mismatch`, `dead`, `missing`. Bất thường (`worker.idle-without-report`, `worker.waiting-input`, `worker.timeline-gap`…) lấy nhãn và giải thích từ `Foreman.ISSUE`.
+**Trạng thái runtime** dùng `RuntimeBadge`, lấy từ lần status check gần nhất.
+Các giá trị: `working`, `idle`, `waiting-input`, `unknown`, `mismatch`, `dead`, `missing`.
+Bất thường (`worker.idle-without-report`, `worker.waiting-input`, `worker.timeline-gap`…) lấy nhãn và giải thích từ `Foreman.ISSUE`.
 
 `FleetTable` gom mỗi task vào đúng **một** nhóm, ưu tiên theo thứ tự:
 
@@ -52,34 +67,44 @@ Foreman Manifest là giao diện **theo dõi, chỉ đọc** của đội agent 
 3. **Đang chạy.**
 4. **Hàng chờ.**
 
-`unknown` luôn hiện màu vàng, không bao giờ màu đỏ. Dashboard không bao giờ suy ra agent đã chết.
+`unknown` luôn hiện màu vàng, không bao giờ màu đỏ.
+Dashboard không bao giờ suy ra agent đã chết.
 
 ## Màu
 
 Mỗi màu mang một nghĩa cố định; màu luôn đi kèm chữ.
 
-- **`red` / `red-deep` / `red-tint`: chờ bạn.** Chấm đỏ, số đếm đỏ, nhãn “Cần quyết / Bị chặn / Chọn model”, tuổi chờ. Chữ đỏ dùng `red-deep`; nền nhạt dùng `red-tint`.
-- **`mustard` / `mustard-deep` / `mustard-tint`: Foreman thấy bất thường** (chờ input, idle mà chưa report, không hoạt động lâu). `mustard` cho chấm và thanh; chữ dùng `mustard-deep`; thẻ bất thường tô `mustard-tint`.
+- **`red` / `red-deep` / `red-tint`: chờ bạn.**
+  Chấm đỏ, số đếm đỏ, nhãn “Cần quyết / Bị chặn / Chọn model”, tuổi chờ.
+  Chữ đỏ dùng `red-deep`; nền nhạt dùng `red-tint`.
+- **`mustard` / `mustard-deep` / `mustard-tint`: Foreman thấy bất thường** (chờ input, idle mà chưa report, không hoạt động lâu).
+  `mustard` cho chấm và thanh; chữ dùng `mustard-deep`; thẻ bất thường tô `mustard-tint`.
 - **`blue` / `blue-tint`: đang chạy**, báo cáo mới (`fm-newdot`), liên kết và focus.
 - **`green` / `green-tint`: xong** (`review-ready`, report “Xong”) và kết nối đang sống.
 - **`ink-tint`: trung tính** (`routing`, `queued`, tag dự án).
 
 Nền và chữ:
 
-- `chrome` / `on-chrome` / `chrome-2`: bìa sổ — nền tối của top bar, chữ trên bìa và tab chưa chọn. Tab đang mở lấy màu `surface`, như mép giấy thò ra khỏi bìa.
-- `surface` là nền trang (giấy ngà). `surface-raised` cho mọi khối: thẻ, bảng, pane, input. `surface-sunken` cho đầu bảng và tiêu đề nhóm.
+- `chrome` / `on-chrome` / `chrome-2`: bìa sổ — nền tối của top bar, chữ trên bìa và tab chưa chọn.
+  Tab đang mở lấy màu `surface`, như mép giấy thò ra khỏi bìa.
+- `surface` là nền trang (giấy ngà).
+  `surface-raised` cho mọi khối: thẻ, bảng, pane, input.
+  `surface-sunken` cho đầu bảng và tiêu đề nhóm.
 - `surface-hover` khi hover; `surface-selected` cho dòng/thẻ đang chọn, kèm vạch `ink` 3px bên trái.
 - Chữ chính `ink`, chữ phụ `ink-2`, nhãn và thời gian `ink-3` — đều đạt ≥ 4.5:1 trên mọi nền ở cả hai theme.
 - `line` cho đường chia mảnh; `line-strong` cho viền điều khiển và dòng kẻ gạch đứt của bảng — ≥ 3:1; `sheet-edge` cho viền sổ của bảng, bộ đếm, pane.
 
-Hai theme dùng chung tên token: **Ca ngày** (`light`, giấy ngà, mặc định) và **Ca đêm** (`dark`, nền than). Dashboard theo `prefers-color-scheme`; người dùng ghim được trong Cài đặt.
+Hai theme dùng chung tên token: **Ca ngày** (`light`, giấy ngà, mặc định) và **Ca đêm** (`dark`, nền than).
+Dashboard theo `prefers-color-scheme`; người dùng ghim được trong Cài đặt.
 
 ## Chữ
 
 Hai giọng chữ, mỗi giọng một việc:
 
-- **Giọng sổ — `display` (Barlow Condensed, in hoa, đậm)** cho những thứ ngắn để *định vị*: wordmark, tiêu đề trang (34px), tiêu đề mục (20px, kèm đường kẻ sổ), đầu cột bảng (13px, giãn chữ), mã task (18px), con số bộ đếm và KPI (40px), tiêu đề round, chữ trên con dấu. Không bao giờ dùng cho câu văn.
-- **Giọng đọc — `sans` (IBM Plex Sans, có subset tiếng Việt)** cho mọi thứ người dùng *đọc*: 14px giao diện, 15px khi đọc nội dung dài (report, quyết định, lời bạn dặn), 13px dòng phụ, 12px nhãn. Chữ thường kiểu câu, kể cả nút và nhãn trạng thái.
+- **Giọng sổ — `display` (Barlow Condensed, in hoa, đậm)** cho những thứ ngắn để *định vị*: wordmark, tiêu đề trang (34px), tiêu đề mục (20px, kèm đường kẻ sổ), đầu cột bảng (13px, giãn chữ), mã task (18px), con số bộ đếm và KPI (40px), tiêu đề round, chữ trên con dấu.
+  Không bao giờ dùng cho câu văn.
+- **Giọng đọc — `sans` (IBM Plex Sans, có subset tiếng Việt)** cho mọi thứ người dùng *đọc*: 14px giao diện, 15px khi đọc nội dung dài (report, quyết định, lời bạn dặn), 13px dòng phụ, 12px nhãn.
+  Chữ thường kiểu câu, kể cả nút và nhãn trạng thái.
 - `mono` (IBM Plex Mono) **chỉ** cho định danh máy: đường dẫn, lệnh, endpoint, lease key, profile.
 - Số dùng tabular (`font-variant-numeric: tabular-nums`) để cột thẳng hàng.
 - Khi chạy thật, `foreman dashboard serve` tự host file woff2 vì dashboard phải chạy được trên localhost khi không có mạng.
@@ -89,7 +114,9 @@ Hai giọng chữ, mỗi giọng một việc:
 - Lưới cơ sở 4px (`space-1`…`space-8`); khoảng cách giữa các khối 12–24px.
 - Viền: 1px (`bw-hair`) cho thẻ và điều khiển; 1.5px (`bw-ledger`, màu `sheet-edge`) cho bảng, bộ đếm, pane — viền “sổ”; dòng trong bảng ngăn bằng gạch đứt; 2px (`bw-strong`) cho focus; 3px (`bw-bar`) cho vạch chọn; 3px kép (`bw-double`) chỉ cho con dấu và ấn FM.
 - Bo góc: `radius-md` 8px cho thẻ, bảng, pane; `radius-sm` 6px cho nút, input; `radius-lg` cho hộp thoại; `radius-pill` cho nhãn trạng thái, chip, số đếm.
-- Bóng: `raise` (bóng cứng 2px, không nhòe) cho nút có viền và phương án được đề xuất — như tem dán lên sổ. `shadow-md` cho toast, `shadow-lg` cho hộp thoại và ngăn kéo. Thẻ phẳng.
+- Bóng: `raise` (bóng cứng 2px, không nhòe) cho nút có viền và phương án được đề xuất — như tem dán lên sổ.
+  `shadow-md` cho toast, `shadow-lg` cho hộp thoại và ngăn kéo.
+  Thẻ phẳng.
 
 ## Chi tiết nhận diện
 
@@ -103,14 +130,17 @@ Nhận diện “phiếu kho” nằm ở **khung**, không nằm dưới chữ:
 
 ## Tương tác
 
-- **Focus:** viền 2px liền màu `focus`, cách 2px, trên mọi phần tử bấm được. Dòng trong bảng và mục trong danh sách cũng nhận focus.
-- **Chọn:** một task chọn ở bảng sẽ chọn luôn ở agent và mở trong `Pane`. Màn hẹp hơn `bp-desktop` thì mở trong `Drawer`.
+- **Focus:** viền 2px liền màu `focus`, cách 2px, trên mọi phần tử bấm được.
+  Dòng trong bảng và mục trong danh sách cũng nhận focus.
+- **Chọn:** một task chọn ở bảng sẽ chọn luôn ở agent và mở trong `Pane`.
+  Màn hẹp hơn `bp-desktop` thì mở trong `Drawer`.
 - **Bàn phím:**
   - Ctrl K hoặc `/` để tìm nhanh, `?` để xem phím tắt.
   - `G` rồi một chữ cái để đi tới màn.
   - `J`/`K` để đi qua task; `Enter` để xem, `Shift Enter` để mở trang task.
   - `C` để copy prompt đề xuất.
-- **Báo cáo mới chưa xem:** có chấm xanh, mất khi người dùng chọn task đó. Số việc chờ bạn hiện trên tiêu đề tab.
+- **Báo cáo mới chưa xem:** có chấm xanh, mất khi người dùng chọn task đó.
+  Số việc chờ bạn hiện trên tiêu đề tab.
 - **Thông báo trình duyệt:** tùy chọn, chỉ báo việc cần bạn và bất thường.
 
 ## Dữ liệu sống và trạng thái hệ thống
@@ -120,7 +150,8 @@ Nhận diện “phiếu kho” nằm ở **khung**, không nằm dưới chữ:
 - Khi chưa có snapshot đầu tiên, hiện `Skeleton` tối đa 1 giây.
 - Khi `Snapshot.state` khác `ready`, thay cả màn bằng `StateNotice` và nói rõ người dùng cần làm gì.
 - Task Foreman bỏ qua vì sai schema được liệt kê ở màn Health, phần còn lại vẫn hiện.
-- Task đã accept hoặc discard chỉ còn một dòng trong `data/task-history.jsonl` (mã, dự án, outcome, mốc thời gian; không nội dung). Timeline hiện các dòng này; tiêu đề chỉ có khi dashboard từng thấy task lúc còn mở.
+- Task đã accept hoặc discard chỉ còn một dòng trong `data/task-history.jsonl` (mã, dự án, outcome, mốc thời gian; không nội dung).
+  Timeline hiện các dòng này; tiêu đề chỉ có khi dashboard từng thấy task lúc còn mở.
 
 ## Bố cục
 
@@ -135,7 +166,8 @@ Nhận diện “phiếu kho” nằm ở **khung**, không nằm dưới chữ:
 
 ## Biểu tượng
 
-Hệ thống không có bộ icon. Các ký tự Unicode sau có nghĩa cố định và luôn đi kèm chữ hoặc `aria-label`:
+Hệ thống không có bộ icon.
+Các ký tự Unicode sau có nghĩa cố định và luôn đi kèm chữ hoặc `aria-label`:
 
 - `▸`/`→` đi tới
 - `↗` mở trang
@@ -146,11 +178,13 @@ Hệ thống không có bộ icon. Các ký tự Unicode sau có nghĩa cố đ�
 - `☾ ☀` đổi theme
 - `·` ngăn cách các mục meta
 
-Không dùng emoji. Logo là vòng tròn chữ “FM” cạnh wordmark “FOREMAN”, dựng bằng CSS (`.fm-seal`).
+Không dùng emoji.
+Logo là vòng tròn chữ “FM” cạnh wordmark “FOREMAN”, dựng bằng CSS (`.fm-seal`).
 
 ## Dùng các component
 
-Bundle gán `window.Foreman` và cần React 18 trên trang. Nạp theo thứ tự: tokens.css, `components/bundle.css`, React, ReactDOM, rồi `components/bundle.js`.
+Bundle gán `window.Foreman` và cần React 18 trên trang.
+Nạp theo thứ tự: tokens.css, `components/bundle.css`, React, ReactDOM, rồi `components/bundle.js`.
 
 Ngoài component, `window.Foreman` còn có:
 
@@ -160,4 +194,5 @@ Ngoài component, `window.Foreman` còn có:
 
 `STATUS` phản chiếu `taskStamp()` trong `paseo-plugins/foreman-dashboard/shared/status.ts`; thêm trạng thái mới thì sửa cả hai nơi.
 
-`AppShell` là màn hình hoàn chỉnh dựng từ các component này, dùng dữ liệu mẫu theo đúng hình dạng state của Foreman. Nó có bảng “Bản thiết kế” để giả lập sự kiện, và ghi chú về dữ liệu server cần cung cấp.
+`AppShell` là màn hình hoàn chỉnh dựng từ các component này, dùng dữ liệu mẫu theo đúng hình dạng state của Foreman.
+Nó có bảng “Bản thiết kế” để giả lập sự kiện, và ghi chú về dữ liệu server cần cung cấp.

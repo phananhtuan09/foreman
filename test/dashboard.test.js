@@ -172,3 +172,27 @@ test("dashboard serve answers only its own host, read-only, and pushes a new sna
     f.cleanup();
   }
 });
+
+test("dashboard serve ends a HEAD request for the event stream and shows a snooze as ended once its time passes", async () => {
+  const f = buildDashboardHome();
+  let clock = Date.now();
+  const server = createDashboardServer({ roots: f.roots, port: 0, pollMs: 50, now: () => clock });
+  try {
+    await server.listen();
+    const port = server.server.address().port;
+    const head = await get(port, "/api/events", { method: "HEAD" });
+    assert.equal(head.status, 200);
+    assert.equal(head.body, "");
+
+    const point = core.addAttentionPoint({ roots: f.roots, taskId: f.ids.done, owner: "user", kind: "check", text: "Xem lại sau.", user: true });
+    const until = new Date(clock + 60000).toISOString();
+    core.snoozeAttentionPoint({ roots: f.roots, taskId: f.ids.done, pointId: point.point.id, until });
+    const stateOf = async () => JSON.parse((await get(port, "/api/snapshot")).body).tasks.find((task) => task.taskId === f.ids.done).attention.at(-1).state;
+    assert.equal(await stateOf(), "snoozed");
+    clock += 120000;
+    assert.equal(await stateOf(), "open", "the snapshot is rebuilt although no file changed");
+  } finally {
+    await server.close();
+    f.cleanup();
+  }
+});

@@ -316,6 +316,7 @@ function buildSnapshot({ roots, now = Date.now(), titles = new Map() }) {
       history: ended.records.map((record) => ({ taskId: record.taskId, projectId: record.projectId, type: record.type, backend: record.backend, outcome: record.outcome, createdAt: ms(record.createdAt), endedAt: ms(record.endedAt), round: record.round, generation: record.generation, title: titles.get(record.taskId) || null }))
         .sort((left, right) => (right.endedAt || 0) - (left.endedAt || 0)),
       historySkipped: ended.skipped.length,
+      nextExpiryAt: tasks.flatMap((task) => task.attention.map((point) => point.until)).filter((until) => until !== null).reduce((min, until) => (min === null || until < min ? until : min), null),
     };
   } catch (error) {
     return { ...base, state: "error", error: error.message };

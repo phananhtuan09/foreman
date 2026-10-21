@@ -72,7 +72,7 @@ export function TaskPage({ t, tasks, now, onBack, onOpen, onCopied }) {
             ['Lease', t.lease.length ? t.lease.map((l) => l.mode + ' ' + l.key).join('\n') : '—', true],
             t.leaseOverlap ? ['Chồng lấn', h('span', { style: { color: 'var(--mustard-deep)', fontWeight: 600 } }, 'với ' + t.leaseOverlap)] : null
           ] }),
-          t.workspace ? h('div', { style: { marginTop: 8 } }, h(F.CopyCommand, { quiet: true, label: 'Mở workspace', cli: 'cd ' + t.workspace, onCopied })) : null),
+          t.workspace ? h('div', { style: { marginTop: 8 } }, h(F.CopyCommand, { quiet: true, label: 'Mở workspace', cli: 'cd ' + M.quote(t.workspace), onCopied })) : null),
         (t.dependencies || []).length || dependents.length ? h(F.Card, { title: 'Phụ thuộc' }, h(F.KeyValue, { items: [
           (t.dependencies || []).length ? ['Chờ task', frag(t.dependencies.map((d) => { const o = tasks.find((x) => x.taskId === d); return h('button', { key: d, type: 'button', className: 'fm-link', style: { marginRight: 8 }, onClick: () => onOpen(d) }, d + (o ? ' · ' + STATUS[M.statusKey(o)].label.toLowerCase() : ' · đã kết thúc') + ' →'); }))] : null,
           dependents.length ? ['Đang chặn', frag(dependents.map((d) => h('button', { key: d.taskId, type: 'button', className: 'fm-link', style: { marginRight: 8 }, onClick: () => onOpen(d.taskId) }, d.taskId + ' →')))] : null

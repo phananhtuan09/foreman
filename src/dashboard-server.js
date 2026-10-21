@@ -66,7 +66,9 @@ function createDashboardServer({ roots, port = DEFAULT_PORT, pollMs = POLL_MS, n
     const print = dashboard.fingerprint({ roots });
     const printed = performance.now();
     timings = { ...timings, fingerprintMs: Math.round((printed - started) * 100) / 100 };
-    if (current && print === currentPrint) return false;
+    // A snooze that ends changes no file, so the snapshot is also rebuilt once its earliest snooze has ended.
+    const expired = current?.nextExpiryAt != null && now() >= current.nextExpiryAt;
+    if (current && print === currentPrint && !expired) return false;
     current = dashboard.buildSnapshot({ roots, now: now(), titles });
     currentPrint = print;
     timings = { ...timings, rebuildMs: Math.round((performance.now() - printed) * 100) / 100 };
@@ -80,13 +82,19 @@ function createDashboardServer({ roots, port = DEFAULT_PORT, pollMs = POLL_MS, n
     try { changed = refresh(); } catch (_) { return; }
     if (!changed) return;
     const data = payload();
-    for (const response of clients) response.write(`event: snapshot\ndata: ${data}\n\n`);
+    for (const response of clients) write(response, `event: snapshot\ndata: ${data}\n\n`);
+  }
+
+  // A browser that stops reading would queue one full snapshot per change; it is dropped instead and reconnects on its own.
+  function write(response, chunk) {
+    if (response.writableNeedDrain) return response.destroy();
+    return response.write(chunk);
   }
 
   function startPolling() {
     if (timer) return;
     timer = setInterval(push, pollMs);
-    keepalive = setInterval(() => { for (const response of clients) response.write(": keepalive\n\n"); }, KEEPALIVE_MS);
+    keepalive = setInterval(() => { for (const response of clients) write(response, ": keepalive\n\n"); }, KEEPALIVE_MS);
   }
   function stopPolling() {
     clearInterval(timer); clearInterval(keepalive);
@@ -111,6 +119,7 @@ function createDashboardServer({ roots, port = DEFAULT_PORT, pollMs = POLL_MS, n
     }
     if (url.pathname === "/api/events") {
       response.writeHead(200, { ...HEADERS, "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive" });
+      if (request.method === "HEAD") return response.end();
       try { refresh(); } catch (_) {}
       clients.add(response);
       response.write(`retry: 3000\nevent: snapshot\ndata: ${current ? payload() : "{}"}\n\n`);

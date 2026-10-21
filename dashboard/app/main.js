@@ -126,8 +126,9 @@ function App() {
         const el = document.querySelector('.fm-fleet tr.row[data-task="' + rows[n < 0 ? 0 : n] + '"]'); if (el) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest' }); }
         e.preventDefault();
       }
-      if (e.key === 'c' && selected) {
-        const t = tasks.find((x) => x.taskId === selected); const a = t && M.actionsFor(t, now);
+      const target = route.view === 'task' ? route.arg : route.view === 'board' ? selected : null;
+      if (e.key === 'c' && target) {
+        const t = tasks.find((x) => x.taskId === target); const a = t && M.actionsFor(t, now);
         if (a && (a.text || a.cli)) copyText(a.text || a.cli).then(() => onCopied(a.text || a.cli), () => onCopied(a.text || a.cli, true));
       }
     }

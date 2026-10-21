@@ -46,7 +46,7 @@ export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, onCop
       h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) })),
       h('div', { className: 'fm-inbox' },
         h(F.InboxList, { groups, current: cur && cur.key, onPick }),
-        cur ? h(Reader, { item: cur, tasks, now, profiles, onOpenFull, onCopied }) : null)));
+        cur ? h(Reader, { key: cur.key, item: cur, tasks, now, profiles, onOpenFull, onCopied }) : null)));
 }
 
 function copyButton(text, label, onCopied, variant = 'flat') {
@@ -122,7 +122,7 @@ function Reader({ item, tasks, now, profiles, onOpenFull, onCopied }) {
         h(F.Section, { title: 'Attention' }, h(F.PointList, { points: t.attention || [], kinds: POINT_KIND, now })),
         h(F.NextBox, { tone: 'green', title: 'Accept', copy: { text: act.text, cli: act.cli, onCopied } }, act.why),
         act.alt ? h(F.CopyCommand, { quiet: true, label: 'Hoặc promote trước', text: act.alt.text, cli: act.alt.cli, onCopied }) : null,
-        t.workspace ? h(F.CopyCommand, { quiet: true, label: 'Xem diff trong workspace', cli: 'cd ' + t.workspace + (t.branch ? ' && git diff --stat' : ''), onCopied }) : null,
+        t.workspace ? h(F.CopyCommand, { quiet: true, label: 'Xem diff trong workspace', cli: 'cd ' + M.quote(t.workspace) + (t.branch ? ' && git diff --stat' : ''), onCopied }) : null,
         h(F.Compose, { prefix: t.taskId + ': ', placeholder: 'Chưa accept? Gõ yêu cầu cho round tiếp…', onCopied }));
     }
     return frag(

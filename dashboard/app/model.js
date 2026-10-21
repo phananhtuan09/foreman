@@ -40,7 +40,7 @@ export const GROUPS = [
   { key: 'queue', label: 'Hàng chờ', tone: 'ink' }
 ];
 
-const quote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+export const quote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
 // What the user says to the Foreman session (primary), and the CLI it maps to (secondary).
 export function actionsFor(t, now) {
