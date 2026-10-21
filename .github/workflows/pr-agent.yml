@@ -1,8 +1,6 @@
 name: pr-agent
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -12,14 +10,9 @@ permissions:
 jobs:
   pr_agent:
     if: >-
-      github.event.sender.type != 'Bot' &&
-      (
-        (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) ||
-        (github.event.comment.user.login == 'phananhtuan09' && github.event.issue.pull_request)
-      )
-    concurrency:
-      group: pr-agent-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
-      cancel-in-progress: true
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == 'phananhtuan09' &&
+      startsWith(github.event.comment.body, '/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,9 +23,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           openrouter__key: ${{ secrets.OPENROUTER_KEY }}
-          config.model: openrouter/cohere/north-mini-code:free
+          config.model: openrouter/deepseek/deepseek-v4.1-flash-1017
           config.custom_model_max_tokens: "100000"
-          config.fallback_models: '["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openrouter/poolside/laguna-s-2.1:free"]'
-          github_action_config.auto_review: "true"
-          github_action_config.auto_describe: "false"
-          github_action_config.auto_improve: "false"
