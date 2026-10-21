@@ -1,9 +1,11 @@
 ---
 name: foreman-next-action
-description: Use within foreman-supervisor whenever Foreman presents a new worker report, to choose the one most useful next step for that task, show it as one highlight block, and send it when the user agrees. Not a user-invoked skill.
+description: Detailed rules for choosing and showing a Foreman next action, for cases the "Presenting a report" steps of foreman-supervisor do not settle. Not a user-invoked skill.
 ---
 
 # Foreman next action
+
+The common path is in the "Presenting a report" steps of `.agents/skills/foreman-supervisor/SKILL.md`; this skill holds the full rules behind them.
 
 Use the active backend wrapper (`bin/foreman-herdr` or `bin/foreman-paseo`) for every Foreman CLI command below.
 
@@ -59,19 +61,7 @@ Write "chốt task" or "accept task" for acceptance, never "merge".
 
 ## When the user answers
 
-- "gửi bước này", "ok làm đi", or similar approves exactly the shown step.
-  Run `next show --task ID`; if it is still `current`, act by its `kind`:
-  - `round`: send it with `task continue --task ID --next --original "<the user's words>"`.
-    The shown block stands for its stored instruction, so this approval is the confirmation `foreman-control` requires; show the instruction only when the user asks for it.
-    When the block names a mode change, the approval covers that change too.
-  - `accept`: `task continue --next` refuses it.
-    Treat the approval as the user's intent to accept, follow the acceptance flow of `foreman-control` (`task accept`), and clear the proposal.
-  - `decision` or `clarify`: nothing is sent to the worker.
-    Put the question to the user through the Decision Package or the clarifying question the block announced, then clear the proposal.
-- If the user edits the step, rewrite the instruction, record it again with `next propose`, and ask before sending.
-- If `next show` reports the step out of date, or the task moved on, re-check the history and propose again; when the step changed materially, show the new block and ask again.
-- When several tasks have current next actions and the reference is vague, ask which task in one short question.
-- A declined ("bỏ") or postponed step is cleared with `next clear --task ID`; that does not drop the request it came from.
+Follow "Approving a shown next action" in `.agents/skills/foreman-control/SKILL.md`.
 
 Proposing never sends a prompt, opens a round, interrupts a worker, creates or accepts a task, or changes anything outside Foreman.
 An optional next action is not a pending point of `foreman-attention`.

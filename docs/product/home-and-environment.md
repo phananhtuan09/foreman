@@ -53,6 +53,7 @@ Every helper, hook, and worker must resolve the same roots so that state mutatio
 - `foreman init` rewrites only its own marked block and leaves the rest of the file unchanged.
 - `foreman init` refuses an unrecognized shell by printing the lines to add manually.
 - `foreman init` never writes the backend choice to a shell startup file.
+- `foreman init` cannot change the environment of the session that runs it; when that session inherited a different `FOREMAN_ROOT` or `FOREMAN_HOME`, its output carries a `warning`, and Foreman runs no other command in that session.
 - Herdr worker panes opened after `init` inherit both root variables, which the worker stop hook and `foreman report` rely on.
 
 ### Backend selection

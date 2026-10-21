@@ -139,6 +139,7 @@ test("Paseo routes through repo profiles, dispatches a durable brief, collects a
     const sent = f.adapter.sent[0];
     assert.equal(sent.options.messageId, assignment.briefMessageId);
     assert.match(sent.prompt, /return exactly one JSON object/i);
+    assert.match(sent.prompt, /do not set a timer, wakeup, or scheduled follow-up/, "a turn that ends without the JSON report is never planned");
     assert.doesNotMatch(sent.prompt, /"\$FOREMAN_ROOT\/bin\/foreman" report/);
 
     f.adapter.finish(assignment.endpoint, `\n\n---\n\n${JSON.stringify({ status: "done", summary: "Read README.md; no files changed." })}`);

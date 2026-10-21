@@ -47,6 +47,7 @@ Paseo workers return a JSON report object at the end of each turn; Foreman colle
 The session prompt hook runs that Paseo collection before its single status check when the active backend is Paseo.
 The report records `lastReport` in task metadata and moves a `done` task to `review-ready` or a `blocked` task to `blocked`.
 The Foreman session's prompt hook prints unread reports and the anomalies of one status check, then marks those reports read.
+On a user prompt it also reads the last model call's context size from the Claude Code transcript and adds a one-time nudge for each 150k-token step; the nudge line it left in the transcript is its only record.
 The status check lists only the selected backend once, classifies its assignments as `working`, `idle`, `waiting-input`, `dead`, `missing`, `mismatch`, or `unknown`, and marks tasks on the other backend `unobserved`.
 It never changes task state or interrupts a worker; a fleet-wide check, and each Paseo collection, keeps its result per backend in `data/status-check.json` for read-only viewers, and acceptance or discard removes the task from it.
 The prompt hook also derives notices from task state and that status check, and lists those not yet marked told; `notice ack` writes the mark after Foreman tells the user.

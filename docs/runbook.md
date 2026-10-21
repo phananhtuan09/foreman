@@ -9,6 +9,7 @@ The startup file is `$ZDOTDIR/.zshrc` or `~/.zshrc` for zsh, `~/.bashrc` for bas
 Only the block between `# >>> foreman >>>` and `# <<< foreman <<<` is written; running `init` again from another checkout replaces that block.
 For an unrecognized shell, `init` fails and prints the `export` lines to add yourself.
 Shells and worker panes opened after `init` see the variables; restart older coding agents if they should report to Foreman.
+When the running session inherited other values, `init` prints a `warning`; start a new terminal or agent session before running Foreman commands.
 The backend wrappers set `FOREMAN_BACKEND` only for their own CLI process and do not write it to the shell startup file.
 
 ## Hooks
@@ -207,6 +208,7 @@ A lock left by a process that died on this host is removed automatically; a lock
 ### Next action
 
 `next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--json]` records the one next step Foreman shows after a report and prints its highlight block by default: a heading by kind, the step, any mode change, and the reply that approves it.
+It also records the task's review-ready or blocked notice as told, so that key needs no `notice ack`.
 Use `--json` to print the full proposal object, including its instruction, basis, and `line`.
 `next show [--task ID]` lists shown next actions with `current` and the reasons one is out of date; `next clear --task ID` drops one the user declined or postponed.
 If a task's pending points cannot be read, `next show` marks its proposal `current: false` with the read error and still lists the other tasks; the unreadable state is never rewritten or treated as permission to send.
@@ -226,6 +228,7 @@ Points live in `data/tasks/<id>/attention.json` and are deleted with the task at
 The session context and `supervise` list `Not yet told to the user` notices: a review-ready result, a blocker, a waiting decision, an anomaly, or a failed check, each with a key such as `T-000001/review-ready/generation-1-001-done.md`.
 After telling the user, record them with `notice ack --key KEY [--key KEY]...`; a told notice is not listed again, and an untold one stays listed after a reset or restart.
 `supervise [--json]` runs Paseo collection, one status check, and prints the same context for a turn without the prompt hook.
+In a Claude Code session, a user prompt's context adds a `Foreman session size: nudge N` line once each time the session's context passes another 150k tokens, and Foreman then suggests a new session.
 
 In a Foreman session that runs inside Paseo, `bin/foreman-paseo heartbeat sync` keeps one native Paseo heartbeat for that agent while a Paseo task is `working` or a notice is untold, and deletes it otherwise.
 The prompt hook and the Paseo task commands that start or end watched work run it, so it needs no manual step; it prints `foreman: heartbeat ...` on standard error when it changes something.
