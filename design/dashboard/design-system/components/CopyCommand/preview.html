@@ -1,0 +1,12 @@
+<!-- @dsCard group="Thao tác" height=220 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h('div',{style:{display:'grid',gap:12}},h(F.CopyCommand,{text:'T-42: chọn phương án A cho D-1.',cli:"foreman decision answer --task T-42 --decision D-1 --response 'A'"}),h(F.CopyCommand,{quiet:true,label:'Mở workspace',cli:'cd ~/code/foreman'}))));
+</script>
+</body>
+</html>

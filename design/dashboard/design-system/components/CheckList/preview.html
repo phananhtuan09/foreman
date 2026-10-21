@@ -1,0 +1,12 @@
+<!-- @dsCard group="Lịch sử & hệ thống" height=230 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'100%'}},h(F.CheckList,{items:[{state:'ok',name:'Dashboard server',desc:'SSE đang mở · 127.0.0.1:18789',value:'live'},{state:'ok',name:'Status check',desc:'Lần kiểm tra runtime gần nhất.',value:'10:39:12'},{state:'warn',name:'Heartbeat Paseo',desc:'Chưa chạy 16 phút — sẽ được kiểm lại theo ID.',value:'lần cuối 10:24'},{state:'bad',name:'Bản ghi task',desc:'2 bản ghi sai schema bị bỏ qua: T-12, T-19',value:'13 task'},{state:'off',name:'Runtime Herdr',desc:'Không có task Herdr nào.',value:'—'}]})));
+</script>
+</body>
+</html>

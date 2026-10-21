@@ -1,0 +1,13 @@
+<!-- @dsCard group="Tổng quan" height=80 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+function Demo(){ var s=useState('T-42'); return h('div',{className:'fm-heldrow'},[['T-42','waiting-decision','1 ngày 2 giờ',true],['T-37','review-ready','2 giờ 9 phút',false],['T-41','blocked','48 phút',true]].map(function(c){return h(F.HeldChip,{key:c[0],id:c[0],status:c[1],wait:c[2],urgent:c[3],selected:s[0]===c[0],onSelect:function(){s[1](c[0]);}});})); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

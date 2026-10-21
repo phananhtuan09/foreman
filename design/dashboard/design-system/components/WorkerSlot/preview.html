@@ -1,0 +1,13 @@
+<!-- @dsCard group="Tổng quan" height=150 -->
+<!doctype html>
+<html lang="vi">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../../bundle.css"><script src="../../vendor/react.production.min.js"></script><script src="../../vendor/react-dom.production.min.js"></script><script src="../../bundle.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>preview</title></head>
+<body>
+<div id="root" class="fm-preview col"></div>
+<script>
+var F = window.Foreman, h = React.createElement, useState = React.useState, now = Date.now(), M = 60000;
+function Demo(){ var s=useState('T-40'); function sl(p){return h(F.WorkerSlot,Object.assign({key:p.id,selected:s[0]===p.id,onSelect:function(){s[1](p.id);}},p));} return h('div',{className:'fm-lanes',style:{width:'100%'}},sl({id:'T-40',title:'Skill triage: phân loại issues/PRs',profile:'claude-sonnet · V3',backend:'Herdr',runtime:'working',quiet:'im 12 phút',quietRatio:0.13,isNew:true}),sl({id:'T-45',title:'Viết lại trang Bắt đầu nhanh',profile:'opencode-luna · V1',backend:'Herdr',runtime:'waiting-input',quiet:'im 6 phút',quietRatio:0.07,quietWarn:true,tone:'mustard'}),sl({id:'T-39',title:'Đồng bộ Paseo agent profiles',profile:'codex-luna · V2',backend:'Herdr',runtime:'idle',quiet:'im 2 giờ 15 phút',quietRatio:1.5,quietWarn:true,tone:'mustard'}),sl({id:'T-48',title:'Sửa 17 link nội bộ',profile:'claude-sonnet · V1',backend:'Paseo',runtime:'none',quiet:'đang giao',quietRatio:0})); }
+ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>
