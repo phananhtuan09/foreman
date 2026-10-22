@@ -231,7 +231,7 @@ Points live in `data/tasks/<id>/attention.json` and are deleted with the task at
 The session context and `supervise` list `Not yet told to the user` notices: a review-ready result, a blocker, a waiting decision, an anomaly, or a failed check, each with a key such as `T-000001/review-ready/generation-1-001-done.md`.
 After telling the user, record them with `notice ack --key KEY [--key KEY]...`; a told notice is not listed again, and an untold one stays listed after a reset or restart.
 `supervise [--json]` runs Paseo collection, one status check, and prints the same context for a turn without the prompt hook.
-In a Claude Code session, a user prompt's context adds a `Foreman session size: nudge N` line once each time the session's context passes another 150k tokens, and Foreman then suggests a new session.
+In a Claude Code session, a user prompt's context adds a `Foreman session size: nudge N` line once each time the session's context passes another 150k tokens, and Foreman then shows a `⚠️ PHIÊN ĐÃ DÀI` block at the end of its answer suggesting a new session.
 
 In a Foreman session that runs inside Paseo, `bin/foreman-paseo heartbeat sync` keeps one native Paseo heartbeat for that agent while a Paseo task is `working` or a notice is untold, and deletes it otherwise.
 The prompt hook and the Paseo task commands that start or end watched work run it, so it needs no manual step; it prints `foreman: heartbeat ...` on standard error when it changes something.

@@ -2334,7 +2334,12 @@ function renderSupervision(check, { heartbeat = null, sync = null, nudge = null 
   }
   // Starting and stopping the heartbeat is housekeeping; only a failure is worth the session's attention.
   if (sync?.action === "error") lines.push(`Heartbeat sync failed: ${sync.reason}. Tell the user once that recurring checks may not run as expected.`);
-  if (nudge) lines.push(`${SESSION_NUDGE_MARK}${nudge.step}. This session holds about ${Math.round(nudge.tokens / 1000)}k tokens of context, and every call re-reads it. At the end of this answer, add one line telling the user that a new Foreman session would be much cheaper and loses nothing, because tasks, reports, and decisions live in \`data/\`. If a rewritten instruction is still waiting for the user's confirmation, add that it must be confirmed here first or asked again in the new session.`);
+  if (nudge) {
+    // A ready-made block, styled like a next-action block, so the suggestion stands apart from the answer.
+    const tokens = Math.round(nudge.tokens / 1000);
+    const block = [`> ### ⚠️ PHIÊN ĐÃ DÀI · ~${tokens}k token`, ">", "> Mỗi lượt đều đọc lại toàn bộ phiên. Mở **phiên Foreman mới** sẽ rẻ hơn nhiều mà không mất gì: task, báo cáo và quyết định đều nằm trong `data/`."].join("\n");
+    lines.push(`${SESSION_NUDGE_MARK}${nudge.step}. This session holds about ${tokens}k tokens of context, and every call re-reads it. Show this block exactly as the last part of this answer, after any next-action block, so the user sees that a new Foreman session would be much cheaper and loses nothing:`, block, "If a rewritten instruction is still waiting for the user's confirmation, add one more line inside the block: `> Lệnh đang chờ bạn xác nhận: xác nhận ở đây trước, hoặc hỏi lại ở phiên mới.`");
+  }
   return `${lines.join("\n")}\n`;
 }
 
