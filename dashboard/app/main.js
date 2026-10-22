@@ -43,7 +43,7 @@ function App() {
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
   const [flashId, setFlashId] = useState(null);
-  const [prefs, setPrefsState] = useState(() => ({ density: 'comfortable', showLanes: true, markNew: true, titleCount: true, notify: false, ...store.get('prefs', {}) }));
+  const [prefs, setPrefsState] = useState(() => ({ density: 'comfortable', inboxOrder: 'age', showLanes: true, markNew: true, titleCount: true, notify: false, ...store.get('prefs', {}) }));
   const [themePref, setThemePrefState] = useState(() => store.get('theme', 'system'));
   const sysDark = useMedia('(prefers-color-scheme: dark)');
   const wide = useMedia('(min-width: 1280px)');
@@ -158,7 +158,7 @@ function App() {
   else if (snapshot.state === 'missing-home') content = h(F.StateNotice, { state: 'missing-home', actions: h(F.CopyCommand, { quiet: true, label: 'Chạy từ checkout Foreman', cli: 'bin/foreman init', onCopied }) }, 'Không có ', h('code', null, snapshot.home + '/data'), '. Nhờ Foreman chạy ', h('code', null, 'foreman init'), ' trước, hoặc đặt ', h('code', null, 'FOREMAN_HOME'), ' đúng home rồi chạy lại dashboard.');
   else if (snapshot.state !== 'ready') content = h(F.StateNotice, { state: 'error', actions: h(F.CopyCommand, { quiet: true, label: 'Kiểm tra trong terminal', cli: 'foreman task list --json --summary', onCopied }) }, 'Đọc ', h('code', null, 'data/'), ' thất bại: ', h('code', null, snapshot.error || 'không rõ lỗi'), '. Sẽ tự thử lại.');
   else if (view === 'board') content = h(Board, { tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
-  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
+  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, order: prefs.inboxOrder, onOrder: (v) => setPrefs({ inboxOrder: v }), onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
   else if (view === 'task' && !route.arg) content = h(TaskList, { tasks, now, snap, onOpen: (id) => go('task', id) });
   else if (view === 'task') content = h(TaskPage, { t: tasks.find((t) => t.taskId === route.arg), tasks, now, onBack: () => go('task'), onOpen: (id) => go('task', id) });
   else if (view === 'timeline') content = h(Timeline, { tasks, now, snap, onOpen: (id) => go('task', id) });

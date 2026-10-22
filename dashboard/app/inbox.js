@@ -11,6 +11,27 @@ const KINDS = [
   { key: 'review-ready', label: 'Chờ duyệt' }
 ];
 
+const ORDERS = [{ value: 'age', label: 'Lâu nhất' }, { value: 'quick', label: 'Nhanh trước' }, { value: 'risk', label: 'Rủi ro trước' }];
+
+// Plain weights meant to be tuned with use: quick favours small first-round work with nothing open,
+// risk favours shipped code, wide writes, lease overlaps, and rework. An unmeasured size counts as a medium review.
+function weigh(t, order) {
+  const c = t.reviewChange, size = c ? c.files + c.lines / 50 : 5, rework = Math.max(0, t.round - 1), points = M.openPoints(t).length;
+  if (order === 'quick') return size + 2 * rework + 3 * points;
+  return (t.type === 'ship' ? 3 : 0) + size + t.lease.filter((l) => l.mode === 'write').length + (t.leaseOverlap ? 5 : 0) + 2 * rework + 2 * points;
+}
+// What the order was based on, shown under the item so the position can be checked at a glance.
+function reason(t, order) {
+  const c = t.reviewChange, points = M.openPoints(t).length;
+  return [order === 'risk' ? t.type : null, c ? c.files + ' file · ' + c.lines + ' dòng' : null, order === 'risk' && t.leaseOverlap ? 'lease chồng ' + t.leaseOverlap : null,
+    t.round > 1 ? 'R' + t.round : null, points ? points + ' attention' : null].filter(Boolean).join(' · ');
+}
+function byOrder(order) {
+  if (order === 'age') return (a, b) => b.ms - a.ms;
+  const sign = order === 'quick' ? 1 : -1;
+  return (a, b) => sign * (weigh(a.task, order) - weigh(b.task, order)) || b.ms - a.ms;
+}
+
 export function inboxItems(tasks, now, isNew) {
   const items = [];
   tasks.forEach((t) => {
@@ -29,10 +50,11 @@ export function inboxItems(tasks, now, isNew) {
   return items;
 }
 
-export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew }) {
+export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew, order, onOrder }) {
   const [kind, setKind] = useState('all');
   const items = inboxItems(tasks, now, isNew);
-  const groups = KINDS.concat([{ key: 'point', label: 'Attention' }]).map((g) => ({ ...g, items: items.filter((i) => i.kind === g.key && (kind === 'all' || kind === g.key)).sort((a, b) => b.ms - a.ms) })).filter((g) => g.items.length);
+  const shown = (i) => { const r = order === 'age' ? '' : reason(i.task, order); return r ? { ...i, project: i.project + ' · ' + r } : i; };
+  const groups = KINDS.concat([{ key: 'point', label: 'Attention' }]).map((g) => ({ ...g, items: items.filter((i) => i.kind === g.key && (kind === 'all' || kind === g.key)).sort(byOrder(order)).map(shown) })).filter((g) => g.items.length);
   const flat = groups.reduce((a, g) => a.concat(g.items), []);
   const cur = flat.find((i) => i.key === current) || flat[0];
   const oldest = items.slice().sort((a, b) => b.ms - a.ms)[0];
@@ -44,7 +66,8 @@ export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew
   return h('div', null,
     h(F.PageHeader, { no: '02', eyebrow: 'Inbox', title: 'Chờ bạn', id: 'page-title', lede: items.length ? items.length + ' việc, lâu nhất ' + oldest.age + ' (' + oldest.id + ').' : 'Không có việc chờ bạn.' }),
     items.length === 0 ? h(F.StateNotice, { state: 'empty', stamp: 'Trống', title: 'Không có việc chờ bạn' }, 'Các agent đang tự chạy.') : frag(
-      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) })),
+      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) }),
+        h('span', { className: 'end' }, h(F.Segmented, { label: 'Thứ tự trong mỗi nhóm', value: order, onChange: onOrder, options: ORDERS }))),
       h('div', { className: 'fm-inbox' },
         h(F.InboxList, { groups, current: cur && cur.key, onPick }),
         cur ? h(Reader, { key: cur.key, item: cur, tasks, now, profiles, onOpenFull }) : null)));

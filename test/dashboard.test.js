@@ -75,6 +75,9 @@ test("the snapshot shows what the board needs from Foreman's own records and lea
     const done = byId[ids.done];
     assert.equal(done.status, "review-ready");
     assert.equal(done.title, "Add the login form");
+    assert.equal(done.reviewSize, "0 file, +0/−0");
+    assert.deepEqual(done.reviewChange, { files: 0, lines: 0 }, "the review size also arrives as numbers to order reviews by");
+    assert.equal(byId[ids.blocked].reviewChange, null);
     assert.equal(done.rounds[0].original, "Làm form đăng nhập có kiểm tra dữ liệu.");
     assert.deepEqual(done.rounds[0].reports[0].steps, ["Accept task. (recommended)", "Thêm test cho màn hình nhỏ."]);
     assert.equal(done.rounds[0].reports[0].summary, "Kết quả: form đăng nhập có kiểm tra dữ liệu.\nBằng chứng: 12/12 test pass.");
