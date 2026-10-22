@@ -61,5 +61,13 @@
     "modeId": "bypassPermissions",
     "thinkingOptionId": "medium",
     "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use for architecture, migration, concurrency, or security work."
+  },
+  {
+    "id": "foreman-antigravity-flash",
+    "name": "Foreman Antigravity 3.8",
+    "provider": "antigravity",
+    "model": "gemini-3.8-flash-high",
+    "modeId": "full-access",
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Preferred for UI work — components, layout and design tokens."
   }
 ]

@@ -237,7 +237,8 @@ function readProjects(home) {
 function readProfiles(root) {
   const raw = readOptionalJson(path.join(root, "config", "model-routing.json"));
   let config = null;
-  try { config = core.loadRoutingConfig(root, { includeAllProfiles: true }); } catch (_) {}
+  // The board shows the shared config, so it reads it as Paseo does: Herdr's narrower view would reject a Paseo-only default.
+  try { config = core.loadRoutingConfig(root, { includeAllProfiles: true, backend: "paseo" }); } catch (_) {}
   if (!config || !raw) return { router: null, profiles: [] };
   const groupOf = (name) => Object.entries(raw.groups || {}).find(([, group]) => (group.profiles || []).includes(name))?.[0] || null;
   return {

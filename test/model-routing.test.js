@@ -284,6 +284,37 @@ test("inactive profiles are hidden from the router and never selected", () => {
   } finally { f.cleanup(); }
 });
 
+test("a Paseo-only antigravity profile has no command or effort and is never routed or selected on Herdr", () => {
+  const f = fixture();
+  try {
+    const configured = routingConfig();
+    configured.groups.ordinary.profiles.unshift("antigravity-ui");
+    configured.profiles["antigravity-ui"] = { tool: "antigravity", model: "gemini-flash-high", effort: null, whenToUse: "UI work." };
+    const herdr = validateRoutingConfig(configured, { includeAllProfiles: true });
+    assert.deepEqual(herdr.paseoOnlyProfiles, ["antigravity-ui"]);
+    assert.equal(herdr.profiles["antigravity-ui"], undefined);
+    assert.deepEqual(herdr.groups.ordinary.profiles, ["codex-default", "omp-fast"]);
+    assert.equal(herdr.allProfiles["antigravity-ui"].command, null);
+    const paseo = validateRoutingConfig(configured, { backend: "paseo" });
+    assert.deepEqual(paseo.paseoOnlyProfiles, []);
+    assert.deepEqual(paseo.groups.ordinary.profiles, ["antigravity-ui", "codex-default", "omp-fast"]);
+    const withProfile = (patch) => ({ ...configured, profiles: { ...configured.profiles, "antigravity-ui": { ...configured.profiles["antigravity-ui"], ...patch } } });
+    assert.throws(() => validateRoutingConfig(withProfile({ command: ["antigravity"] })), /must not set a command/);
+    assert.throws(() => validateRoutingConfig(withProfile({ effort: "high" })), /must not set an effort/);
+    assert.throws(() => validateRoutingConfig({ ...configured, router: { tool: "antigravity", model: "m", whenToUse: "Route." } }), /router must run a command-line tool/);
+    assert.throws(() => validateRoutingConfig({ ...configured, default: "antigravity-ui" }), /active configured profile/);
+    assert.equal(validateRoutingConfig({ ...configured, default: "antigravity-ui" }, { backend: "paseo" }).default, "antigravity-ui");
+    fs.mkdirSync(path.join(f.roots.foremanRoot, "config"));
+    fs.writeFileSync(path.join(f.roots.foremanRoot, "config", "model-routing.json"), `${JSON.stringify(configured, null, 2)}\n`);
+    let prompt;
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Restyle the header.", routingRunner(input) { prompt = input.prompt; return { profile: "antigravity-ui" }; } });
+    assert.doesNotMatch(prompt, /antigravity-ui/);
+    assert.equal(task.routing.profile, "codex-default");
+    assert.match(task.routing.error, /Paseo-only profile/);
+    assert.throws(() => confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "antigravity-ui" }), /runs only on Paseo/);
+  } finally { f.cleanup(); }
+});
+
 test("router failure selects only the configured default profile", () => {
   const f = fixture();
   try {
