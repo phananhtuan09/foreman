@@ -14,6 +14,18 @@ export function lastReport(t) {
   return null;
 }
 export function firstLine(s) { return String(s || '').split(/\n|(?<=\.)\s/)[0]; }
+// The first sentence of a Markdown report as plain text: the first content line, a heading only when nothing else has text, without block markers, emphasis, or link targets.
+export function plainLine(md) {
+  const lines = String(md || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(```|~~~|[-*_]{3,}$|\|?\s*:?-{3,})/.test(l));
+  const line = lines.find((l) => !/^#{1,6}\s/.test(l)) || lines[0] || '';
+  return firstLine(line.replace(/^(>\s*)+/, '').replace(/^#{1,6}\s+/, '').replace(/^([-*+]|\d+[.)])\s+/, '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'));
+}
+// The one-line summary of a task: Foreman's latest report is what the user reads in the session, so it wins unless a newer worker report has not been presented yet.
+export function summaryLine(t) {
+  const r = lastReport(t), list = t.foremanReports || [], f = list[list.length - 1];
+  if (f && (!r || (f.at || 0) >= (r.at || 0))) return { text: plainLine(f.summary), round: f.round };
+  return r ? { text: firstLine(r.summary), round: r.round } : null;
+}
 export function pendingDecision(t) { return (t.decisions || []).find((d) => d.state === 'pending') || null; }
 export function answeredDecision(t) { return (t.decisions || []).find((d) => d.state === 'answered') || null; }
 export function openPoints(t) { return (t.attention || []).filter((p) => p.state === 'open'); }
@@ -81,15 +93,15 @@ export function actionsFor(t, now) {
 }
 
 export function rowLine(t, now, all) {
-  const k = statusKey(t), a = anomalyOf(t, now), d = pendingDecision(t), r = lastReport(t);
+  const k = statusKey(t), a = anomalyOf(t, now), d = pendingDecision(t), s = summaryLine(t);
   if (k === 'waiting-decision' && d) return { kind: 'q', lead: 'Cần quyết định: ', text: d.finding };
   if (k === 'waiting-decision') return { kind: '', lead: 'Đã trả lời: ', text: 'chờ Foreman gửi agent.' };
-  if (k === 'blocked') return { kind: 'q', lead: 'Agent cần: ', text: firstLine(r && r.summary) };
+  if (k === 'blocked') return { kind: 'q', lead: 'Agent cần: ', text: s ? s.text : '' };
   if (k === 'choose-model') return { kind: 'q', lead: 'Chọn model: ', text: 'router đề xuất ' + t.routingProfile };
-  if (k === 'review-ready') return { kind: 'b', lead: t.type === 'scout' ? 'Scout xong: ' : 'Xong: ', text: firstLine(r && r.summary) + (t.reviewSize ? ' (' + t.reviewSize + ')' : '') };
-  if (a.issues.length) return { kind: 'w', lead: a.issues[0].label + ' · ', text: r ? firstLine(r.summary) : 'chưa có report' };
-  if (a.silent) return { kind: 'w', lead: 'Không hoạt động ' + dur(now - t.lastActivityAt) + ' · ', text: r ? firstLine(r.summary) : 'chưa có report' };
-  if (k === 'working') return { kind: '', lead: '', text: r && r.round === t.round ? firstLine(r.summary) : 'Chưa có report round này.' };
+  if (k === 'review-ready') return { kind: 'b', lead: t.type === 'scout' ? 'Scout xong: ' : 'Xong: ', text: (s ? s.text : '') + (t.reviewSize ? ' (' + t.reviewSize + ')' : '') };
+  if (a.issues.length) return { kind: 'w', lead: a.issues[0].label + ' · ', text: s ? s.text : 'chưa có report' };
+  if (a.silent) return { kind: 'w', lead: 'Không hoạt động ' + dur(now - t.lastActivityAt) + ' · ', text: s ? s.text : 'chưa có report' };
+  if (k === 'working') return { kind: '', lead: '', text: s && s.round === t.round ? s.text : 'Chưa có report round này.' };
   if (k === 'pending') return { kind: '', lead: '', text: 'Đang dispatch cho ' + (t.profile || t.routingProfile || 'agent') + ', chờ endpoint.' };
   if (k === 'routing') return { kind: '', lead: '', text: 'Đang chọn profile…' };
   if ((t.dependencies || []).length) {

@@ -16,8 +16,8 @@ export function inboxItems(tasks, now, isNew) {
   tasks.forEach((t) => {
     const k = M.statusKey(t);
     if (!KINDS.find((x) => x.key === k)) return;
-    const d = M.pendingDecision(t), r = M.lastReport(t);
-    const q = k === 'waiting-decision' ? (d ? d.finding : 'Đã trả lời, chờ Foreman gửi agent') : k === 'blocked' ? M.firstLine(r && r.summary) : k === 'choose-model' ? 'Chọn profile cho “' + t.title + '”' : (t.type === 'scout' ? 'Scout xong: ' : 'Xong: ') + t.title;
+    const d = M.pendingDecision(t), s = M.summaryLine(t);
+    const q = k === 'waiting-decision' ? (d ? d.finding : 'Đã trả lời, chờ Foreman gửi agent') : k === 'blocked' ? (s ? s.text : 'Agent bị chặn') : k === 'choose-model' ? 'Chọn profile cho “' + t.title + '”' : (t.type === 'scout' ? 'Scout xong: ' : 'Xong: ') + t.title;
     const ms = now - t.statusSince;
     items.push({ key: t.taskId + ':' + k, id: t.taskId, kind: k, status: k, question: q, project: t.projectId, ms, age: dur(ms), urgent: k !== 'review-ready', overdue: ms > M.THRESHOLDS.overdueHours * 3600000, isNew: isNew(t), task: t });
   });

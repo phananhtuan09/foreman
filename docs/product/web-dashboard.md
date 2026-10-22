@@ -61,6 +61,7 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 - Chờ bạn lists decisions, blocked reports, model choices, reviews, and the user's open attention points, longest waiting first.
 - Tổng quan, Chờ bạn, and the task page show Foreman's reports of a task, rendered from their Markdown exactly as the Foreman session showed them with their next-action block, instead of worker reports; a task without one says so.
 - The task page lists each round with only the user's own words and Foreman's reports of that round, not the instruction Foreman sent the worker.
+- A task card's one-line summary and a blocked item's title in Chờ bạn come from the first sentence of Foreman's latest report; while a newer worker report has not been presented yet, or no Foreman report exists, they come from the worker report.
 - Timeline shows time per task and an event log; ended tasks come from `data/task-history.jsonl` and show a title only when the server saw the task while it was open.
 - Health shows the dashboard connection, each backend's kept status check and Paseo collection, the Paseo heartbeat, skipped records, anomalies with whether the user was told, untold notices, and the outbox.
 - Dự án & lease shows registered projects, held resource claims with the live tasks whose claims overlap them in a conflicting mode, and dependencies.
