@@ -112,6 +112,25 @@ test("the snapshot shows what the board needs from Foreman's own records and lea
   } finally { f.cleanup(); }
 });
 
+test("the snapshot carries Foreman's reports of a task verbatim, and a new one changes the fingerprint", () => {
+  const f = buildDashboardHome();
+  try {
+    const { ids } = f;
+    const empty = dashboard.buildSnapshot({ roots: f.roots }).tasks.find((task) => task.taskId === ids.deciding);
+    assert.deepEqual(empty.foremanReports, []);
+    const before = dashboard.fingerprint({ roots: f.roots });
+    const summary = "**Cần bạn chọn** cách nối tiếp khi cache hết hạn.\n\n| Phương án | Chi phí |\n|---|---|\n| A | thấp |";
+    core.proposeNextAction({ roots: f.roots, taskId: ids.deciding, kind: "decision", text: "Chọn A hay B", summary });
+    assert.notEqual(dashboard.fingerprint({ roots: f.roots }), before);
+    const [shown] = dashboard.buildSnapshot({ roots: f.roots }).tasks.find((task) => task.taskId === ids.deciding).foremanReports;
+    assert.equal(shown.summary, summary);
+    assert.equal(shown.round, 1);
+    assert.equal(shown.kind, "decision");
+    assert.match(shown.line, /Cần bạn quyết/u);
+    assert.ok(shown.at);
+  } finally { f.cleanup(); }
+});
+
 test("the snapshot of a missing home creates nothing, and a damaged task is skipped instead of failing the board", () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-dashboard-missing-")));
   try {

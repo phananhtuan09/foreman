@@ -29,7 +29,7 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 - It MUST NOT call a runtime; runtime state and anomalies come only from the kept status check.
 - A malformed task record is skipped and listed on the Health screen; the rest still shows.
 - A missing home shows a notice telling the user to run `foreman init` or set `FOREMAN_HOME`.
-- Every action on the page copies text: a short Vietnamese prompt for the Foreman session first, the equivalent CLI command second.
+- Tổng quan, Chờ bạn, and the task page offer no copy action, prompt for the Foreman session, or CLI command; they only show state.
 - Display preferences, the selected task, and which reports were seen are kept per browser and never in the home.
 
 ### Live updates
@@ -51,10 +51,16 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 
 ### Screens
 
-- The top bar holds Tổng quan, Chờ bạn, Timeline, then Health, Dự án & lease, Token & cache, Cài đặt; each task has its own page at `#/task/<id>`.
-- Tổng quan groups every live task exactly once, in the first matching group: Chờ bạn (waiting decision, blocked, model choice, review-ready), Bất thường (a running task with an issue, a bad runtime state, or no activity for 90 minutes), Đang chạy, Hàng chờ.
+- The top bar holds Tổng quan, Chờ bạn, Task, Timeline, then Health, Dự án & lease, Token & cache, Cài đặt; each task has its own page at `#/task/<id>`.
+- Task at `#/task` lists every unaccepted task with its status, project, agent, round, and last activity, filterable by project, status, and search, and each row opens its task page.
+  Ended tasks from `data/task-history.jsonl` are listed below with their outcome and no link, because their content is gone.
+- Tổng quan's Agent section shows every task with an endpoint, or still dispatching, exactly once on a kanban board by runtime state: Đang chạy (running or dispatching), Idle, Chờ input, and Không rõ / mất (unknown, mismatch, dead, missing).
+- Tổng quan shows a one-line summary, the Agent section, and every live task exactly once on a kanban board with four flow columns: Hàng chờ (routing, queued), Đang làm (pending, working), Cần bạn (waiting decision, blocked, model choice), and Chờ duyệt (review-ready).
+- In Đang làm, a task with an issue, a bad runtime state, or no activity for 90 minutes is marked as an anomaly and listed first.
 - Task status labels are Vietnamese; runtime states keep Foreman's values.
 - Chờ bạn lists decisions, blocked reports, model choices, reviews, and the user's open attention points, longest waiting first.
+- Tổng quan, Chờ bạn, and the task page show Foreman's reports of a task, rendered from their Markdown exactly as the Foreman session showed them with their next-action block, instead of worker reports; a task without one says so.
+- The task page lists each round with only the user's own words and Foreman's reports of that round, not the instruction Foreman sent the worker.
 - Timeline shows time per task and an event log; ended tasks come from `data/task-history.jsonl` and show a title only when the server saw the task while it was open.
 - Health shows the dashboard connection, each backend's kept status check and Paseo collection, the Paseo heartbeat, skipped records, anomalies with whether the user was told, untold notices, and the outbox.
 - Dự án & lease shows registered projects, held resource claims with the live tasks whose claims overlap them in a conflicting mode, and dependencies.

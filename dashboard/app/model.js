@@ -194,14 +194,6 @@ export function ganttRows(tasks, from, now) {
   }).filter((r) => r.segs.length);
 }
 
-export function roundsView(t, now) {
-  return t.rounds.map((r) => ({
-    round: r.round, generation: r.generation, mode: r.mode, when: r.at ? clock(r.at) + ' · ' + dayLabel(r.at, now).split(' — ')[0].toLowerCase() : '',
-    original: r.original, sent: r.sent,
-    reports: r.reports.slice().reverse().map((rep) => ({ status: rep.status, when: clock(rep.at) + ' · ' + ago(rep.at, now), summary: rep.summary, steps: rep.steps, file: rep.file }))
-  }));
-}
-
 // What Foreman recorded about the replacement of the previous worker.
 export function handoffText(x) {
   if (!x) return null;

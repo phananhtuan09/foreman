@@ -65,6 +65,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── meta.json         creation time, adoption, lifecycle, project, owner, generation, workspace, branch, review base and size, resource lease, endpoint, worker pane, routing, and latest report
   ├── decisions/        versioned Decision Packages and verbatim human responses
   ├── reports/          verbatim worker reports, one file per report
+  ├── foreman-reports/  append-only records of Foreman's report of the task as shown to the user, with its round and next-action block
   ├── attention.json    pending points kept across rounds
   └── handoff.json      latest recovery handoff, written only by dead-worker recovery
   ```

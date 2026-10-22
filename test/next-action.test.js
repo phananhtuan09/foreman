@@ -35,6 +35,32 @@ test("next propose prints its highlight line by default and preserves the full o
   } finally { f.cleanup(); }
 });
 
+test("next propose keeps Foreman's report verbatim, one record per answer, and prints it before the block", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Implementation complete; verification remains.");
+    const summaryFile = path.join(f.roots.foremanHome, "summary.md");
+    const summary = "**Kết quả:** migration chạy xong.\n\n- Còn thiếu kiểm chứng dữ liệu cũ.";
+    fs.writeFileSync(summaryFile, `${summary}\n`);
+    const args = [path.join(__dirname, "..", "bin", "foreman"), "next", "propose", "--task", task.id, "--kind", "round", "--text", "Kiểm chứng migration còn thiếu", "--instruction", VERIFY, "--summary-file", summaryFile];
+    const env = { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" };
+    const printed = execFileSync(process.execPath, args, { encoding: "utf8", env });
+    assert.ok(printed.startsWith(`${summary}\n\n> ▶ **Bước tiếp · ${task.id}**`));
+    proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Kiểm chứng lại", instruction: VERIFY, summary: "Lần hai." });
+    const dir = path.join(f.roots.foremanHome, "data", "tasks", task.id, "foreman-reports");
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["001.json", "002.json"]);
+    const first = JSON.parse(fs.readFileSync(path.join(dir, "001.json"), "utf8"));
+    assert.equal(first.summary, summary);
+    assert.equal(first.round, 1);
+    assert.equal(first.kind, "round");
+    assert.match(first.line, /Kiểm chứng migration còn thiếu/u);
+    assert.ok(first.workerReport);
+    assert.throws(() => proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "x", instruction: VERIFY, summary: "  " }), /must not be empty/u);
+    assert.equal(fs.readdirSync(dir).length, 2, "a refused report writes nothing");
+  } finally { f.cleanup(); }
+});
+
 test("the one shown next action is sent verbatim when the user agrees, and only once", () => {
   const f = fixture();
   try {

@@ -1,6 +1,6 @@
 import { h, frag, F, Fragment, useState } from './react.js';
 import * as M from './model.js';
-import { runtimeBadge } from './board.js';
+import { runtimeBadge, ForemanReport } from './board.js';
 
 const { STATUS, POINT_KIND, ago, clock, clockSec, dayLabel, cx, copyText } = F;
 const cap = M.cap;
@@ -14,33 +14,44 @@ const messageTone = (state) => (state === 'failed' ? 'red' : state === 'pending'
 const DECISION_STATE = { pending: 'chờ bạn', answered: 'đã trả lời, chưa gửi', delivered: 'đã gửi agent', superseded: 'bạn đã gửi yêu cầu khác' };
 
 // ================= Task page =================
-export function TaskPage({ t, tasks, now, onBack, onOpen, onCopied }) {
+// Each round shows only the user's own words and Foreman's reports of that round, newest first.
+function RoundReports({ t, now }) {
+  const reports = t.foremanReports || [];
+  return h('ol', { className: 'fm-rounds' }, t.rounds.map((r, i) => {
+    const mine = reports.filter((x) => x.round === r.round).reverse();
+    return h('li', { key: r.round, className: cx('fm-round', i === 0 && 'current') },
+      h('div', { className: 'rh' }, h('b', null, 'Round ' + r.round), h('span', { className: 't' }, (r.at ? clock(r.at) + ' · ' + dayLabel(r.at, now).split(' — ')[0].toLowerCase() : '') + (r.mode ? ' · ' + r.mode : '') + (r.generation ? ' · G' + r.generation : ''))),
+      h('div', { className: 'said' }, h('span', { className: 'who' }, 'Bạn yêu cầu'), r.original || h('span', { className: 'fm-faint' }, 'Không có lời gốc của bạn cho round này.')),
+      mine.length ? mine.map((x, j) => h('div', { key: j, style: { marginTop: 10 } }, h(ForemanReport, { report: x, now })))
+        : h('p', { className: 'fm-faint', style: { margin: '8px 0 0', fontSize: 13 } }, 'Chưa có báo cáo của Foreman.'));
+  }));
+}
+
+export function TaskPage({ t, tasks, now, onBack, onOpen }) {
   const [tab, setTab] = useState('rounds');
-  if (!t) return h('div', null, h('button', { type: 'button', className: 'fm-back', onClick: onBack }, '← Tổng quan'),
+  if (!t) return h('div', null, h('button', { type: 'button', className: 'fm-back', onClick: onBack }, '← Task'),
     h('div', { style: { marginTop: 16 } }, h(F.StateNotice, { state: 'empty', stamp: 'Không còn', title: 'Task không còn tồn tại' }, 'Task đã được accept hoặc discard. Workspace vẫn còn trên đĩa.')));
-  const k = M.statusKey(t), act = M.actionsFor(t, now), a = M.anomalyOf(t, now);
+  const k = M.statusKey(t), a = M.anomalyOf(t, now);
   const dependents = tasks.filter((x) => (x.dependencies || []).indexOf(t.taskId) >= 0);
   const msgs = t.messages || [];
   const pts = t.attention || [];
   const handoff = M.handoffText(t.handoff);
   const tabs = [
-    { id: 'rounds', label: 'Round & report', count: t.rounds.length },
+    { id: 'rounds', label: 'Round & báo cáo', count: t.rounds.length },
     { id: 'decisions', label: 'Quyết định', count: (t.decisions || []).length, tone: M.pendingDecision(t) ? 'red' : null },
     { id: 'points', label: 'Attention', count: pts.filter((p) => p.state === 'open').length, tone: pts.some((p) => p.state === 'open' && p.owner === 'user') ? 'red' : null },
     { id: 'messages', label: 'Outbox', count: msgs.length }
   ];
-  const next = h(F.NextBox, { tone: act.tone, title: act.title, why: act.why, copy: act.text || act.cli ? { text: act.text, cli: act.cli, onCopied, quiet: act.quiet } : null }, act.what);
   return h('div', null,
-    h('button', { type: 'button', className: 'fm-back', onClick: onBack }, '← Tổng quan'),
+    h('button', { type: 'button', className: 'fm-back', onClick: onBack }, '← Task'),
     h(F.PageHeader, { plain: true, id: 'page-title', title: t.title, actions: h(F.Stamp, { status: k }),
       eyebrow: frag(h('span', { className: 'fm-no' }, t.taskId), h(F.TypeTag, { type: t.type }), h(F.ProjectTag, null, t.projectId), h('span', null, 'tạo ' + ago(t.createdAt, now))) }),
     a.issues.length ? h('div', { style: { marginBottom: 16 } }, a.issues.map((i) => h(F.Banner, { key: i.type, tone: i.tone, lead: i.label }, i.explain, ' ', h('span', { className: 'fm-faint' }, i.type + ' · ' + clock(i.at || now))))) : null,
-    h('div', { className: 'fm-only-narrow' }, next),
     h('div', { className: 'fm-grid side' },
       h('div', { style: { minWidth: 0 } },
         h(F.Tabs, { tabs, value: tab, onChange: setTab, label: 'Nội dung task' }),
         h('div', { className: 'fm-tabpanel', role: 'tabpanel' },
-          tab === 'rounds' ? h(F.RoundList, { rounds: M.roundsView(t, now), now }) : null,
+          tab === 'rounds' ? h(RoundReports, { t, now }) : null,
           tab === 'decisions' ? ((t.decisions || []).length ? t.decisions.slice().reverse().map((d) => h(F.Card, { key: d.id, title: d.label + ' · ' + (DECISION_STATE[d.state] || d.state), end: d.createdAt ? 'mở ' + clock(d.createdAt) + ' ' + dayLabel(d.createdAt, now).split(' — ')[0].toLowerCase() : null },
             h('p', { style: { margin: '0 0 8px', fontWeight: 600 } }, d.finding),
             d.why ? h('p', { style: { margin: '0 0 8px', fontSize: 13, color: 'var(--ink-2)' } }, d.why) : null,
@@ -54,8 +65,6 @@ export function TaskPage({ t, tasks, now, onBack, onOpen, onCopied }) {
             h('td', null, h(F.StatusLabel, { tone: messageTone(m.state), size: 'sm' }, m.state)), h('td', { className: 'r mono' }, m.at ? clock(m.at) : '—'))))
             : h('p', { className: 'fm-faint' }, 'Outbox trống.')) : null)),
       h('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 } },
-        h('div', { className: 'fm-only-wide' }, next),
-        act.alt ? h(F.CopyCommand, { quiet: true, label: 'Hoặc', text: act.alt.text, cli: act.alt.cli, onCopied }) : null,
         h(F.Card, { title: 'Trạng thái' }, h(F.KeyValue, { items: [
           ['Task', frag(h(F.StatusLabel, { status: k, size: 'sm' }), ' ', h('span', { className: 'fm-faint', style: { fontSize: 12, marginLeft: 6 } }, 'từ ' + clock(t.statusSince)))],
           ['Runtime', runtimeBadge(t) || h('span', { className: 'fm-faint' }, 'chưa có agent')],
@@ -71,14 +80,53 @@ export function TaskPage({ t, tasks, now, onBack, onOpen, onCopied }) {
             ['Branch', t.branch || (t.vcs === 'none' ? 'không dùng git' : '—'), true],
             ['Lease', t.lease.length ? t.lease.map((l) => l.mode + ' ' + l.key).join('\n') : '—', true],
             t.leaseOverlap ? ['Chồng lấn', h('span', { style: { color: 'var(--mustard-deep)', fontWeight: 600 } }, 'với ' + t.leaseOverlap)] : null
-          ] }),
-          t.workspace ? h('div', { style: { marginTop: 8 } }, h(F.CopyCommand, { quiet: true, label: 'Mở workspace', cli: 'cd ' + M.quote(t.workspace), onCopied })) : null),
+          ] })),
         (t.dependencies || []).length || dependents.length ? h(F.Card, { title: 'Phụ thuộc' }, h(F.KeyValue, { items: [
           (t.dependencies || []).length ? ['Chờ task', frag(t.dependencies.map((d) => { const o = tasks.find((x) => x.taskId === d); return h('button', { key: d, type: 'button', className: 'fm-link', style: { marginRight: 8 }, onClick: () => onOpen(d) }, d + (o ? ' · ' + STATUS[M.statusKey(o)].label.toLowerCase() : ' · đã kết thúc') + ' →'); }))] : null,
           dependents.length ? ['Đang chặn', frag(dependents.map((d) => h('button', { key: d.taskId, type: 'button', className: 'fm-link', style: { marginRight: 8 }, onClick: () => onOpen(d.taskId) }, d.taskId + ' →')))] : null
         ] })) : null,
-        handoff ? h(F.Card, { title: 'Handoff gần nhất' }, h('p', { style: { margin: 0, fontSize: 13 } }, handoff)) : null,
-        h(F.CopyCommand, { quiet: true, label: 'Lịch sử đầy đủ', cli: 'foreman task history --task ' + t.taskId, onCopied }))));
+        handoff ? h(F.Card, { title: 'Handoff gần nhất' }, h('p', { style: { margin: 0, fontSize: 13 } }, handoff)) : null)));
+}
+
+// ================= Task list =================
+// Every unaccepted task in one table; ended tasks keep no content, so they are listed without a link.
+export function TaskList({ tasks, now, snap, onOpen }) {
+  const [proj, setProj] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [q, setQ] = useState('');
+  const [limit, setLimit] = useState(20);
+  const search = q.trim().toLowerCase();
+  const matches = (x) => (proj === 'all' || x.projectId === proj) && (!search || (x.taskId + ' ' + (x.title || '') + ' ' + (x.profile || '') + ' ' + x.projectId).toLowerCase().indexOf(search) >= 0);
+  const scoped = M.ordered(tasks, now).filter(matches);
+  const rows = scoped.filter((t) => status === 'all' || M.statusKey(t) === status);
+  const ended = (snap.history || []).filter(matches).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+  const projects = Array.from(new Set((snap.projects || []).map((p) => p.id).concat(tasks.map((t) => t.projectId))));
+  const keys = Array.from(new Set(scoped.map(M.statusKey)));
+  return h('div', null,
+    h(F.PageHeader, { no: '03', eyebrow: 'Danh sách', title: 'Task', id: 'page-title', lede: tasks.length + ' task chưa accept · ' + (snap.history || []).length + ' task đã kết thúc.' }),
+    h('div', { className: 'fm-toolbar' },
+      h(F.FilterChips, { label: 'Dự án', value: proj, onChange: setProj, options: [{ value: 'all', label: 'Tất cả' }].concat(projects.map((p) => ({ value: p, label: p }))) }),
+      h('span', { className: 'end' }, h(F.SearchField, { value: q, onChange: setQ, inputRef: null }))),
+    h(F.SectionHeader, { title: 'Đang mở', meta: rows.length < tasks.length ? rows.length + ' / ' + tasks.length : tasks.length }),
+    keys.length > 1 ? h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Trạng thái', value: status, onChange: setStatus, options: [{ value: 'all', label: 'Tất cả', count: scoped.length }].concat(keys.map((k) => ({ value: k, label: STATUS[k].label, count: scoped.filter((t) => M.statusKey(t) === k).length }))) })) : null,
+    rows.length ? table(['Task', 'Trạng thái', 'Dự án', 'Agent', { label: 'Round', r: true }, { label: 'Hoạt động cuối', r: true }], rows.map((t) => h('tr', { key: t.taskId, className: cx('fm-rowlink', M.anomalyOf(t, now).any && 'warn'), onClick: () => onOpen(t.taskId) },
+      h('td', null, link(t.taskId, onOpen), h('div', { style: { fontSize: 13 } }, t.title)),
+      h('td', null, h(F.StatusLabel, { status: M.statusKey(t), size: 'sm' })),
+      h('td', { className: 'mono' }, t.projectId),
+      h('td', { className: 'mono' }, t.profile ? t.profile + (t.backend ? ' · ' + cap(t.backend) : '') : '—'),
+      h('td', { className: 'r mono' }, t.round),
+      h('td', { className: 'r' }, ago(t.lastActivityAt, now)))))
+      : h('p', { className: 'fm-faint', style: { fontSize: 13 } }, !tasks.length ? 'Không có task. Giao việc trong phiên Foreman, task sẽ hiện ở đây.' : 'Không có task nào khớp bộ lọc.'),
+    h(F.SectionHeader, { title: 'Đã kết thúc', meta: ended.length, hint: 'chỉ còn bản ghi lịch sử, không còn nội dung task' }),
+    ended.length ? frag(
+      table(['Task', 'Kết quả', 'Dự án', { label: 'Round', r: true }, { label: 'Kết thúc', r: true }], ended.slice(0, limit).map((x) => h('tr', { key: x.taskId },
+        h('td', null, h('b', { className: 'fm-mono' }, x.taskId), h('div', { className: x.title ? null : 'fm-faint', style: { fontSize: 13 } }, x.title || 'Không lưu tiêu đề')),
+        h('td', null, h(F.StatusLabel, { tone: x.outcome === 'discarded' ? 'ink' : 'green', size: 'sm' }, x.outcome === 'discarded' ? 'discard' : 'accept')),
+        h('td', { className: 'mono' }, x.projectId),
+        h('td', { className: 'r mono' }, x.round),
+        h('td', { className: 'r' }, x.endedAt ? ago(x.endedAt, now) : '—')))),
+      ended.length > limit ? h('div', { style: { marginTop: 8 } }, h(F.Button, { variant: 'ghost', size: 'sm', onClick: () => setLimit(limit + 20) }, 'Xem thêm ' + Math.min(20, ended.length - limit))) : null)
+      : h('p', { className: 'fm-faint', style: { fontSize: 13 } }, 'Chưa có task nào kết thúc.'));
 }
 
 // ================= Timeline =================
@@ -99,7 +147,7 @@ export function Timeline({ tasks, now, snap, onOpen }) {
   const youMs = sum('you'), runMs = sum('run');
   const projects = Array.from(new Set((snap.projects || []).map((p) => p.id).concat(tasks.map((t) => t.projectId))));
   return h('div', null,
-    h(F.PageHeader, { no: '03', eyebrow: 'Lịch sử', title: 'Timeline', id: 'page-title' }),
+    h(F.PageHeader, { no: '04', eyebrow: 'Lịch sử', title: 'Timeline', id: 'page-title' }),
     h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Dự án', value: proj, onChange: setProj, options: [{ value: 'all', label: 'Tất cả' }].concat(projects.map((p) => ({ value: p, label: p }))) })),
     h(F.SectionHeader, { title: 'Thời gian theo task', meta: rows.length + ' task', end: h(F.Segmented, { label: 'Khoảng thời gian', value: range, onChange: setRange, options: [{ value: 'today', label: 'Hôm nay' }, { value: '24h', label: '24 giờ' }, { value: '72h', label: '3 ngày' }] }) }),
     h(F.KpiStrip, { label: 'Tổng hợp khoảng đang xem', items: [
@@ -154,7 +202,7 @@ export function Health({ tasks, now, snap, conn, onOpen, onCopied }) {
   ].filter(Boolean);
   const bad = checks.filter((c) => c.state === 'bad' || c.state === 'warn').length + anomalies.length;
   return h('div', null,
-    h(F.PageHeader, { no: '04', eyebrow: 'Hệ thống', title: 'Health', id: 'page-title', actions: h(F.Stamp, { tone: bad ? 'mustard' : 'green' }, bad ? bad + ' mục cần xem' : 'Ổn định') }),
+    h(F.PageHeader, { no: '05', eyebrow: 'Hệ thống', title: 'Health', id: 'page-title', actions: h(F.Stamp, { tone: bad ? 'mustard' : 'green' }, bad ? bad + ' mục cần xem' : 'Ổn định') }),
     h(F.SectionHeader, { title: 'Giám sát & runtime' }),
     h(F.CheckList, { items: checks, label: 'Kiểm tra hệ thống' }),
     (snap.skipped || []).length ? h('div', { style: { marginTop: 12 } }, h(F.Callout, { variant: 'danger', lead: 'Bỏ qua:' }, snap.skipped.map((s) => s.taskId + ' — ' + s.reason).join(' · '))) : null,
@@ -191,7 +239,7 @@ export function Projects({ tasks, now, snap, onOpen }) {
   const projects = (snap.projects || []).slice();
   tasks.forEach((t) => { if (!projects.find((p) => p.id === t.projectId)) projects.push({ id: t.projectId, name: t.projectId, root: '—', vcs: 'git', enabled: true }); });
   return h('div', null,
-    h(F.PageHeader, { no: '05', eyebrow: 'Hệ thống', title: 'Dự án & lease', id: 'page-title' }),
+    h(F.PageHeader, { no: '06', eyebrow: 'Hệ thống', title: 'Dự án & lease', id: 'page-title' }),
     projects.length ? h('div', { className: 'fm-grid c3' }, projects.map((p) => {
       const mine = tasks.filter((t) => t.projectId === p.id);
       const by = M.counts(mine, now).by;
@@ -223,7 +271,7 @@ export function Projects({ tasks, now, snap, onOpen }) {
 // Foreman has no source of worker token usage yet (#28), so nothing here is a number until one exists.
 export function Tokens() {
   return h('div', null,
-    h(F.PageHeader, { no: '06', eyebrow: 'Chi phí', title: 'Token & cache', id: 'page-title' }),
+    h(F.PageHeader, { no: '07', eyebrow: 'Chi phí', title: 'Token & cache', id: 'page-title' }),
     h(F.Banner, { tone: 'mustard', lead: 'Chưa có nguồn số liệu' }, 'Foreman chưa ghi token usage của worker (#28), nên mọi số liệu ở đây hiện “—” thay vì số đoán.'),
     h('div', { style: { height: 16 } }),
     h(F.KpiStrip, { label: 'Tuần này', items: [
@@ -243,12 +291,12 @@ export function Settings({ tasks, snap, prefs, setPrefs, themePref, setThemePref
   const profiles = snap.profiles || [];
   const row = (label, control) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' } }, h('span', { className: 'fm-h4', style: { border: 0, margin: 0, padding: 0, minWidth: 120 } }, label), control);
   return h('div', null,
-    h(F.PageHeader, { no: '07', eyebrow: 'Hệ thống', title: 'Cài đặt', id: 'page-title' }),
+    h(F.PageHeader, { no: '08', eyebrow: 'Hệ thống', title: 'Cài đặt', id: 'page-title' }),
     h('div', { className: 'fm-grid c2' },
       h(F.Card, { title: 'Hiển thị', end: 'lưu ở trình duyệt' },
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           row('Theme', h(F.Segmented, { label: 'Theme', value: themePref, onChange: setThemePref, options: [{ value: 'system', label: 'Theo máy' }, { value: 'light', label: 'Sáng' }, { value: 'dark', label: 'Tối' }] })),
-          row('Mật độ bảng', h(F.Segmented, { label: 'Mật độ', value: prefs.density, onChange: (v) => setPrefs({ density: v }), options: [{ value: 'comfortable', label: 'Thoáng' }, { value: 'compact', label: 'Gọn' }] })),
+          row('Mật độ thẻ', h(F.Segmented, { label: 'Mật độ', value: prefs.density, onChange: (v) => setPrefs({ density: v }), options: [{ value: 'comfortable', label: 'Thoáng' }, { value: 'compact', label: 'Gọn' }] })),
           h(F.Toggle, { checked: prefs.showLanes, onChange: (v) => setPrefs({ showLanes: v }) }, 'Hiện agent trên Tổng quan'),
           h(F.Toggle, { checked: prefs.markNew, onChange: (v) => setPrefs({ markNew: v }) }, 'Chấm xanh cho report mới chưa xem'),
           h(F.Toggle, { checked: prefs.titleCount, onChange: (v) => setPrefs({ titleCount: v }) }, 'Số việc chờ bạn trên tiêu đề tab'),
@@ -275,6 +323,6 @@ export function Settings({ tasks, snap, prefs, setPrefs, themePref, setThemePref
 
 export const KEYS = [
   { title: 'Chung', keys: [['Ctrl K', 'Tìm task hoặc màn hình'], ['/', 'Tìm nhanh'], ['?', 'Bảng phím tắt'], ['Esc', 'Đóng lớp phủ']] },
-  { title: 'Đi tới', keys: [['G B', 'Tổng quan'], ['G I', 'Chờ bạn'], ['G T', 'Timeline'], ['G H', 'Health'], ['G P', 'Dự án & lease'], ['G K', 'Token & cache'], ['G S', 'Cài đặt']] },
-  { title: 'Tổng quan', keys: [['J', 'Task kế tiếp'], ['K', 'Task trước'], ['Enter', 'Xem nhanh task'], ['Shift Enter', 'Mở trang task'], ['C', 'Copy prompt đề xuất']] }
+  { title: 'Đi tới', keys: [['G B', 'Tổng quan'], ['G I', 'Chờ bạn'], ['G A', 'Task'], ['G T', 'Timeline'], ['G H', 'Health'], ['G P', 'Dự án & lease'], ['G K', 'Token & cache'], ['G S', 'Cài đặt']] },
+  { title: 'Tổng quan', keys: [['J', 'Task kế tiếp'], ['K', 'Task trước'], ['Enter', 'Xem nhanh task'], ['Shift Enter', 'Mở trang task']] }
 ];
