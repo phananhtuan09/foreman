@@ -22,10 +22,8 @@ export default function contribute(client: PluginClientContext) {
       onSelect: async ({ rpc }) => { await rpc(stopDashboardRpc, {}); },
     }),
     client.addSettingsScreen({ id: "foreman-settings", title: "Foreman", icon: "LayoutDashboard", Component: ForemanSettings }),
-    // Hide the "blocked by hook" notice of a quiet Foreman heartbeat, whichever item type the provider maps it to.
-    client.addTimelineTransformer({ id: "quiet-heartbeat-message", query: { itemType: "assistant_message" }, transform: ({ item }) => isQuietForemanHeartbeat(item.text) ? { items: [] } : undefined }),
-    client.addTimelineTransformer({ id: "quiet-heartbeat-notification", query: { itemType: "notification" }, transform: ({ item }) => isQuietForemanHeartbeat(item.message) ? { items: [] } : undefined }),
-    client.addTimelineTransformer({ id: "quiet-heartbeat-error", query: { itemType: "error" }, transform: ({ item }) => isQuietForemanHeartbeat(item.message) ? { items: [] } : undefined }),
+    // Claude Code's notice for a blocked quiet Foreman heartbeat reaches the timeline as an assistant message.
+    client.addTimelineTransformer({ id: "quiet-heartbeat", query: { itemType: "assistant_message" }, transform: ({ item }) => isQuietForemanHeartbeat(item.text) ? { items: [] } : undefined }),
   ];
   return () => { for (const remove of removers) remove(); };
 }
