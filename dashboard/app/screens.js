@@ -1,6 +1,7 @@
-import { h, frag, F, Fragment, useState } from './react.js';
+import { h, frag, F, Fragment, useState, useEffect } from './react.js';
 import * as M from './model.js';
 import { runtimeBadge, ForemanReport } from './board.js';
+import { LOAD_DEFAULTS, loadSettings } from './load.js';
 
 const { STATUS, POINT_KIND, ago, clock, clockSec, dayLabel, cx, copyText } = F;
 const cap = M.cap;
@@ -286,6 +287,49 @@ export function Tokens() {
 }
 
 // ================= Settings =================
+// A number or time input that keeps what is being typed and saves only a valid value.
+function NumInput({ value, onChange, type = 'number', min = 0, max, label }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+  const valid = (s) => (type === 'time' ? /^\d{2}:\d{2}$/.test(s) : s !== '' && Number.isInteger(Number(s)) && Number(s) >= min && (max == null || Number(s) <= max));
+  return h('input', { type, value: text, min, max, step: type === 'number' ? 1 : undefined, 'aria-label': label, 'aria-invalid': valid(text) ? undefined : 'true',
+    onChange: (e) => { setText(e.target.value); if (valid(e.target.value)) onChange(type === 'time' ? e.target.value : Number(e.target.value)); } });
+}
+
+// Only values that differ from the defaults are stored, so a later change of a default still reaches every field the user left alone.
+function LoadSettings({ prefs, setPrefs }) {
+  const stored = prefs.load || {}, cfg = loadSettings(stored);
+  const set = (k) => (v) => { const next = { ...stored, [k]: v }; if (v === LOAD_DEFAULTS[k]) delete next[k]; setPrefs({ load: next }); };
+  const input = (k, label, extra) => h(NumInput, { value: cfg[k], onChange: set(k), label, ...extra });
+  // One row reads as a sentence: what it is, its value, and the unit; a value changed from the default is marked.
+  const row = (label, controls, keys) => h('div', { className: cx('fm-lrow', keys.some((k) => k in stored) && 'changed') }, h('span', { className: 'l' }, label), h('span', { className: 'c' }, controls));
+  const num = (k, label, unit, extra) => row(label, [input(k, label, extra), h('span', { key: 'u', className: 'u' }, unit)], [k]);
+  const changed = Object.keys(stored).filter((k) => k in LOAD_DEFAULTS && stored[k] !== LOAD_DEFAULTS[k]).length;
+  const group = (title, hint, rows) => h('section', { className: 'fm-lgroup' }, h('h3', null, title), h('p', { className: 'hint' }, hint), rows);
+  const badHours = cfg.dayEnd <= cfg.dayStart;
+  return h(F.Card, { title: 'Tải của bạn', end: changed ? changed + ' giá trị đã đổi · lưu ở trình duyệt' : 'mặc định · lưu ở trình duyệt' },
+    h('div', { className: 'fm-lhead' },
+      h(F.Toggle, { checked: cfg.enabled, onChange: set('enabled') }, 'Cảnh báo tải trên Tổng quan'),
+      h(F.Button, { variant: 'ghost', size: 'sm', disabled: !changed, onClick: () => setPrefs({ load: {} }) }, 'Khôi phục mặc định')),
+    h('div', { className: cx('fm-lgroups', !cfg.enabled && 'off') },
+      group('Đang dồn việc', 'Báo khi một trong các điều kiện dưới đây xảy ra. Đỏ nếu việc bị chặn hoặc quyết định quá hạn, vì agent đang đứng chờ.', [
+        num('maxItems', 'Số việc chờ bạn từ', 'việc', { min: 1 }),
+        num('waitStuckMin', 'Bị chặn, quyết định chờ quá', 'phút', { min: 1 }),
+        num('waitModelMin', 'Chọn model chờ quá', 'phút', { min: 1 }),
+        num('waitReviewMin', 'Chờ duyệt, attention chờ quá', 'phút', { min: 1 })]),
+      group('Cuối ngày', badHours ? 'Giờ kết thúc phải sau giờ bắt đầu; dự báo đang tắt.' : 'Đỏ khi việc tồn vượt thời gian còn lại. Vàng khi gần giờ về và việc tồn chiếm phần lớn thời gian còn lại.', [
+        row('Giờ làm việc', [input('dayStart', 'Bắt đầu làm', { type: 'time' }), h('span', { key: 'd', className: 'u' }, '–'), input('dayEnd', 'Kết thúc', { type: 'time' })], ['dayStart', 'dayEnd']),
+        num('warnBeforeMin', 'Báo vàng khi còn dưới', 'phút', { min: 0 }),
+        num('warnPct', 'và việc tồn chiếm từ', '%', { min: 1, max: 100 })]),
+      group('Ước lượng xử lý mỗi việc', 'Dùng để cộng thời gian việc tồn. Duyệt chưa đo được cỡ thì tính 5 file.', [
+        num('estDecisionMin', 'Quyết định, attention', 'phút'),
+        num('estModelMin', 'Chọn model', 'phút'),
+        num('estBlockedMin', 'Bị chặn', 'phút'),
+        num('estReviewMin', 'Duyệt: cơ bản', 'phút'),
+        num('estReviewPerFileMin', 'Duyệt: thêm mỗi file đổi', 'phút'),
+        num('estReviewMaxMin', 'Duyệt: tối đa', 'phút', { min: 1 })])));
+}
+
 export function Settings({ tasks, snap, prefs, setPrefs, themePref, setThemePref, notifyState, onNotify }) {
   const server = snap.server || {};
   const profiles = snap.profiles || [];
@@ -312,6 +356,7 @@ export function Settings({ tasks, snap, prefs, setPrefs, themePref, setThemePref
         ['Quá hạn', 'chờ bạn quá ' + M.THRESHOLDS.overdueHours + ' giờ'],
         snap.router ? ['Router', snap.router.tool + (snap.router.model ? ' · ' + snap.router.model : ''), true] : null
       ] }))),
+    h('div', { style: { marginTop: 16 } }, h(LoadSettings, { prefs, setPrefs })),
     h(F.SectionHeader, { title: 'Routing profile', meta: profiles.filter((p) => p.active).length + ' đang bật', hint: 'config/model-routing.json' }),
     profiles.length ? table(['Profile', 'Group', 'Tool', 'Model', 'Effort', { label: 'Task', r: true }, 'Ghi chú'], profiles.map((p) => h('tr', { key: p.name, className: p.active ? '' : 'off' },
       h('td', { className: 'mono' }, h('b', null, p.name), p.isDefault ? h('span', { className: 'fm-ttag', style: { marginLeft: 6 } }, 'default') : null),

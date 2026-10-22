@@ -1,4 +1,4 @@
-import { h, frag, F, useState, useEffect, useRef } from './react.js';
+import { h, frag, F, Fragment, useState, useEffect, useRef } from './react.js';
 import * as M from './model.js';
 import { ForemanReport, latestForemanReport } from './board.js';
 
@@ -15,7 +15,7 @@ const ORDERS = [{ value: 'age', label: 'Lâu nhất' }, { value: 'quick', label:
 
 // Plain weights meant to be tuned with use: quick favours small first-round work with nothing open,
 // risk favours shipped code, wide writes, lease overlaps, and rework. An unmeasured size counts as a medium review.
-function weigh(t, order) {
+export function weigh(t, order) {
   const c = t.reviewChange, size = c ? c.files + c.lines / 50 : 5, rework = Math.max(0, t.round - 1), points = M.openPoints(t).length;
   if (order === 'quick') return size + 2 * rework + 3 * points;
   return (t.type === 'ship' ? 3 : 0) + size + t.lease.filter((l) => l.mode === 'write').length + (t.leaseOverlap ? 5 : 0) + 2 * rework + 2 * points;
@@ -40,7 +40,7 @@ export function inboxItems(tasks, now, isNew) {
     const d = M.pendingDecision(t), s = M.summaryLine(t);
     const q = k === 'waiting-decision' ? (d ? d.finding : 'Đã trả lời, chờ Foreman gửi agent') : k === 'blocked' ? (s ? s.text : 'Agent bị chặn') : k === 'choose-model' ? 'Chọn profile cho “' + t.title + '”' : (t.type === 'scout' ? 'Scout xong: ' : 'Xong: ') + t.title;
     const ms = now - t.statusSince;
-    items.push({ key: t.taskId + ':' + k, id: t.taskId, kind: k, status: k, question: q, project: t.projectId, ms, age: dur(ms), urgent: k !== 'review-ready', overdue: ms > M.THRESHOLDS.overdueHours * 3600000, isNew: isNew(t), task: t });
+    items.push({ key: t.taskId + ':' + k, id: t.taskId, kind: k, status: k, question: q, project: t.projectId, ms, age: dur(ms), urgent: k !== 'review-ready', isNew: isNew(t), task: t });
   });
   // User-owned open points on tasks that are not already in the inbox for their status.
   tasks.forEach((t) => {
@@ -50,11 +50,16 @@ export function inboxItems(tasks, now, isNew) {
   return items;
 }
 
-export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew, order, onOrder }) {
-  const [kind, setKind] = useState('all');
-  const items = inboxItems(tasks, now, isNew);
-  const shown = (i) => { const r = order === 'age' ? '' : reason(i.task, order); return r ? { ...i, project: i.project + ' · ' + r } : i; };
-  const groups = KINDS.concat([{ key: 'point', label: 'Attention' }]).map((g) => ({ ...g, items: items.filter((i) => i.kind === g.key && (kind === 'all' || kind === g.key)).sort(byOrder(order)).map(shown) })).filter((g) => g.items.length);
+// `marks` comes from the load warning: an item over the wait limit of its kind is overdue, and one today's forecast leaves for tomorrow says so.
+export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew, order, onOrder, kind, setKind, marks }) {
+  const items = inboxItems(tasks, now, isNew).map((i) => ({ ...i, late: Boolean(marks[i.key] && marks[i.key].over) }));
+  const overdueCount = items.filter((i) => i.late).length;
+  // The list's own overdue text is left off; badges pinned on the item's top edge carry overdue and tomorrow instead, clear of its text.
+  const shown = (i) => { const r = order === 'age' ? '' : reason(i.task, order), m = marks[i.key] || {};
+    const badges = m.over || m.later ? h('span', { className: 'fm-ibadges' }, m.over ? h('span', { className: 'fm-ibadge t-red' }, 'Quá hạn') : null, m.later ? h('span', { className: 'fm-ibadge t-blue' }, 'Để mai') : null) : null;
+    return { ...i, project: h(Fragment, null, r ? i.project + ' · ' + r : i.project, badges) }; };
+  const picked = (i, g) => i.kind === g.key && (kind === 'all' || kind === g.key || (kind === 'overdue' && i.late));
+  const groups = KINDS.concat([{ key: 'point', label: 'Attention' }]).map((g) => ({ ...g, items: items.filter((i) => picked(i, g)).sort(byOrder(order)).map(shown) })).filter((g) => g.items.length);
   const flat = groups.reduce((a, g) => a.concat(g.items), []);
   const cur = flat.find((i) => i.key === current) || flat[0];
   const oldest = items.slice().sort((a, b) => b.ms - a.ms)[0];
@@ -66,19 +71,20 @@ export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew
   return h('div', null,
     h(F.PageHeader, { no: '02', eyebrow: 'Inbox', title: 'Chờ bạn', id: 'page-title', lede: items.length ? items.length + ' việc, lâu nhất ' + oldest.age + ' (' + oldest.id + ').' : 'Không có việc chờ bạn.' }),
     items.length === 0 ? h(F.StateNotice, { state: 'empty', stamp: 'Trống', title: 'Không có việc chờ bạn' }, 'Các agent đang tự chạy.') : frag(
-      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) }),
+      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(overdueCount || kind === 'overdue' ? [{ value: 'overdue', label: 'Quá hạn', count: overdueCount }] : []).concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) }),
         h('span', { className: 'end' }, h(F.Segmented, { label: 'Thứ tự trong mỗi nhóm', value: order, onChange: onOrder, options: ORDERS }))),
       h('div', { className: 'fm-inbox' },
         h(F.InboxList, { groups, current: cur && cur.key, onPick }),
-        cur ? h(Reader, { key: cur.key, item: cur, tasks, now, profiles, onOpenFull }) : null)));
+        cur ? h(Reader, { key: cur.key, item: cur, tasks, now, profiles, onOpenFull, marks }) : null)));
 }
 
-function Reader({ item, tasks, now, profiles, onOpenFull }) {
+function Reader({ item, tasks, now, profiles, onOpenFull, marks }) {
   const t = item.task, k = item.kind;
   const fr = latestForemanReport(t);
   const head = h('div', { className: 'rhd' },
     h('div', { className: 'l1' }, h(F.StatusLabel, { status: item.status }), h('b', { className: 'fm-mono', style: { color: 'var(--ink)' } }, t.taskId), h(F.TypeTag, { type: t.type }), h(F.ProjectTag, null, t.projectId), h('span', null, 'chờ bạn ' + item.age),
-      item.overdue ? h(F.StatusLabel, { tone: 'red', size: 'sm' }, 'quá hạn') : null,
+      item.late ? h('span', { className: 'fm-ibadge t-red' }, 'Quá hạn ' + M.minutes(marks[item.key].limitMin)) : null,
+      marks[item.key] && marks[item.key].later ? h('span', { className: 'fm-ibadge t-blue' }, 'Để mai') : null,
       h('span', { style: { marginLeft: 'auto' } }, h(F.Button, { variant: 'flat', size: 'sm', onClick: () => onOpenFull(t.taskId) }, 'Mở task ↗'))),
     h('h2', null, item.question));
   const report = h(F.Section, { title: 'Báo cáo của Foreman', end: fr ? 'round ' + fr.round : null }, h(ForemanReport, { report: fr, now }));

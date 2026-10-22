@@ -13,6 +13,7 @@ export function lastReport(t) {
   for (const r of t.rounds) if (r.reports.length) return { ...r.reports[r.reports.length - 1], round: r.round };
   return null;
 }
+export const minutes = (m) => { m = Math.round(m); return m < 60 ? m + ' phút' : Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0'); };
 export function firstLine(s) { return String(s || '').split(/\n|(?<=\.)\s/)[0]; }
 // The first sentence of a Markdown report as plain text: the first content line, a heading only when nothing else has text, without block markers, emphasis, or link targets.
 export function plainLine(md) {

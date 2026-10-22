@@ -1,6 +1,7 @@
 import { h, F, useState, useEffect, useRef, useMemo, useCallback } from './react.js';
 import * as M from './model.js';
 import { useLiveSnapshot } from './live.js';
+import { loadSettings, loadState, LoadBanners } from './load.js';
 import { Board, TaskPeek } from './board.js';
 import { Inbox } from './inbox.js';
 import { TaskPage, TaskList, Timeline, Health, Projects, Tokens, Settings, KEYS } from './screens.js';
@@ -39,6 +40,7 @@ function App() {
   const [now, setNow] = useState(Date.now());
   const [selected, setSelected] = useState(() => store.get('selected', null));
   const [drawer, setDrawer] = useState(false);
+  const [inboxKind, setInboxKind] = useState('all');
   const [toasts, setToasts] = useState([]);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
@@ -153,12 +155,17 @@ function App() {
   const selTask = tasks.find((t) => t.taskId === selected);
   const lastCheck = snap ? Object.values(snap.backends || {}).map((b) => b.checkedAt).filter(Boolean).sort().pop() : null;
 
+  const loadCfg = loadSettings(prefs.load);
+  const load = snap ? loadState(tasks, now, loadCfg) : { marks: {} };
+  const openInbox = (kind, order) => { setInboxKind(kind); if (order) setPrefs({ inboxOrder: order }); go('inbox'); };
+  const banners = view === 'board' && snap && loadCfg.enabled ? h(LoadBanners, { state: load, cfg: loadCfg, onPick: (k) => { setInboxKind('all'); go('inbox', k); },
+    onOpenOverdue: () => openInbox('overdue'), onOpenQuick: () => openInbox('all', 'quick'), onOpenInbox: () => openInbox('all') }) : null;
   let content;
   if (!snapshot) content = h('div', null, h(F.PageHeader, { title: TITLES[view] }), h(F.Skeleton, { block: true }), h('div', { style: { height: 12 } }), h(F.Skeleton, { lines: 6 }));
   else if (snapshot.state === 'missing-home') content = h(F.StateNotice, { state: 'missing-home', actions: h(F.CopyCommand, { quiet: true, label: 'Chạy từ checkout Foreman', cli: 'bin/foreman init', onCopied }) }, 'Không có ', h('code', null, snapshot.home + '/data'), '. Nhờ Foreman chạy ', h('code', null, 'foreman init'), ' trước, hoặc đặt ', h('code', null, 'FOREMAN_HOME'), ' đúng home rồi chạy lại dashboard.');
   else if (snapshot.state !== 'ready') content = h(F.StateNotice, { state: 'error', actions: h(F.CopyCommand, { quiet: true, label: 'Kiểm tra trong terminal', cli: 'foreman task list --json --summary', onCopied }) }, 'Đọc ', h('code', null, 'data/'), ' thất bại: ', h('code', null, snapshot.error || 'không rõ lỗi'), '. Sẽ tự thử lại.');
-  else if (view === 'board') content = h(Board, { tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
-  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, order: prefs.inboxOrder, onOrder: (v) => setPrefs({ inboxOrder: v }), onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
+  else if (view === 'board') content = h(Board, { banners, tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
+  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, order: prefs.inboxOrder, onOrder: (v) => setPrefs({ inboxOrder: v }), kind: inboxKind, setKind: setInboxKind, marks: load.marks, onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
   else if (view === 'task' && !route.arg) content = h(TaskList, { tasks, now, snap, onOpen: (id) => go('task', id) });
   else if (view === 'task') content = h(TaskPage, { t: tasks.find((t) => t.taskId === route.arg), tasks, now, onBack: () => go('task'), onOpen: (id) => go('task', id) });
   else if (view === 'timeline') content = h(Timeline, { tasks, now, snap, onOpen: (id) => go('task', id) });
