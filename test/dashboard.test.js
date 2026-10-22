@@ -127,6 +127,20 @@ test("the snapshot of a missing home creates nothing, and a damaged task is skip
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
+test("the board lists every routing profile when the default is a Paseo-only profile", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-dashboard-routing-")));
+  try {
+    const routing = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "config", "model-routing.json"), "utf8"));
+    fs.mkdirSync(path.join(base, "config"));
+    fs.writeFileSync(path.join(base, "config", "model-routing.json"), JSON.stringify({ ...routing, default: "antigravity-flash" }));
+    const home = path.join(base, "home");
+    fs.mkdirSync(path.join(home, "data", "tasks"), { recursive: true });
+    const snap = dashboard.buildSnapshot({ roots: { foremanRoot: base, foremanHome: home } });
+    assert.deepEqual(snap.profiles.map((profile) => profile.name).sort(), Object.keys(routing.profiles).sort());
+    assert.ok(snap.profiles.some((profile) => profile.name === "antigravity-flash" && profile.isDefault && profile.tool === "antigravity"));
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test("decision options, recommendations and Next steps are read the way workers and Foreman write them", () => {
   assert.deepEqual(dashboard.decisionOption("B) Keep the agent", 0), { key: "B", title: "Keep the agent", impact: null });
   assert.deepEqual(dashboard.decisionOption("Phương án C - giữ nguyên", 2), { key: "C", title: "giữ nguyên", impact: null });
