@@ -53,13 +53,16 @@ test("a large Foreman session is suggested a new session once per size step, onl
   } finally { f.cleanup(); }
 });
 
-test("init warns when the session inherited another checkout or home", () => {
+test("init warns when the session inherited another checkout or home, and only a session bound to the home claims its heartbeat", () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-init-")));
   try {
     const root = path.join(__dirname, "..");
     const run = (env) => JSON.parse(execFileSync(process.execPath, [path.join(root, "bin", "foreman"), "init", "--home", path.join(base, "home")], { cwd: root, encoding: "utf8", env: { ...process.env, FOREMAN_BACKEND: "paseo", FOREMAN_SHELL_RC: path.join(base, "rc"), ...env } }));
-    const inherited = run({ FOREMAN_ROOT: path.join(base, "other"), FOREMAN_HOME: path.join(base, "other") });
+    const agent = "11111111-1111-4111-8111-111111111111";
+    const inherited = run({ FOREMAN_ROOT: path.join(base, "other"), FOREMAN_HOME: path.join(base, "other"), PASEO_AGENT_ID: agent });
     assert.match(inherited.warning, /inherited FOREMAN_ROOT=.*other and FOREMAN_HOME=.*other/);
+    assert.equal(inherited.foremanAgentId, undefined, "a session bound to another home never takes this home's heartbeat");
+    assert.equal(run({ FOREMAN_ROOT: path.resolve(root), FOREMAN_HOME: path.join(base, "home"), PASEO_AGENT_ID: agent }).foremanAgentId, agent);
     assert.match(fs.readFileSync(path.join(base, "rc"), "utf8"), new RegExp(`FOREMAN_HOME='${path.join(base, "home")}'`), "the startup file still points at the new home");
     assert.equal(run({ FOREMAN_ROOT: path.resolve(root), FOREMAN_HOME: path.join(base, "home") }).warning, undefined, "matching values need no warning");
     fs.symlinkSync(path.join(base, "home"), path.join(base, "link"));
