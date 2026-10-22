@@ -108,6 +108,31 @@ test("a round the user sends instead of answering an open decision sets the deci
   } finally { f.cleanup(); }
 });
 
+test("a round that fails to reach the worker leaves the open decision and the task as they were", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Source shows the token check is missing.");
+    const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "Token check missing", why: "Parity choice", options: ["keep CSRF", "add legacy token"] });
+    const file = path.join(f.roots.foremanHome, "data", "tasks", task.id, "decisions", `${decision.decisionId}.json`);
+    const decisionBefore = fs.readFileSync(file, "utf8");
+    const metaBefore = reconstructTask({ roots: f.roots, taskId: task.id }).meta;
+
+    const send = f.adapter.send;
+    f.adapter.send = () => { throw new Error("runtime unreachable"); };
+    assert.throws(() => continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases at runtime.", original: "test runtime trước", adapter: f.adapter }), /delivery failed/);
+    assert.equal(fs.readFileSync(file, "utf8"), decisionBefore, "the decision is untouched while the round is undelivered");
+    assert.deepEqual(reconstructTask({ roots: f.roots, taskId: task.id }).meta, metaBefore, "the task still waits for the decision");
+
+    f.adapter.send = send;
+    const sent = continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases at runtime.", original: "test runtime trước", adapter: f.adapter });
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(record.status, "superseded", "the retry that is delivered sets the decision aside");
+    assert.equal(record.supersededByRound, sent.round.round);
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.decisionId, null);
+  } finally { f.cleanup(); }
+});
+
 test("proposals are checked against the task, cleared on request, and leave with acceptance", () => {
   const f = fixture();
   try {

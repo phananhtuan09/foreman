@@ -1767,7 +1767,7 @@ function readOpenDecisionUnlocked(roots, meta) {
   const file = meta.decisionId ? path.join(taskDir(roots.foremanHome, meta.taskId), "decisions", `${meta.decisionId}.json`) : null;
   if (!file || !fs.existsSync(file)) throw new ValidationError(`Task ${meta.taskId} is waiting for a decision that is missing on disk`);
   const record = readJson(file);
-  if (record.schemaVersion !== 1 || record.decisionId !== meta.decisionId || record.taskId !== meta.taskId || record.generation !== meta.generation || record.worker !== meta.owner) throw new StaleGenerationError("Decision does not match the current assignment");
+  if (record.schemaVersion !== 1 || record.decisionId !== meta.decisionId || record.taskId !== meta.taskId || record.projectId !== meta.projectId || record.generation !== meta.generation || record.worker !== meta.owner) throw new StaleGenerationError("Decision does not match the current assignment");
   if (!["pending", "answered"].includes(record.status)) throw new ValidationError(`Decision ${record.decisionId} is ${record.status}; it cannot be set aside`);
   return { file, record };
 }
