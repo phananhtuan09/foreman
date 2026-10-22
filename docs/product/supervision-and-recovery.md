@@ -71,7 +71,8 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - The heartbeat exists while a Paseo task is `working` or a notice is untold, and is deleted when neither remains or the user disables it.
 - The prompt hook and every `bin/foreman-paseo` command that starts, changes, or ends watched work run `heartbeat sync`, including `notice ack`.
 - The heartbeat ID is persisted in `data/supervision.json` and never guessed; because Paseo cannot list heartbeats, a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only when Paseo reports it missing.
-- A new Foreman agent replaces the previous agent's recorded heartbeat.
+- The Paseo agent that last ran `init` is the Foreman agent, recorded in `data/supervision.json`; once one is recorded, `heartbeat sync` from any other agent in the checkout, such as a DEV or doctor session, changes nothing.
+- A new Foreman agent claims the heartbeat by running `init`, and its next sync replaces the previous agent's recorded heartbeat.
 - A heartbeat that could not be deleted keeps its record.
 - Paseo heartbeat calls run outside the home lock with a short timeout; the record is checked again before it is written, and a sync that lost a race deletes the heartbeat it just created.
 - Each heartbeat turn uses the prompt hook's single collection and status check, tells the user only the untold notices in one message, records them, and otherwise writes nothing.
@@ -81,6 +82,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - Paseo 0.11 has no silent heartbeat run: a heartbeat turn that writes nothing still sets the agent's `finished` attention and may send a push notification, and plugin hooks cannot change it, so the anti-noise rule covers Foreman's text only.
 - A heartbeat of Foreman's own with no unread report, untold notice, or failed check is quiet: the prompt hook blocks its prompt, so the model does not run, the prompt does not enter the session, and no tokens are spent.
   An anomaly the user was already told does not make a heartbeat worth a model turn.
+- Claude Code still shows a "UserPromptSubmit operation blocked by hook" notice for that blocked prompt; the optional `foreman-dashboard` Paseo plugin hides exactly that notice for Foreman's heartbeat and the quiet reason, and leaves every other blocked prompt visible.
 - Claude Code asks for a visible reply after a turn without text, so a quiet heartbeat turn that still reaches the model writes only `—`.
 
 ### Restart

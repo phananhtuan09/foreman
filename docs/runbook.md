@@ -235,11 +235,12 @@ In a Claude Code session, a user prompt's context adds a `Foreman session size: 
 
 In a Foreman session that runs inside Paseo, `bin/foreman-paseo heartbeat sync` keeps one native Paseo heartbeat for that agent while a Paseo task is `working` or a notice is untold, and deletes it otherwise.
 The prompt hook and the Paseo task commands that start or end watched work run it, so it needs no manual step; it prints `foreman: heartbeat ...` on standard error when it changes something.
+`bin/foreman-paseo init` records its Paseo agent as the Foreman agent; after that, prompts in other agents opened in the checkout (DEV or doctor sessions) never move the heartbeat, and a new Foreman session takes it over by running `init`.
 `heartbeat sync --cron "*/10 * * * *"` changes the cadence (default every five minutes), and `--disable` or `--enable` turns recurring checks off or on.
 Its ID is stored in `data/supervision.json`; Paseo cannot list heartbeats, so a recorded heartbeat that has not fired for fifteen minutes is re-checked by ID and recreated only if Paseo no longer has it.
 Each heartbeat turn arrives as `<paseo-system>Schedule "foreman-supervision" fired (id=...)`; the prompt hook already ran collection and one status check for it.
 When nothing needs the user, the hook blocks the heartbeat prompt (`{"decision":"block"}`), so the model never runs and the prompt does not enter the session.
-Paseo 0.11 still marks the agent `finished`, shows the hook's one-line reason, and may send a push notification after that turn.
+Paseo 0.11 still marks the agent `finished`, shows the hook's one-line reason, and may send a push notification after that turn; the `foreman-dashboard` plugin below hides that reason from the timeline.
 
 If a worker is dead or missing, run the selected wrapper's `status` again to confirm, then `task recover`.
 Recovery is bounded, preserves the workspace, and writes `data/tasks/<id>/handoff.json`; it does not guess that an `unknown` endpoint is dead.
@@ -267,4 +268,5 @@ To reach it from another machine, forward the port over SSH (`ssh -L 18789:127.0
 Pressing either starts `foreman dashboard serve` on the daemon machine when no dashboard answers on the plugin's port (default 18789), then opens it in the browser.
 Install it once per Paseo daemon with `paseo plugin install <abs path>`; set `foremanRoot`, `foremanHome` and `port` in its settings when the defaults do not fit.
 The dashboard it starts is read-only, so the plugin never initializes, migrates, locks, or marks anything in the home, and the process stops when you press "Tắt" (or "Tắt Foreman dashboard" in the Command Center) or when the plugin stops or reloads; one started from a terminal is never stopped.
+It also hides the "UserPromptSubmit operation blocked by hook" notice of a quiet Foreman heartbeat from agent timelines; other blocked prompts stay visible.
 The plugin has its own tests: `npm test` inside the plugin folder; the root `npm test` does not run them.

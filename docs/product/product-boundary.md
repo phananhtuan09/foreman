@@ -58,7 +58,7 @@ This boundary keeps Foreman's global operational context separate from each mana
 
 ## Exceptions
 
-- The optional `paseo-plugins/foreman-dashboard/` plugin is local tooling that only starts and opens the web dashboard below.
+- The optional `paseo-plugins/foreman-dashboard/` plugin is local tooling that only starts and opens the web dashboard below, and hides the blocked-prompt notice of a quiet Foreman heartbeat from Paseo timelines.
   It is not a relay channel or a runtime backend, and it never sends to a worker, mutates Foreman state, or takes the home lock.
 - The [web dashboard](web-dashboard.md) served by `foreman dashboard serve` is local tooling under the same limits: it binds `127.0.0.1`, only reads durable state, and offers only copyable prompts and commands.
 

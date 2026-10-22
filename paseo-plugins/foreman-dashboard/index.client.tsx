@@ -2,6 +2,7 @@ import { openExternalUrl, type PluginClientContext } from "@getpaseo/plugin/clie
 import { ForemanSettings } from "./client/settings";
 import { ForemanButton } from "./client/sidebar";
 import { openDashboardRpc, stopDashboardRpc } from "./shared/foreman";
+import { isQuietForemanHeartbeat } from "./shared/heartbeat";
 
 export default function contribute(client: PluginClientContext) {
   const removers = [
@@ -21,6 +22,10 @@ export default function contribute(client: PluginClientContext) {
       onSelect: async ({ rpc }) => { await rpc(stopDashboardRpc, {}); },
     }),
     client.addSettingsScreen({ id: "foreman-settings", title: "Foreman", icon: "LayoutDashboard", Component: ForemanSettings }),
+    // Hide the "blocked by hook" notice of a quiet Foreman heartbeat, whichever item type the provider maps it to.
+    client.addTimelineTransformer({ id: "quiet-heartbeat-message", query: { itemType: "assistant_message" }, transform: ({ item }) => isQuietForemanHeartbeat(item.text) ? { items: [] } : undefined }),
+    client.addTimelineTransformer({ id: "quiet-heartbeat-notification", query: { itemType: "notification" }, transform: ({ item }) => isQuietForemanHeartbeat(item.message) ? { items: [] } : undefined }),
+    client.addTimelineTransformer({ id: "quiet-heartbeat-error", query: { itemType: "error" }, transform: ({ item }) => isQuietForemanHeartbeat(item.message) ? { items: [] } : undefined }),
   ];
   return () => { for (const remove of removers) remove(); };
 }

@@ -2402,6 +2402,11 @@ function syncHeartbeat({ roots, adapter, agentId, anomalies, cron, enable }) {
   return supervision.syncHeartbeat({ home: roots.foremanHome, adapter, agentId, metas, anomalies, cron, enable, at: now(), withLock });
 }
 
+function claimForemanAgent({ roots, agentId }) {
+  initHome(roots);
+  return withHomeLock(roots.foremanHome, () => supervision.claimForemanAgentUnlocked(roots.foremanHome, agentId));
+}
+
 // Pending points belong to a live task; an accepted or discarded task has none.
 function liveTask(home, taskId) {
   const meta = readMeta(home, taskId);
@@ -2542,7 +2547,7 @@ module.exports = {
   HerdrAdapter, atomicWrite, atomicJson, resolveRoots, initHome, HomeLock, withHomeLock, validateVersionedRecord, migrateJsonRecord,
   registerProject, removeProject, createTask, routeTask, confirmTaskProfile, initRoutingConfig, loadRoutingConfig, validateRoutingConfig, runRouterCommand,
   assignTask, adoptExistingWorker, reconstructTask, acceptTask, discardTask,
-  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, sessionHookContext, sessionHookOutput, sessionSizeNudge, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, REPORT_STATUSES,
+  recordReport, recordPaseoReport, collectPaseoReports, parsePaseoReport, workerStopHook, sessionContext, sessionHookContext, sessionHookOutput, sessionSizeNudge, supervisionCheck, renderSupervision, ackNotices, syncHeartbeat, claimForemanAgent, REPORT_STATUSES,
   proposeNextAction, nextActions, clearNextAction, taskHistory,
   addAttentionPoint, resolveAttentionPoint, snoozeAttentionPoint, reopenAttentionPoint, attentionReview, taskAttention, renderAttention: attention.renderAttention,
   sendWorkerMessage, continueTask, replaceTaskBrief, createDecision, answerDecision, deliverDecision, promoteScout,
