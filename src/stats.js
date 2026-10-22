@@ -34,7 +34,9 @@ function transitions(events) {
     else if (event.type === "report") steps.push({ at: event.at, side: event.status === "progress" ? "worker" : "user" });
     else if (event.type === "decision") {
       steps.push({ at: event.at, side: "user" });
-      if (event.answeredAt) steps.push({ at: event.answeredAt, side: "worker" });
+      // A round the user sent instead of answering also ends the wait on the user.
+      const answeredAt = event.answeredAt || event.supersededAt;
+      if (answeredAt) steps.push({ at: answeredAt, side: "worker" });
     } else if (event.type === "accepted" || event.type === "discarded") steps.push({ at: event.at, side: "end" });
   }
   return steps.sort(byTime);
@@ -61,7 +63,7 @@ function responseSamples(events, sinceMs, nowMs) {
   const ordered = [...events].sort(byTime);
   const moveOn = (index) => ordered.slice(index + 1).find((event) => ["round", "accepted", "discarded", "report", "decision"].includes(event.type));
   ordered.forEach((event, index) => {
-    if (event.type === "decision" && event.answeredAt) samples.push({ kind: "decision", from: event.at, to: event.answeredAt });
+    if (event.type === "decision" && (event.answeredAt || event.supersededAt)) samples.push({ kind: "decision", from: event.at, to: event.answeredAt || event.supersededAt });
     if (event.type === "report" && (event.status === "blocked" || event.status === "done")) {
       const next = moveOn(index);
       if (next && (next.type === "round" || next.type === "accepted")) samples.push({ kind: event.status === "blocked" ? "blocked" : "review", from: event.at, to: next.at });

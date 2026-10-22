@@ -68,6 +68,8 @@ When several tasks have a current next action and the reference is vague, ask wh
 ## Rounds
 
 Answer a worker's report on a task, including `blocked`, with the active wrapper's `task continue --task ID --text ... --original ...`, after the user agrees.
+When the task waits for a decision, a reply that chooses or answers it goes verbatim through `decision answer` and `decision deliver`.
+A reply that asks for other work instead, such as investigating further without choosing, is the user's next round: rewrite it, confirm it, and send it with `task continue`, which sets the decision aside as `superseded`; never route it through `decision answer` or make the user answer the decision first.
 Create a Decision Package only when you yourself see a product, architecture, compatibility, security, or operational choice that needs the user.
 Pass `--type` only when the user clearly switches between investigating and changing code ("fix it", "do not change anything more"); otherwise leave the mode as it is and say which mode the round runs in.
 A task that has ever changed code keeps its write lease until acceptance, even when a later round only investigates.

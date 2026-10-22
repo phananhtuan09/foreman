@@ -51,7 +51,7 @@ function decisionEvents(dir) {
   return fs.readdirSync(decisionsDir).filter((name) => name.endsWith(".json")).flatMap((name) => {
     const decision = readOptionalJson(path.join(decisionsDir, name));
     if (!decision?.createdAt) return [];
-    return [{ type: "decision", at: decision.createdAt, decisionId: decision.decisionId, generation: decision.generation, answeredAt: decision.answeredAt || null, deliveredAt: decision.deliveredAt || null }];
+    return [{ type: "decision", at: decision.createdAt, decisionId: decision.decisionId, generation: decision.generation, answeredAt: decision.answeredAt || null, deliveredAt: decision.deliveredAt || null, supersededAt: decision.supersededAt || null }];
   });
 }
 

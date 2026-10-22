@@ -2,6 +2,7 @@ import { openExternalUrl, type PluginClientContext } from "@getpaseo/plugin/clie
 import { ForemanSettings } from "./client/settings";
 import { ForemanButton } from "./client/sidebar";
 import { openDashboardRpc, stopDashboardRpc } from "./shared/foreman";
+import { isQuietForemanHeartbeat } from "./shared/heartbeat";
 
 export default function contribute(client: PluginClientContext) {
   const removers = [
@@ -21,6 +22,8 @@ export default function contribute(client: PluginClientContext) {
       onSelect: async ({ rpc }) => { await rpc(stopDashboardRpc, {}); },
     }),
     client.addSettingsScreen({ id: "foreman-settings", title: "Foreman", icon: "LayoutDashboard", Component: ForemanSettings }),
+    // Claude Code's notice for a blocked quiet Foreman heartbeat reaches the timeline as an assistant message.
+    client.addTimelineTransformer({ id: "quiet-heartbeat", query: { itemType: "assistant_message" }, transform: ({ item }) => isQuietForemanHeartbeat(item.text) ? { items: [] } : undefined }),
   ];
   return () => { for (const remove of removers) remove(); };
 }

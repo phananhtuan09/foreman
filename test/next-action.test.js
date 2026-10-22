@@ -24,7 +24,7 @@ test("next propose prints its highlight line by default and preserves the full o
     const args = [path.join(__dirname, "..", "bin", "foreman"), "next", "propose", "--task", task.id, "--kind", "round", "--text", "Kiểm chứng migration còn thiếu", "--instruction", VERIFY];
     const env = { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" };
     const printed = execFileSync(process.execPath, args, { encoding: "utf8", env });
-    assert.equal(printed, `> ### ▶ BƯỚC TIẾP · ${task.id}\n>\n> **Kiểm chứng migration còn thiếu**\n>\n> 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua\n`);
+    assert.equal(printed, `> ▶ **Bước tiếp · ${task.id}** · Kiểm chứng migration còn thiếu\n>\n> 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua\n`);
     const json = JSON.parse(execFileSync(process.execPath, [...args, "--json"], { encoding: "utf8", env }));
     assert.equal(json.line, printed.replace(/\n$/u, ""));
     assert.equal(json.taskId, task.id);
@@ -41,7 +41,7 @@ test("the one shown next action is sent verbatim when the user agrees, and only 
     const { task, assignment } = routeAndAssign(f, "Implement the migration; do not change the PR description.", "ship");
     report(f, assignment, "done", "Implemented. Next steps: 1. Update the PR description 2. Verify the migration");
     const shown = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Kiểm chứng migration còn thiếu", instruction: VERIFY });
-    assert.match(shown.line, new RegExp(`^> ### ▶ BƯỚC TIẾP · ${task.id}\n>\n> \\*\\*Kiểm chứng migration còn thiếu\\*\\*\n`));
+    assert.match(shown.line, new RegExp(`^> ▶ \\*\\*Bước tiếp · ${task.id}\\*\\* · Kiểm chứng migration còn thiếu\n`));
     assert.deepEqual(nextActions({ roots: f.roots }).map((item) => [item.taskId, item.current]), [[task.id, true]]);
 
     // A fresh session still knows what "send that step" means.
@@ -79,6 +79,57 @@ test("a proposal made out of date by a new report, round, or decision is refused
     proposeNextAction({ roots: f.roots, taskId: task.id, kind: "decision", text: "Chọn schema: giữ cột cũ hay tách bảng?" });
     createDecision({ roots: f.roots, taskId: task.id, finding: "Schema choice", why: "Compatibility", options: ["keep", "split"] });
     assert.match(nextActions({ roots: f.roots, taskId: task.id })[0].stale.join("; "), /decision changed/);
+  } finally { f.cleanup(); }
+});
+
+test("a round the user sends instead of answering an open decision sets the decision aside", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Source shows the token check is missing.");
+    const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "Token check missing", why: "Parity choice", options: ["keep CSRF", "add legacy token"] });
+    const file = path.join(f.roots.foremanHome, "data", "tasks", task.id, "decisions", `${decision.decisionId}.json`);
+
+    const sent = continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases on the running legacy and new apps.", original: "chưa chọn, test runtime trước", adapter: f.adapter });
+    assert.equal(sent.round.original, "chưa chọn, test runtime trước", "the user's own words are kept verbatim on the round");
+    assert.match(f.adapter.sent.at(-1).prompt, /Test the token cases/);
+    const { meta } = reconstructTask({ roots: f.roots, taskId: task.id });
+    assert.equal(meta.status, "working");
+    assert.equal(meta.decisionId, null);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(record.status, "superseded");
+    assert.equal(record.supersededByRound, sent.round.round);
+    assert.equal(record.humanResponse, null, "setting a decision aside is not an answer to it");
+    assert.equal(record.finding, "Token check missing", "the original Decision Package is preserved");
+
+    // A later decision can be asked, since the earlier one no longer holds the task.
+    report(f, assignment, "done", "Runtime shows one real difference.");
+    assert.equal(createDecision({ roots: f.roots, taskId: task.id, finding: "Stale confirm accepted", why: "Parity choice", options: ["accept", "fix"] }).status, "pending");
+  } finally { f.cleanup(); }
+});
+
+test("a round that fails to reach the worker leaves the open decision and the task as they were", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Source shows the token check is missing.");
+    const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "Token check missing", why: "Parity choice", options: ["keep CSRF", "add legacy token"] });
+    const file = path.join(f.roots.foremanHome, "data", "tasks", task.id, "decisions", `${decision.decisionId}.json`);
+    const decisionBefore = fs.readFileSync(file, "utf8");
+    const metaBefore = reconstructTask({ roots: f.roots, taskId: task.id }).meta;
+
+    const send = f.adapter.send;
+    f.adapter.send = () => { throw new Error("runtime unreachable"); };
+    assert.throws(() => continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases at runtime.", original: "test runtime trước", adapter: f.adapter }), /delivery failed/);
+    assert.equal(fs.readFileSync(file, "utf8"), decisionBefore, "the decision is untouched while the round is undelivered");
+    assert.deepEqual(reconstructTask({ roots: f.roots, taskId: task.id }).meta, metaBefore, "the task still waits for the decision");
+
+    f.adapter.send = send;
+    const sent = continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases at runtime.", original: "test runtime trước", adapter: f.adapter });
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(record.status, "superseded", "the retry that is delivered sets the decision aside");
+    assert.equal(record.supersededByRound, sent.round.round);
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.decisionId, null);
   } finally { f.cleanup(); }
 });
 
@@ -133,7 +184,7 @@ test("a round that switches the task's mode says so in the shown line, and a cha
     const { task, assignment } = routeAndAssign(f, "Inspect the README.", "scout");
     report(f, assignment, "done", "Found the typo on line 3.");
     const shown = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });
-    assert.match(shown.line, /> \*\*Sửa lỗi chính tả ở dòng 3\*\*\n>\n> ⚠️ Đổi sang chế độ ship: worker được ghi vào workspace\n/);
+    assert.match(shown.line, /\*\* · Sửa lỗi chính tả ở dòng 3\n>\n> ⚠️ Đổi sang chế độ ship: worker được ghi vào workspace\n/);
     const same = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc thêm phần cài đặt", instruction: "Read the install section.", type: "scout" });
     assert.doesNotMatch(same.line, /chế độ/, "no mode note when the mode stays the same");
     proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });

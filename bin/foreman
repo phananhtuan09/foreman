@@ -177,8 +177,11 @@ function main() {
     // resolveRoots resolves symlinks, so an inherited path that reaches the same directory through one is not a mismatch.
     const real = (p) => fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p);
     const inherited = ["FOREMAN_ROOT", "FOREMAN_HOME"].filter((key) => process.env[key] && real(process.env[key]) !== real(key === "FOREMAN_ROOT" ? home.foremanRoot : home.foremanHome));
+    // A Foreman session runs init first, so its Paseo agent becomes the only one that manages the heartbeat.
+    // A session bound to another checkout or home is not this home's Foreman session, so it never takes the heartbeat.
+    const foremanAgentId = selectedBackend() === "paseo" && process.env.PASEO_AGENT_ID && !inherited.length ? core.claimForemanAgent({ roots: home, agentId: process.env.PASEO_AGENT_ID }) : undefined;
     const warning = inherited.length ? `This session inherited ${inherited.map((key) => `${key}=${process.env[key]}`).join(" and ")}, so its Foreman commands keep using that checkout and home until it starts with the new values; open a new terminal or agent session before running Foreman commands.` : undefined;
-    output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed }, ...(warning ? { warning } : {}) });
+    output({ ...initialized, backend: selectedBackend(), routingConfig: routing.file, shellEnv: { file: shell.file, shell: shell.shell, changed: shell.changed }, ...(foremanAgentId ? { foremanAgentId } : {}), ...(warning ? { warning } : {}) });
     return;
   }
   if (command === "worker" && action === "hook") {

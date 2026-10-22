@@ -80,7 +80,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── messages/         durable Foreman-to-worker outbox and message lifecycle
   ├── inbox/            images staged from the Foreman session, kept seven days
   ├── sessions/         the Foreman session transcript path recorded by the prompt hook
-  ├── supervision.json  the Paseo heartbeat Foreman manages and the fleet notices already told to the user
+  ├── supervision.json  the Paseo heartbeat Foreman manages, the Foreman agent that manages it, and the fleet notices already told to the user
   ├── status-check.json the last fleet-wide status check and Paseo collection per backend, kept for the web dashboard
   └── task-history.jsonl
                         one metadata line per accepted or discarded task, kept 365 days by default

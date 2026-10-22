@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
-  resolveRoots, withHomeLock, createTask, fleetStatus, sessionContext, sessionHookContext, sessionHookOutput, supervisionCheck, ackNotices, syncHeartbeat, continueTask, createDecision, reconstructTask, acceptTask,
+  resolveRoots, withHomeLock, createTask, fleetStatus, sessionContext, sessionHookContext, sessionHookOutput, supervisionCheck, ackNotices, syncHeartbeat, claimForemanAgent, continueTask, createDecision, reconstructTask, acceptTask,
 } = require("../src/foreman");
 const { HEARTBEAT_PROMPT, HEARTBEAT_NAME, readSupervision, supervisionFile } = require("../src/supervision");
 const { PaseoAdapter } = require("../src/paseo");
@@ -342,5 +342,28 @@ test("a recorded heartbeat is deleted when heartbeat sync --disable runs outside
     assert.equal(disabled.action, "deleted");
     assert.equal(f.adapter.heartbeats.size, 0);
     assert.equal(readSupervision(f.roots.foremanHome).heartbeatEnabled, false);
+  } finally { f.cleanup(); }
+});
+
+test("once init claims the Foreman agent, a prompt in another agent of the checkout never moves the heartbeat", () => {
+  const f = heartbeatFixture();
+  const OTHER_AGENT = "33333333-3333-4333-8333-333333333333";
+  try {
+    routeAndAssign(f);
+    claimForemanAgent({ roots: f.roots, agentId: FOREMAN_AGENT });
+    assert.equal(syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: FOREMAN_AGENT }).action, "created");
+    const [heartbeatId] = f.adapter.heartbeats.keys();
+
+    const foreign = sessionHookOutput(sessionHookContext({ roots: f.roots, adapter: f.adapter, prompt: "/foreman-doctor check", cwd: f.projectRoot, agentId: OTHER_AGENT }));
+    assert.equal(foreign, null, "another agent's prompt neither moves the heartbeat nor tells anything about it");
+    assert.equal(syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: OTHER_AGENT, enable: false }).action, "unavailable");
+    assert.deepEqual([...f.adapter.heartbeats.values()].map((heartbeat) => [heartbeat.id, heartbeat.agentId]), [[heartbeatId, FOREMAN_AGENT]]);
+    assert.equal(readSupervision(f.roots.foremanHome).heartbeatEnabled, true, "another agent cannot change the heartbeat settings");
+
+    // A new Foreman session claims the heartbeat by running init, then takes it over.
+    claimForemanAgent({ roots: f.roots, agentId: NEXT_FOREMAN_AGENT });
+    const replaced = syncHeartbeat({ roots: f.roots, adapter: f.adapter, agentId: NEXT_FOREMAN_AGENT });
+    assert.equal(replaced.replaced, heartbeatId);
+    assert.deepEqual([...f.adapter.heartbeats.values()].map((heartbeat) => heartbeat.agentId), [NEXT_FOREMAN_AGENT]);
   } finally { f.cleanup(); }
 });

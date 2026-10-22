@@ -37,7 +37,7 @@ function validCron(cron) {
 
 function supervisionFile(home) { return path.join(home, "data", "supervision.json"); }
 
-function emptySupervision() { return { schemaVersion: 1, notified: {}, heartbeat: null, heartbeatCron: DEFAULT_HEARTBEAT_CRON, heartbeatEnabled: true }; }
+function emptySupervision() { return { schemaVersion: 1, notified: {}, heartbeat: null, heartbeatCron: DEFAULT_HEARTBEAT_CRON, heartbeatEnabled: true, foremanAgentId: null }; }
 
 function readSupervision(home) {
   const file = supervisionFile(home);
@@ -50,6 +50,14 @@ function readSupervision(home) {
 }
 
 function writeSupervisionUnlocked(home, record) { atomicJson(supervisionFile(home), { ...record, schemaVersion: 1 }); }
+
+// The Paseo agent whose `init` ran last is the Foreman session; only it manages the heartbeat, so a prompt in another
+// agent opened in this checkout (a DEV or doctor session) never moves the heartbeat away from Foreman.
+function claimForemanAgentUnlocked(home, agentId) {
+  const supervision = readSupervision(home);
+  if (supervision.foremanAgentId !== agentId) writeSupervisionUnlocked(home, { ...supervision, foremanAgentId: agentId });
+  return agentId;
+}
 
 function shortDigest(text) { return crypto.createHash("sha256").update(String(text)).digest("hex").slice(0, 12); }
 
@@ -194,6 +202,10 @@ function syncHeartbeat({ withLock = (fn) => fn(), ...params }) {
 function runHeartbeatSync({ home, adapter, agentId, metas, anomalies, cron, enable, at }, withLock, created) {
   if (cron !== undefined && !validCron(cron)) throw new SchemaValidationError(`Heartbeat cron is not a valid five-field cron: ${cron}`);
   const supervision = withLock(() => readSupervision(home));
+  // Before any init has claimed a Foreman agent, the calling agent is trusted as before.
+  if (agentId && supervision.foremanAgentId && agentId !== supervision.foremanAgentId) {
+    return { needed: null, action: "unavailable", reason: `this Paseo agent is not the Foreman session (${supervision.foremanAgentId}); run init in a Foreman session to move the heartbeat`, heartbeatId: supervision.heartbeat?.heartbeatId || null };
+  }
   const settings = {
     heartbeatCron: cron !== undefined ? String(cron).trim() : supervision.heartbeatCron || DEFAULT_HEARTBEAT_CRON,
     heartbeatEnabled: enable !== undefined ? Boolean(enable) : supervision.heartbeatEnabled !== false,
@@ -280,5 +292,5 @@ function runHeartbeatSync({ home, adapter, agentId, metas, anomalies, cron, enab
 module.exports = {
   validCron, DEFAULT_HEARTBEAT_CRON, HEARTBEAT_NAME, HEARTBEAT_PROMPT,
   supervisionFile, readSupervision, taskNotices, collectNotices, pendingNotices, pruneNotifiedUnlocked, ackNoticesUnlocked,
-  parseHeartbeatPrompt, heartbeatNeeded, recordHeartbeatFiredUnlocked, syncHeartbeat,
+  parseHeartbeatPrompt, heartbeatNeeded, recordHeartbeatFiredUnlocked, claimForemanAgentUnlocked, syncHeartbeat,
 };

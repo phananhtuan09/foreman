@@ -52,6 +52,7 @@ The status check lists only the selected backend once, classifies its assignment
 It never changes task state or interrupts a worker; a fleet-wide check, and each Paseo collection, keeps its result per backend in `data/status-check.json` for read-only viewers, and acceptance or discard removes the task from it.
 The prompt hook also derives notices from task state and that status check, and lists those not yet marked told; `notice ack` writes the mark after Foreman tells the user.
 In Paseo mode, `heartbeat sync` creates or deletes the Foreman agent's one Paseo heartbeat through the Paseo CLI as watched work starts and ends, and the hook recognizes its `<paseo-system>` prompt and blocks it before the model runs when nothing needs the user.
+Only the agent recorded by `init` as `foremanAgentId` in `data/supervision.json` syncs the heartbeat once one is recorded.
 Recovery is started explicitly by Foreman after the status check confirms `dead` or `missing`, and composes inspect, stop, and spawn.
 Herdr creates a separate workspace for each new worker and receives a concise text prompt.
 Paseo creates an agent in a verified Foreman workspace, receives the durable prompt through the SDK, and exposes turn status and timeline data for report collection.
@@ -81,7 +82,7 @@ A record without a schema version is validated as version 1 in memory and left u
 It returns `{ tasks, skipped }` for every task except `accepted` and `cleaned`, with only the fields a board shows: ID, project, type, round, status, backend, endpoint, dispatch and routing profile, `needsProfileConfirmation`, a one-line title by the `taskBriefLine` rule, and the user's own wording of the task: `original.md` (else `brief.md`) plus the `original` of each delivered round.
 A missing home yields an empty result and creates nothing.
 
-`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that only launches the web dashboard.
+`paseo-plugins/foreman-dashboard/` is an optional Paseo plugin that launches the web dashboard and, through client timeline transformers, hides the blocked-prompt notice of a quiet Foreman heartbeat.
 Its sidebar button and Command Center item call one daemon-side RPC, which reuses a dashboard already answering on the configured port or else runs `bin/foreman dashboard serve` without a shell, then the app opens the address in the browser.
 The process it starts belongs to the plugin and stops with it.
 It is local tooling, not a relay channel or a runtime backend, and it sends nothing to workers or the Foreman session.

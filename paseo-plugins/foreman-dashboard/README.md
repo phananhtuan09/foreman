@@ -2,6 +2,7 @@
 
 A sidebar button and a Command Center item ("Mở Foreman dashboard") that open the read-only Foreman web dashboard, and a "Tắt" button beside it (Command Center: "Tắt Foreman dashboard") that stops it.
 The plugin shows no board of its own; the board is `foreman dashboard serve` (see `docs/product/web-dashboard.md`).
+It also hides, in every agent timeline, the "UserPromptSubmit operation blocked by hook" notice that Claude Code shows when the Foreman prompt hook blocks a quiet `foreman-supervision` heartbeat; a block for any other schedule or reason stays visible.
 
 ## Install
 
@@ -44,5 +45,5 @@ A failure (no `foremanRoot`, port taken by something else, `bin/foreman` missing
 npm test
 ```
 
-Covers reuse of a running dashboard, a single shared start for concurrent presses, stopping on request and with the plugin, never stopping a dashboard it did not start, a process that exits early, a missing setup, and a dashboard that never answers.
+Covers hiding only the quiet Foreman heartbeat notice, reuse of a running dashboard, a single shared start for concurrent presses, stopping on request and with the plugin, never stopping a dashboard it did not start, a process that exits early, a missing setup, and a dashboard that never answers.
 The root `npm test` runs only `test/*.test.js` and does not pick these up.

@@ -19,8 +19,10 @@ Blockers and decisions are persisted with the human response verbatim so authori
 - When Foreman itself sees a choice that needs product, architecture, compatibility, security, operational, or acceptance authority, it persists a complete Decision Package before asking the user.
 - Decision records live under `data/tasks/<id>/decisions/` and preserve the original Decision Package and the human response verbatim.
 - Each Decision Package contains the finding, why human authority is required, concrete options, impact, evidence, and either the worker recommendation or an explicit statement that no recommendation is available.
-- Decision lifecycle is `pending`, `answered`, and `delivered`.
-- A task holds at most one undelivered decision for its current generation; a new decision is refused until that one is delivered.
+- Decision lifecycle is `pending`, `answered`, and `delivered`, or `superseded` when the user sends other work instead.
+- A task holds at most one undelivered decision for its current generation; a new decision is refused until that one is delivered or superseded.
+- A waiting decision never blocks the user's own request: when the user replies with other work instead of answering it, that reply becomes the next round, confirmed and sent like any round.
+- Sending that round marks the decision `superseded` with the time and the round; the Decision Package stays on disk, records no human response, and the user's words stay verbatim on the round.
 - The human response is delivered through the durable outbox to the current generation.
 - Foreman does not resume authority-blocked work until the selected runtime accepts delivery to the current assignment generation; that delivery returns the task to `working`.
 

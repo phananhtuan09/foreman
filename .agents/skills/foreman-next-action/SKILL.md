@@ -36,6 +36,7 @@ There is no fixed proposal → implement → test sequence: when the user asked 
 | Goal reached and nothing pending | Suggest accepting the task (`accept`); never accept it yourself. |
 | Facts missing to choose a safe step | Name exactly what must be clarified (`clarify`); do not guess a technical solution. |
 | Only the user's choice, permission, or information can unblock it | A short question with clear options (`decision`). |
+| The user asked to verify something, and the result rests only on reading code or records while the behavior can be run | Verify it at runtime first (`round`), and say which limits apply, such as writes to a database; ask for a choice only after that evidence. |
 
 Prefer a step the worker can do; ask the user only for a decision, permission, or information that is really missing.
 
@@ -48,9 +49,7 @@ The command prints the highlight block by default; use `--json` only when the fu
 Show that block exactly as printed at the end of the answer, after the result; for a round it reads:
 
 ```markdown
-> ### ▶ BƯỚC TIẾP · T-42
->
-> **Kiểm chứng migration còn thiếu**
+> ▶ **Bước tiếp · T-42** · Kiểm chứng migration còn thiếu
 >
 > 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua
 ```
