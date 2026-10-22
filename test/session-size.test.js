@@ -37,7 +37,7 @@ test("a large Foreman session is suggested a new session once per size step, onl
     const first = ask(transcript(f, lines));
     assert.match(first, /Foreman session size: nudge 1\. This session holds about 162k tokens/);
     assert.match(first, /a new Foreman session would be much cheaper/);
-    assert.match(first, /^> ### ⚠️ PHIÊN ĐÃ DÀI · ~162k token$/m, "the suggestion comes as a block that stands apart from the answer");
+    assert.match(first, /^> ⚠️ \*\*Phiên đã dài \(~162k token\)\*\* · /m, "the suggestion comes as a quoted line that stands apart from the answer");
     assert.match(first, /still waiting for the user's confirmation/);
 
     // Claude Code keeps the added context in the transcript, so the same step is not suggested again.

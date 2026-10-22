@@ -49,7 +49,7 @@ Recovery replaces a worker only when evidence confirms it is gone, without losin
 - Otherwise it returns `hookSpecificOutput.additionalContext`, listing each unread worker report with its task, status, time, task status, and report path.
 - The context also lists the anomalies of one status check when the selected backend is explicit, `HERDR_ENV=1`, or the active task records identify one backend.
 - The reports it prints are marked read.
-- On a user prompt in a Claude Code session, it reads the context size of the last model call from the session transcript; each time that size passes another 150k tokens, it adds one `Foreman session size: nudge N` line with a ready-made `⚠️ PHIÊN ĐÃ DÀI` block that Foreman shows as the last part of that answer, so the suggestion stands apart from the rest.
+- On a user prompt in a Claude Code session, it reads the context size of the last model call from the session transcript; each time that size passes another 150k tokens, it adds one `Foreman session size: nudge N` line with a ready-made one-line `⚠️ Phiên đã dài` quote that Foreman shows as the last part of that answer, so its border sets the suggestion apart from the rest.
   The line stays in the transcript, so each step is suggested once; a heartbeat turn and a transcript without Claude Code usage get no line.
   The suggestion warns that a rewritten instruction still waiting for confirmation must be confirmed first or asked again, because confirmation lives only in the conversation.
 - It also lists the notices the user has not been told, and on a Foreman heartbeat turn with something to tell it always prints, so the turn knows its collection and status check already ran.
