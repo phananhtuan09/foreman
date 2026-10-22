@@ -265,8 +265,6 @@ test("continue refuses a task that is not waiting for the user", () => {
     assert.throws(() => proceed(f, task.id, { interrupt: true }), /unknown/);
     f.workers.get(assignment.endpoint).status = "idle";
     report(f, assignment, "blocked", "which db?");
-    createDecision({ roots: f.roots, taskId: task.id, finding: "db", why: "needs product call", options: ["a", "b"] });
-    assert.throws(() => proceed(f, task.id), /waiting for a human decision/);
     assert.throws(() => proceed(f, task.id, { text: " ", original: "x" }), /non-empty instruction/);
     assert.throws(() => proceed(f, task.id, { original: "" }), /original wording/);
     const queued = createTask({ roots: f.roots, projectId: "app", brief: "later" });

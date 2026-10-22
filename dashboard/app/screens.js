@@ -11,7 +11,7 @@ function table(head, rows, { wrap = true, compact = false } = {}) {
 }
 const link = (id, onOpen, label) => h('button', { type: 'button', className: 'fm-link', onClick: () => onOpen(id) }, label || id);
 const messageTone = (state) => (state === 'failed' ? 'red' : state === 'pending' ? 'mustard' : 'green');
-const DECISION_STATE = { pending: 'chờ bạn', answered: 'đã trả lời, chưa gửi', delivered: 'đã gửi agent' };
+const DECISION_STATE = { pending: 'chờ bạn', answered: 'đã trả lời, chưa gửi', delivered: 'đã gửi agent', superseded: 'bạn đã gửi yêu cầu khác' };
 
 // ================= Task page =================
 export function TaskPage({ t, tasks, now, onBack, onOpen, onCopied }) {

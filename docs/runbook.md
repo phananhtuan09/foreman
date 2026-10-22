@@ -120,7 +120,8 @@ Foreman collects finished responses with `bin/foreman-paseo task collect`, verif
 Paseo workers do not invoke `foreman report` or rely on the Herdr stop hook.
 
 A task is a series of rounds with the same worker.
-`task continue --task ID --text TEXT --original TEXT` answers a report with the next round: it needs the instruction and the user's words, requires a task in `review-ready` or `blocked` (or `working` once the worker has reported), and refuses a task waiting for a decision.
+`task continue --task ID --text TEXT --original TEXT` answers a report with the next round: it needs the instruction and the user's words, requires a task in `review-ready`, `blocked`, or `waiting-decision` (or `working` once the worker has reported).
+On a task waiting for a decision, the delivered round marks that decision `superseded` (`supersededAt`, `supersededByRound`) instead of answering it; answer the decision itself with `decision answer` and `decision deliver`.
 A worker that is still running is refused unless `--interrupt` is given; an unreadable (`unknown`) state is always refused.
 `--interrupt` sends Ctrl-C only to a worker that is running, and the new round records which round it replaces.
 `--type ship|scout` switches mode at the round boundary: switching to ship claims the project workspace exclusively unless `--resources` is given, and a task that has ever shipped keeps its write lease for later investigating rounds.

@@ -234,6 +234,25 @@ test("stats count one answer once, start waiting at the first worker, and skip d
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
+test("a decision the user set aside with a new round counts as answered when the round was sent", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-stats-superseded-")));
+  try {
+    const at = (hour) => new Date(Date.UTC(2026, 9, 20, hour)).toISOString();
+    const events = [
+      { type: "dispatch", at: at(0) },
+      { type: "report", at: at(1), status: "done" },
+      { type: "decision", at: at(1), supersededAt: at(3) },
+      { type: "round", at: at(3) },
+      { type: "accepted", at: at(4) },
+    ];
+    fs.mkdirSync(path.join(home, "data"), { recursive: true });
+    fs.writeFileSync(history.historyFile(home), `${JSON.stringify({ schemaVersion: 1, taskId: "T-000001", projectId: "app", outcome: "accepted", endedAt: at(4), events })}\n`);
+    const result = stats.fleetStats({ home, since: "2026-10-19", now: new Date(at(10)) });
+    assert.deepEqual(result.response.decision, { count: 1, averageMs: 2 * 60 * 60 * 1000 });
+    assert.deepEqual(result.waiting, { userMs: 2 * 60 * 60 * 1000, workerMs: 2 * 60 * 60 * 1000 });
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test("the stats command does not create a missing home", () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foreman-stats-cli-")));
   try {

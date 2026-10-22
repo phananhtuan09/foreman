@@ -82,6 +82,32 @@ test("a proposal made out of date by a new report, round, or decision is refused
   } finally { f.cleanup(); }
 });
 
+test("a round the user sends instead of answering an open decision sets the decision aside", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    report(f, assignment, "done", "Source shows the token check is missing.");
+    const decision = createDecision({ roots: f.roots, taskId: task.id, finding: "Token check missing", why: "Parity choice", options: ["keep CSRF", "add legacy token"] });
+    const file = path.join(f.roots.foremanHome, "data", "tasks", task.id, "decisions", `${decision.decisionId}.json`);
+
+    const sent = continueTask({ roots: f.roots, taskId: task.id, text: "Test the token cases on the running legacy and new apps.", original: "chưa chọn, test runtime trước", adapter: f.adapter });
+    assert.equal(sent.round.original, "chưa chọn, test runtime trước", "the user's own words are kept verbatim on the round");
+    assert.match(f.adapter.sent.at(-1).prompt, /Test the token cases/);
+    const { meta } = reconstructTask({ roots: f.roots, taskId: task.id });
+    assert.equal(meta.status, "working");
+    assert.equal(meta.decisionId, null);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(record.status, "superseded");
+    assert.equal(record.supersededByRound, sent.round.round);
+    assert.equal(record.humanResponse, null, "setting a decision aside is not an answer to it");
+    assert.equal(record.finding, "Token check missing", "the original Decision Package is preserved");
+
+    // A later decision can be asked, since the earlier one no longer holds the task.
+    report(f, assignment, "done", "Runtime shows one real difference.");
+    assert.equal(createDecision({ roots: f.roots, taskId: task.id, finding: "Stale confirm accepted", why: "Parity choice", options: ["accept", "fix"] }).status, "pending");
+  } finally { f.cleanup(); }
+});
+
 test("proposals are checked against the task, cleared on request, and leave with acceptance", () => {
   const f = fixture();
   try {

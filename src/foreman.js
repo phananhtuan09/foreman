@@ -1692,8 +1692,9 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
       if (resources !== undefined) throw new ValidationError("A round sent from the next action uses its stored resources; do not pass --resources");
       requestedType = proposedType;
     }
-    if (meta.status === "waiting-decision") throw new ValidationError(`Task ${taskId} is waiting for a human decision; answer it with decision answer`);
-    if (!["working", "blocked", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
+    // A round the user sends instead of answering the open decision sets that decision aside; it stays on disk as superseded.
+    const openDecision = meta.status === "waiting-decision" ? readOpenDecisionUnlocked(roots, meta) : null;
+    if (!["working", "blocked", "waiting-decision", "review-ready"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; only a task with an assigned worker can continue`);
     if (!meta.endpoint || !meta.owner) throw new DeliveryError("Task has no active worker endpoint");
     if (!adapter || typeof adapter.inspect !== "function") throw new DeliveryError("A runtime adapter is required to continue a task");
     const activity = endpointActivity(adapter, meta);
@@ -1752,12 +1753,23 @@ function continueTask({ roots, taskId, text, original, type, resources, interrup
       throw new DeliveryError(`Worker of ${taskId} was interrupted but round ${round} was not delivered; it is idle, retry with task continue --interrupt: ${error.message}`);
     }
     coordination.writeRoundUnlocked({ roots, record: { ...record, status: "delivered", deliveredAt: now(), messageId: delivery.message.messageId } });
+    if (openDecision) atomicJson(openDecision.file, { ...openDecision.record, status: "superseded", supersededAt: now(), supersededByRound: round });
     const { interruptedRound: _interrupted, interruptUnconfirmed: _unconfirmed, ...current } = prospective;
     // A delivered round answers whatever next action was shown, so it is never offered again.
-    const next = { ...current, status: "working", completionReport: null, round, nextAction: null, lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
+    const next = { ...current, status: "working", completionReport: null, round, nextAction: null, ...(openDecision ? { decisionId: null } : {}), lastPromptAt: delivery.promptAt, ...(backend === "paseo" ? { paseoCursor: delivery.paseoCursor } : {}) };
     atomicJson(metaFile(roots.foremanHome, taskId), next);
     return { round: { ...record, status: "delivered", messageId: delivery.message.messageId }, message: delivery.message, task: next, interrupted: stopTurn };
   });
+}
+
+// The task's undelivered decision of its current assignment, which a new round may set aside.
+function readOpenDecisionUnlocked(roots, meta) {
+  const file = meta.decisionId ? path.join(taskDir(roots.foremanHome, meta.taskId), "decisions", `${meta.decisionId}.json`) : null;
+  if (!file || !fs.existsSync(file)) throw new ValidationError(`Task ${meta.taskId} is waiting for a decision that is missing on disk`);
+  const record = readJson(file);
+  if (record.schemaVersion !== 1 || record.decisionId !== meta.decisionId || record.taskId !== meta.taskId || record.generation !== meta.generation || record.worker !== meta.owner) throw new StaleGenerationError("Decision does not match the current assignment");
+  if (!["pending", "answered"].includes(record.status)) throw new ValidationError(`Decision ${record.decisionId} is ${record.status}; it cannot be set aside`);
+  return { file, record };
 }
 
 // Replaces the worker-facing brief of a task that has no worker yet, so the user can correct a rewrite before round one is sent.
