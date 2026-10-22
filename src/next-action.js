@@ -67,7 +67,7 @@ function describe(meta, points) {
 
 // The highlight block the user sees at the end of the answer that presents the report; `line` keeps it in the proposal output.
 // A round that switches the task's mode says so, because approving the block approves that change too.
-const HEADINGS = { round: "▶ BƯỚC TIẾP", decision: "❓ CẦN BẠN QUYẾT", accept: "✅ CÓ THỂ CHỐT TASK", clarify: "🔎 CẦN LÀM RÕ" };
+const HEADINGS = { round: ["▶", "Bước tiếp"], decision: ["❓", "Cần bạn quyết"], accept: ["✅", "Có thể chốt task"], clarify: ["🔎", "Cần làm rõ"] };
 const REPLIES = {
   round: '👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua',
   decision: "👉 Trả lời lựa chọn của bạn",
@@ -76,7 +76,9 @@ const REPLIES = {
 };
 
 function renderLine(taskId, proposal) {
-  const lines = [`> ### ${HEADINGS[proposal.kind]} · ${taskId}`, ">", `> **${proposal.text.replace(/[.。]$/u, "")}**`];
+  // The same one-line quote as every other note Foreman adds at the end of an answer: icon, bold label, then the text.
+  const [icon, label] = HEADINGS[proposal.kind];
+  const lines = [`> ${icon} **${label} · ${taskId}** · ${proposal.text.replace(/[.。]$/u, "")}`];
   if (proposal.type && proposal.type !== proposal.basis.taskType) {
     lines.push(">", `> ⚠️ Đổi sang chế độ ${proposal.type}: ${proposal.type === "ship" ? "worker được ghi vào workspace" : "worker chỉ đọc"}`);
   }

@@ -24,7 +24,7 @@ test("next propose prints its highlight line by default and preserves the full o
     const args = [path.join(__dirname, "..", "bin", "foreman"), "next", "propose", "--task", task.id, "--kind", "round", "--text", "Kiểm chứng migration còn thiếu", "--instruction", VERIFY];
     const env = { ...process.env, FOREMAN_ROOT: f.roots.foremanRoot, FOREMAN_HOME: f.roots.foremanHome, FOREMAN_BACKEND: "paseo" };
     const printed = execFileSync(process.execPath, args, { encoding: "utf8", env });
-    assert.equal(printed, `> ### ▶ BƯỚC TIẾP · ${task.id}\n>\n> **Kiểm chứng migration còn thiếu**\n>\n> 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua\n`);
+    assert.equal(printed, `> ▶ **Bước tiếp · ${task.id}** · Kiểm chứng migration còn thiếu\n>\n> 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua\n`);
     const json = JSON.parse(execFileSync(process.execPath, [...args, "--json"], { encoding: "utf8", env }));
     assert.equal(json.line, printed.replace(/\n$/u, ""));
     assert.equal(json.taskId, task.id);
@@ -41,7 +41,7 @@ test("the one shown next action is sent verbatim when the user agrees, and only 
     const { task, assignment } = routeAndAssign(f, "Implement the migration; do not change the PR description.", "ship");
     report(f, assignment, "done", "Implemented. Next steps: 1. Update the PR description 2. Verify the migration");
     const shown = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Kiểm chứng migration còn thiếu", instruction: VERIFY });
-    assert.match(shown.line, new RegExp(`^> ### ▶ BƯỚC TIẾP · ${task.id}\n>\n> \\*\\*Kiểm chứng migration còn thiếu\\*\\*\n`));
+    assert.match(shown.line, new RegExp(`^> ▶ \\*\\*Bước tiếp · ${task.id}\\*\\* · Kiểm chứng migration còn thiếu\n`));
     assert.deepEqual(nextActions({ roots: f.roots }).map((item) => [item.taskId, item.current]), [[task.id, true]]);
 
     // A fresh session still knows what "send that step" means.
@@ -159,7 +159,7 @@ test("a round that switches the task's mode says so in the shown line, and a cha
     const { task, assignment } = routeAndAssign(f, "Inspect the README.", "scout");
     report(f, assignment, "done", "Found the typo on line 3.");
     const shown = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });
-    assert.match(shown.line, /> \*\*Sửa lỗi chính tả ở dòng 3\*\*\n>\n> ⚠️ Đổi sang chế độ ship: worker được ghi vào workspace\n/);
+    assert.match(shown.line, /\*\* · Sửa lỗi chính tả ở dòng 3\n>\n> ⚠️ Đổi sang chế độ ship: worker được ghi vào workspace\n/);
     const same = proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Đọc thêm phần cài đặt", instruction: "Read the install section.", type: "scout" });
     assert.doesNotMatch(same.line, /chế độ/, "no mode note when the mode stays the same");
     proposeNextAction({ roots: f.roots, taskId: task.id, kind: "round", text: "Sửa lỗi chính tả ở dòng 3", instruction: "Fix the typo on line 3 of README.md.", type: "ship" });

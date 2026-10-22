@@ -49,9 +49,7 @@ The command prints the highlight block by default; use `--json` only when the fu
 Show that block exactly as printed at the end of the answer, after the result; for a round it reads:
 
 ```markdown
-> ### ▶ BƯỚC TIẾP · T-42
->
-> **Kiểm chứng migration còn thiếu**
+> ▶ **Bước tiếp · T-42** · Kiểm chứng migration còn thiếu
 >
 > 👉 Trả lời **"gửi"** để giao worker · **"bỏ"** để bỏ qua
 ```
