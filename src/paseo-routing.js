@@ -53,7 +53,7 @@ function loadPaseoProfiles(foremanRoot, { required = true } = {}) {
 
 function loadModelRoutingConfig(foremanRoot, { required = true } = {}) {
   try {
-    const config = require("./foreman").loadRoutingConfig(foremanRoot, { required, includeAllProfiles: true });
+    const config = require("./foreman").loadRoutingConfig(foremanRoot, { required, includeAllProfiles: true, backend: "paseo" });
     return config ? { file: path.join(foremanRoot, "config", "model-routing.json"), config } : null;
   } catch (error) {
     throw new PaseoProfileError(`Model routing config is invalid: ${error.message}`);

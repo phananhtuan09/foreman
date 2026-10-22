@@ -42,7 +42,9 @@ function sendOptions(roots, taskId, messageId, refs) {
 }
 
 const SUPPORTED_SCHEMA_VERSION = 1;
-const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode"]);
+const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode", "antigravity"]);
+// Tools that only a Paseo provider launches: their profiles have no command or effort and never run on Herdr.
+const PASEO_ONLY_TOOLS = new Set(["antigravity"]);
 
 function canonical(p) {
   try { return fs.realpathSync(p); } catch (_) { throw new ValidationError(`Path does not exist: ${p}`); }
@@ -438,6 +440,7 @@ function normalizeRoutingProfile(profile, name) {
   if (!profile || typeof profile !== "object") throw new ValidationError(`Routing profile is invalid: ${name}`);
   const tool = String(profile.tool || "").toLowerCase();
   if (!SUPPORTED_ROUTING_TOOLS.has(tool)) throw new ValidationError(`Unsupported routing tool: ${tool || "-"}`);
+  if (PASEO_ONLY_TOOLS.has(tool)) return normalizePaseoOnlyProfile(profile, name, tool);
   const command = normalizeRoutingCommand(profile.command);
   const executable = path.basename(command[0]).replace(/\.(?:cmd|exe)$/i, "");
   if (executable !== tool) throw new ValidationError(`Routing profile command must launch its declared tool: ${name}`);
@@ -484,20 +487,33 @@ function normalizeRoutingProfile(profile, name) {
   return { tool, command, model, effort, whenToUse: profile.whenToUse.trim() };
 }
 
-function validateRoutingConfig(config, { includeAllProfiles = false } = {}) {
+// Paseo launches these through its provider, so the model ID carries any variant and there is no command to run.
+function normalizePaseoOnlyProfile(profile, name, tool) {
+  if (profile.command !== undefined) throw new ValidationError(`Paseo-only routing profile must not set a command: ${name}`);
+  if ((profile.effort ?? null) !== null) throw new ValidationError(`Paseo-only routing profile must not set an effort: ${name}`);
+  if (typeof profile.model !== "string" || !profile.model.trim()) throw new ValidationError(`Routing profile model is required: ${name}`);
+  if (typeof profile.whenToUse !== "string" || !profile.whenToUse.trim()) throw new ValidationError(`Routing profile whenToUse is required: ${name}`);
+  return { tool, command: null, model: profile.model.trim(), effort: null, whenToUse: profile.whenToUse.trim() };
+}
+
+// Herdr omits Paseo-only profiles from routing and selection; Paseo routes every active profile.
+function validateRoutingConfig(config, { includeAllProfiles = false, backend = "herdr" } = {}) {
   validateVersionedRecord(config, "Model routing config");
+  if (PASEO_ONLY_TOOLS.has(String(config.router?.tool || "").toLowerCase())) throw new ValidationError("The router must run a command-line tool, not a Paseo-only tool");
   const router = normalizeRoutingProfile(config.router, "router");
   if (!config.profiles || typeof config.profiles !== "object" || Array.isArray(config.profiles)) throw new ValidationError("Routing profiles must be an object");
   const profiles = {};
   const allProfiles = {};
   const inactiveProfiles = [];
+  const paseoOnlyProfiles = [];
   for (const [name, profile] of Object.entries(config.profiles)) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new ValidationError(`Invalid routing profile name: ${name}`);
     const normalized = normalizeRoutingProfile(profile, name);
     const isActive = profile.isActive ?? true;
     if (typeof isActive !== "boolean") throw new ValidationError(`Routing profile isActive must be a boolean: ${name}`);
     allProfiles[name] = { ...normalized, isActive };
-    if (isActive) profiles[name] = normalized;
+    if (backend === "herdr" && PASEO_ONLY_TOOLS.has(normalized.tool)) paseoOnlyProfiles.push(name);
+    else if (isActive) profiles[name] = normalized;
     else inactiveProfiles.push(name);
   }
   if (!Object.keys(profiles).length) throw new ValidationError("At least one active routing profile is required");
@@ -525,16 +541,16 @@ function validateRoutingConfig(config, { includeAllProfiles = false } = {}) {
   for (const name of Object.keys(config.profiles)) {
     if (!groupedProfiles.has(name)) throw new ValidationError(`Routing profile has no group: ${name}`);
   }
-  return { schemaVersion: 1, router, default: config.default, groups, profiles, ...(includeAllProfiles ? { allProfiles } : {}), inactiveProfiles };
+  return { schemaVersion: 1, router, default: config.default, groups, profiles, ...(includeAllProfiles ? { allProfiles } : {}), inactiveProfiles, paseoOnlyProfiles };
 }
 
-function loadRoutingConfig(root, { required = false, includeAllProfiles = false } = {}) {
+function loadRoutingConfig(root, { required = false, includeAllProfiles = false, backend = "herdr" } = {}) {
   const file = routingConfigFile(root);
   if (!fs.existsSync(file)) {
     if (required) throw new ValidationError(`Model routing config does not exist: ${file}`);
     return null;
   }
-  return validateRoutingConfig(readJson(file), { includeAllProfiles });
+  return validateRoutingConfig(readJson(file), { includeAllProfiles, backend });
 }
 
 function initRoutingConfig({ roots, backend = "herdr" }) {
@@ -645,6 +661,7 @@ function routeTask({ roots, taskId, routingRunner = runRouterCommand }) {
       const output = routingRunner({ profile: config.router, prompt, cwd: findProject(roots.foremanHome, meta.projectId).root, taskId, config });
       const choice = parseRoutingSelection(output);
       if (config.inactiveProfiles.includes(choice.profile)) throw new ValidationError(`Model router selected an inactive profile: ${choice.profile}`);
+      if (config.paseoOnlyProfiles?.includes(choice.profile)) throw new ValidationError(`Model router selected a Paseo-only profile: ${choice.profile}`);
       if (!config.profiles[choice.profile]) throw new ValidationError(`Model router selected an unknown profile: ${choice.profile}`);
       selectedName = choice.profile;
       selected = config.profiles[selectedName];
@@ -704,6 +721,7 @@ function resolveWorkerProfile({ roots, backend, profile }) {
     ? paseoRouting.loadPaseoRoutingConfig(roots.foremanRoot, { required: true }).config
     : loadRoutingConfig(roots.foremanRoot, { required: true });
   if (config.inactiveProfiles.includes(profile)) throw new ValidationError(`Worker profile is inactive: ${profile}`);
+  if (config.paseoOnlyProfiles?.includes(profile)) throw new ValidationError(`Worker profile runs only on Paseo: ${profile}`);
   if (!config.profiles[profile]) throw new ValidationError(`Unknown worker profile: ${profile}`);
   return config.profiles[profile];
 }
@@ -2495,6 +2513,8 @@ function validateDispatchProfile(profile, capabilities = {}) {
   if (typeof profile !== "object" || !profile.name) throw new ValidationError("Dispatch profile must have a name");
   for (const key of ["agentKind", "tool", "command", "model", "reasoningEffort", "provider", "modeId", "thinkingOptionId", "featureValues"]) if (profile[key] !== undefined && capabilities[key] !== true) throw new ValidationError(`Runtime does not support dispatch profile field: ${key}`);
   if (profile.tool !== undefined && !SUPPORTED_ROUTING_TOOLS.has(profile.tool)) throw new ValidationError(`Unsupported routing tool: ${profile.tool}`);
+  // Only Herdr dispatch profiles carry a tool; a Paseo-only tool has no command for Herdr to launch.
+  if (PASEO_ONLY_TOOLS.has(profile.tool)) throw new ValidationError(`Dispatch profile tool runs only on Paseo: ${profile.tool}`);
   if (profile.provider !== undefined && (typeof profile.provider !== "string" || !profile.provider.trim())) throw new ValidationError("Dispatch profile provider must be a non-empty string");
   if (profile.featureValues !== undefined && (!profile.featureValues || typeof profile.featureValues !== "object" || Array.isArray(profile.featureValues))) throw new ValidationError("Dispatch profile featureValues must be an object");
   if (profile.command !== undefined) {

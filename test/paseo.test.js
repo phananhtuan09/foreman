@@ -113,6 +113,18 @@ test("Paseo Claude profile carries the permission mode into dispatch", () => {
   } finally { f.cleanup(); }
 });
 
+test("Paseo dispatches the Antigravity profile without a command, effort, or thinking option", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Restyle the header.", backend: "paseo", routingRunner: () => ({ profile: "antigravity-flash", reason: "UI work." }) });
+    assert.equal(task.routing.profile, "antigravity-flash");
+    const selected = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "antigravity-flash" });
+    assert.deepEqual(selected.dispatchProfile, { provider: "antigravity", model: "gemini-3.8-flash-high", modeId: "full-access", name: "antigravity-flash", profileLabel: "Foreman Antigravity 3.8", paseoProfileId: "foreman-antigravity-flash" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(f.adapter.agents.get(assignment.endpoint).dispatchProfile.provider, "antigravity");
+  } finally { f.cleanup(); }
+});
+
 test("Paseo profile mismatch keeps the task queued with a reviewable dispatch error", () => {
   const f = fixture();
   try {
