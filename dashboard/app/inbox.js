@@ -21,12 +21,12 @@ function weigh(t, order) {
   return (t.type === 'ship' ? 3 : 0) + size + t.lease.filter((l) => l.mode === 'write').length + (t.leaseOverlap ? 5 : 0) + 2 * rework + 2 * points;
 }
 // What the order was based on, shown under the item so the position can be checked at a glance.
-function reason(t, order) {
-  const c = t.reviewChange, points = M.openPoints(t).length;
-  return [order === 'risk' ? t.type : null, c ? c.files + ' file · ' + c.lines + ' dòng' : null, order === 'risk' && t.leaseOverlap ? 'lease chồng ' + t.leaseOverlap : null,
-    t.round > 1 ? 'R' + t.round : null, points ? points + ' attention' : null].filter(Boolean).join(' · ');
+export function reason(t, order) {
+  const c = t.reviewChange, points = M.openPoints(t).length, writes = t.lease.filter((l) => l.mode === 'write').length;
+  return [order === 'risk' ? t.type : null, c ? c.files + ' file · ' + c.lines + ' dòng' : 'chưa đo cỡ, tính như review vừa', order === 'risk' && writes ? writes + ' lease ghi' : null,
+    order === 'risk' && t.leaseOverlap ? 'lease chồng ' + t.leaseOverlap : null, t.round > 1 ? 'R' + t.round : null, points ? points + ' attention' : null].filter(Boolean).join(' · ');
 }
-function byOrder(order) {
+export function byOrder(order) {
   if (order === 'age') return (a, b) => b.ms - a.ms;
   const sign = order === 'quick' ? 1 : -1;
   return (a, b) => sign * (weigh(a.task, order) - weigh(b.task, order)) || b.ms - a.ms;
