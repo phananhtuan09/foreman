@@ -232,3 +232,34 @@ test("dashboard serve ends a HEAD request for the event stream and shows a snooz
     f.cleanup();
   }
 });
+
+// The browser modules read React from `window`; a stub that keeps elements as plain objects lets them run under Node.
+async function importApp(name) {
+  globalThis.window ??= { React: { createElement: (type, props, ...children) => ({ type, props, children: children.flat(Infinity) }), Fragment: "frag" }, Foreman: {} };
+  return import(require("node:url").pathToFileURL(path.join(__dirname, "..", "dashboard", "app", name)).href);
+}
+
+function textOf(node) {
+  if (node == null || node === false) return "";
+  if (typeof node !== "object") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return textOf(node.children);
+}
+
+function findAll(node, type, out = []) {
+  if (Array.isArray(node)) node.forEach((n) => findAll(n, type, out));
+  else if (node && typeof node === "object") { if (node.type === type) out.push(node); findAll(node.children, type, out); }
+  return out;
+}
+
+test("dashboard Markdown keeps underscores inside words and escaped pipes inside table cells", async () => {
+  const { Markdown } = await importApp("markdown.js");
+  const para = Markdown({ text: "See git_log_file.md and a__b__c but _this_ is emphasis." });
+  assert.equal(textOf(para), "See git_log_file.md and a__b__c but this is emphasis.");
+  assert.deepEqual(findAll(para, "em").map(textOf), ["this"]);
+  assert.equal(findAll(para, "strong").length, 0);
+
+  const table = Markdown({ text: "| Check | Result |\n| --- | --- |\n| a\\|b | passed |" });
+  assert.deepEqual(findAll(table, "td").map(textOf), ["a|b", "passed"]);
+  assert.deepEqual(findAll(table, "th").map(textOf), ["Check", "Result"]);
+});
