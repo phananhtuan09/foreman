@@ -57,6 +57,7 @@ Every Foreman-to-worker message is durable before delivery and every worker repo
 
 - When Foreman presents a new worker report, it may show one next action for that task in a highlight block at the end of the answer: a round the worker can do, a decision for the user, a clarification, or accepting the task.
 - `next propose` records it in task metadata as `nextAction` with its kind, the line shown, the worker instruction of a round (rewritten as the user-confirmation rule for rewritten instructions allows, keeping the limits still in force), and the state it was based on: last report, round, generation, lifecycle status, decision, and a digest of the task's pending points.
+- `next propose --summary` or `--summary-file` keeps Foreman's report of the task, the result as the user reads it in Markdown, verbatim in `foreman-reports/` with the round, generation, worker report, and shown block it belongs to; the command prints that report before the block, and the web dashboard shows it.
 - A stored next action is not permission to act.
 - When the user approves the shown step, `task continue --next` sends exactly its stored instruction together with the user's words, and refuses once the task has moved on: a newer report, another round or generation, a different status, a changed decision, or changed pending points.
 - `task continue --next` refuses a different `--type` or an explicit `--resources`; a mode or resource change requires a newly approved instruction.

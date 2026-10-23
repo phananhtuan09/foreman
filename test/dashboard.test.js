@@ -75,6 +75,9 @@ test("the snapshot shows what the board needs from Foreman's own records and lea
     const done = byId[ids.done];
     assert.equal(done.status, "review-ready");
     assert.equal(done.title, "Add the login form");
+    assert.equal(done.reviewSize, "0 file, +0/−0");
+    assert.deepEqual(done.reviewChange, { files: 0, lines: 0 }, "the review size also arrives as numbers to order reviews by");
+    assert.equal(byId[ids.blocked].reviewChange, null);
     assert.equal(done.rounds[0].original, "Làm form đăng nhập có kiểm tra dữ liệu.");
     assert.deepEqual(done.rounds[0].reports[0].steps, ["Accept task. (recommended)", "Thêm test cho màn hình nhỏ."]);
     assert.equal(done.rounds[0].reports[0].summary, "Kết quả: form đăng nhập có kiểm tra dữ liệu.\nBằng chứng: 12/12 test pass.");
@@ -109,6 +112,25 @@ test("the snapshot shows what the board needs from Foreman's own records and lea
     assert.deepEqual(snap.projects.map((project) => project.id), ["app", "docs"]);
     assert.ok(snap.profiles.some((profile) => profile.name === "claude-sonnet" && profile.isDefault));
     assert.deepEqual(snap.skipped, []);
+  } finally { f.cleanup(); }
+});
+
+test("the snapshot carries Foreman's reports of a task verbatim, and a new one changes the fingerprint", () => {
+  const f = buildDashboardHome();
+  try {
+    const { ids } = f;
+    const empty = dashboard.buildSnapshot({ roots: f.roots }).tasks.find((task) => task.taskId === ids.deciding);
+    assert.deepEqual(empty.foremanReports, []);
+    const before = dashboard.fingerprint({ roots: f.roots });
+    const summary = "**Cần bạn chọn** cách nối tiếp khi cache hết hạn.\n\n| Phương án | Chi phí |\n|---|---|\n| A | thấp |";
+    core.proposeNextAction({ roots: f.roots, taskId: ids.deciding, kind: "decision", text: "Chọn A hay B", summary });
+    assert.notEqual(dashboard.fingerprint({ roots: f.roots }), before);
+    const [shown] = dashboard.buildSnapshot({ roots: f.roots }).tasks.find((task) => task.taskId === ids.deciding).foremanReports;
+    assert.equal(shown.summary, summary);
+    assert.equal(shown.round, 1);
+    assert.equal(shown.kind, "decision");
+    assert.match(shown.line, /Cần bạn quyết/u);
+    assert.ok(shown.at);
   } finally { f.cleanup(); }
 });
 
@@ -209,4 +231,64 @@ test("dashboard serve ends a HEAD request for the event stream and shows a snooz
     await server.close();
     f.cleanup();
   }
+});
+
+// The browser modules read React from `window`; a stub that keeps elements as plain objects lets them run under Node.
+async function importApp(name) {
+  globalThis.window ??= { React: { createElement: (type, props, ...children) => ({ type, props, children: children.flat(Infinity) }), Fragment: "frag" }, Foreman: {} };
+  return import(require("node:url").pathToFileURL(path.join(__dirname, "..", "dashboard", "app", name)).href);
+}
+
+function textOf(node) {
+  if (node == null || node === false) return "";
+  if (typeof node !== "object") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return textOf(node.children);
+}
+
+function findAll(node, type, out = []) {
+  if (Array.isArray(node)) node.forEach((n) => findAll(n, type, out));
+  else if (node && typeof node === "object") { if (node.type === type) out.push(node); findAll(node.children, type, out); }
+  return out;
+}
+
+test("dashboard Markdown keeps underscores inside words and escaped pipes inside table cells", async () => {
+  const { Markdown } = await importApp("markdown.js");
+  const para = Markdown({ text: "See git_log_file.md and a__b__c but _this_ is emphasis." });
+  assert.equal(textOf(para), "See git_log_file.md and a__b__c but this is emphasis.");
+  assert.deepEqual(findAll(para, "em").map(textOf), ["this"]);
+  assert.equal(findAll(para, "strong").length, 0);
+
+  const table = Markdown({ text: "| Check | Result |\n| --- | --- |\n| a\\|b | passed |" });
+  assert.deepEqual(findAll(table, "td").map(textOf), ["a|b", "passed"]);
+  assert.deepEqual(findAll(table, "th").map(textOf), ["Check", "Result"]);
+});
+
+test("dashboard Chờ bạn orders quick ascending and risk descending, with an unmeasured size counted as medium", async () => {
+  const { byOrder, reason } = await importApp("inbox.js");
+  const task = (id, extra = {}) => ({ taskId: id, type: "build", round: 1, lease: [], attention: [], reviewChange: { files: 1, lines: 0 }, ...extra });
+  const item = (t, ms = 0) => ({ id: t.taskId, ms, task: t });
+  const ids = (items, order) => items.slice().sort(byOrder(order)).map((i) => i.id);
+
+  const small = task("small"), big = task("big", { reviewChange: { files: 9, lines: 0 } }), unmeasured = task("unmeasured", { reviewChange: null });
+  const items = [item(big), item(small), item(unmeasured)];
+  assert.deepEqual(ids(items, "quick"), ["small", "unmeasured", "big"]);
+  assert.deepEqual(ids(items, "risk"), ["big", "unmeasured", "small"]);
+
+  // Rework, open points, shipped code, write leases, and overlaps each move a task as weighed.
+  const rework = task("rework", { round: 3 }), pointed = task("pointed", { attention: [{ state: "open" }] });
+  assert.deepEqual(ids([item(pointed), item(rework), item(small)], "quick"), ["small", "pointed", "rework"]);
+  const ship = task("ship", { type: "ship" }), writes = task("writes", { lease: [{ mode: "write" }, { mode: "write" }, { mode: "read" }] }), overlap = task("overlap", { leaseOverlap: "T-9" });
+  assert.deepEqual(ids([item(small), item(writes), item(ship), item(overlap)], "risk"), ["overlap", "ship", "writes", "small"]);
+
+  // Equal weights fall back to the oldest first, as does the age order.
+  const older = item(task("older"), 5000), newer = item(task("newer"), 1000);
+  assert.deepEqual(ids([newer, older], "quick"), ["older", "newer"]);
+  assert.deepEqual(ids([newer, older], "risk"), ["older", "newer"]);
+  assert.deepEqual(ids([item(small, 1), item(big, 9)], "age"), ["big", "small"]);
+
+  // The explanation names every input the order used.
+  assert.equal(reason(writes, "risk"), "build · 1 file · 0 dòng · 2 lease ghi");
+  assert.equal(reason(writes, "quick"), "1 file · 0 dòng");
+  assert.equal(reason(unmeasured, "quick"), "chưa đo cỡ, tính như review vừa");
 });

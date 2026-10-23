@@ -16,17 +16,18 @@ Direction **Manifest / Paper Tag**, bản v4.1 — nhận diện phiếu kho n�
 
 ## Màn hình
 
-Thanh trên: **Tổng quan · Chờ bạn · Timeline** | **Health · Dự án & lease · Token & cache · Cài đặt**, cộng trang task `#/task/T-41`.
+Thanh trên: **Tổng quan · Chờ bạn · Task · Timeline** | **Health · Dự án & lease · Token & cache · Cài đặt**, cộng trang task `#/task/T-41`.
 
-- **Tổng quan** (mặc định): 4 bộ đếm kiêm bộ lọc (Chờ bạn · Bất thường · Đang chạy · Hàng chờ), agent đang chạy, bảng mọi task chưa accept nhóm theo việc cần làm, khung xem nhanh bên phải.
+- **Tổng quan** (mặc định): kanban agent theo runtime state (Đang chạy · Idle · Chờ input · Không rõ / mất), kanban mọi task chưa accept theo bốn cột Hàng chờ · Đang làm · Cần bạn · Chờ duyệt, khung xem nhanh bên phải.
 - **Chờ bạn**: quyết định, bị chặn, chọn model, chờ duyệt, attention — lâu nhất trước, đọc đủ Decision Package và report.
+- **Task**: bảng mọi task chưa accept, lọc theo dự án, trạng thái và từ khoá, bấm để mở trang task; bên dưới là task đã kết thúc, không có link.
 - **Timeline**: thời gian theo task (agent làm hay chờ bạn) và nhật ký sự kiện, gồm task đã kết thúc từ `data/task-history.jsonl`.
 - **Health**: status check, task collect, heartbeat Paseo, runtime, bất thường, notice chưa báo, outbox.
 - **Dự án & lease**: slot đã dùng, lease đang giữ và chồng lấn, phụ thuộc.
 - **Token & cache**: tách khỏi màn chính; đang là số liệu mẫu cho tới khi có nguồn thật (#28).
 - **Cài đặt**: tùy chọn hiển thị lưu ở trình duyệt, routing profile, nguồn dữ liệu, phím tắt.
 
-Hành động duy nhất là **copy**: “Copy prompt” (câu dán vào phiên Foreman) là chính, CLI là phụ.
+Tổng quan, Chờ bạn và trang task không có nút copy; chúng hiện báo cáo của Foreman đúng như trong phiên Foreman, và round chỉ hiện lời gốc của bạn.
 Dashboard không gửi gì cho agent và không ghi state.
 
 Đã kiểm ở 390, 768, 1024, 1280, 1440px, cả hai theme; chữ trên nền đạt ≥ 4.5:1.

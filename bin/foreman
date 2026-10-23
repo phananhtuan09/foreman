@@ -134,7 +134,7 @@ const usage = [
   "  task brief --task ID (--text TEXT|--text-file FILE) [--original TEXT] [--image ID|FILE]...   (replace the brief of a task that has no worker yet, or the request of a pending handoff with --original for the user's words; --image replaces round one's images)",
   "  task continue --task ID (--text TEXT|--text-file FILE|--next) (--original TEXT|--original-file FILE) [--type ship|scout] [--resources JSON] [--interrupt] [--with-original] [--image ID|FILE]...   (--next sends the proposed round's instruction, refused once the task moved on)",
   "  task history --task ID   (read-only: the user's words, rounds, recent reports, decisions, pending points, and next action)",
-  "  next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--json]   (record the next action and print its highlight line; --json prints the full proposal)",
+  "  next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT|--instruction-file FILE] [--type ship|scout] [--summary TEXT|--summary-file FILE] [--json]   (record the next action and print its highlight line, after Foreman's report of the task when given; --json prints the full proposal)",
   "  next show [--task ID]   (shown next actions and whether each still matches its task)",
   "  next clear --task ID   (the user declined or postponed the step)",
   "  task reassign --task ID [--profile NAME] [--owner OWNER] [--text TEXT|--text-file FILE --original TEXT|--original-file FILE [--image ID|FILE]...] [--type ship|scout] [--resources JSON]",
@@ -417,7 +417,8 @@ function main() {
     if (action === "propose") {
       assertSelectedTaskBackend(arg("--task"));
       const instructionFile = arg("--instruction-file");
-      const proposal = core.proposeNextAction({ roots: home, taskId: arg("--task"), kind: arg("--kind"), text: arg("--text"), instruction: instructionFile ? fs.readFileSync(path.resolve(instructionFile), "utf8") : arg("--instruction"), type: arg("--type") });
+      const summaryFile = arg("--summary-file");
+      const proposal = core.proposeNextAction({ roots: home, taskId: arg("--task"), kind: arg("--kind"), text: arg("--text"), instruction: instructionFile ? fs.readFileSync(path.resolve(instructionFile), "utf8") : arg("--instruction"), type: arg("--type"), summary: summaryFile ? fs.readFileSync(path.resolve(summaryFile), "utf8") : arg("--summary") });
       if (proposal.told.length) syncHeartbeatAfter(home);
       output(flag("--json") ? proposal : proposal.line);
       return;

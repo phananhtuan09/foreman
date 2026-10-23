@@ -71,6 +71,16 @@ function taskReports(dir) {
   return listDir(reportsDir).filter((name) => name.endsWith(".md")).map((name) => readReport(path.join(reportsDir, name))).filter(Boolean).sort((left, right) => left.at - right.at);
 }
 
+// Foreman's reports of the task as the user read them, oldest first; a damaged record is skipped.
+function foremanReports(dir) {
+  const reportsDir = path.join(dir, "foreman-reports");
+  return listDir(reportsDir).filter((name) => /^\d{3,}\.json$/.test(name)).flatMap((name) => {
+    const record = readOptionalJson(path.join(reportsDir, name));
+    if (!record || record.schemaVersion !== 1 || typeof record.summary !== "string") return [];
+    return [{ round: record.round || 1, generation: record.generation ?? null, kind: record.kind || null, text: record.text || null, summary: record.summary, line: record.line || null, at: ms(record.createdAt) }];
+  }).sort((left, right) => (left.at || 0) - (right.at || 0));
+}
+
 // Rounds newest first. Round one is the brief and the user's own words; later rounds are the delivered round records.
 function taskRounds(home, meta, reports) {
   const dir = coordination.taskDir(home, meta.taskId);
@@ -199,8 +209,10 @@ function taskView({ home, meta, check, messages, now }) {
     createdAt: ms(meta.createdAt), dispatchedAt: ms(meta.assignedAt) ?? ms(meta.adoption?.at || meta.adoptedAt), statusSince: statusSince(meta, decisions) ?? ms(meta.createdAt), lastActivityAt: lastActivityAt ?? ms(meta.createdAt),
     runtime, issues, workspace: meta.workspace || null, branch: meta.branch || null,
     lease: (meta.resourceLease?.resources || []).map(({ key, mode }) => ({ key, mode })), dependencies: meta.dependencies || [],
-    handoff: handoffView(dir), rounds, decisions, attention: points, messages: own,
+    handoff: handoffView(dir), rounds, foremanReports: foremanReports(dir), decisions, attention: points, messages: own,
     unread: Boolean(meta.lastReport && !meta.lastReport.readAt), reviewSize: meta.status === "review-ready" ? reviewLoad.formatReviewLoad(meta.reviewLoad, "vi") : null,
+    // The same measurement as numbers, so Chờ bạn can order reviews by size.
+    reviewChange: meta.status === "review-ready" && meta.reviewLoad && !meta.reviewLoad.error ? { files: meta.reviewLoad.files, lines: meta.reviewLoad.insertions + meta.reviewLoad.deletions } : null,
     nextAction: proposal,
   };
 }
@@ -339,7 +351,7 @@ function fingerprint({ roots }) {
     for (const name of listDir(path.join(tasksDir, taskId))) {
       if (name === "attachments") continue;
       const file = path.join(tasksDir, taskId, name);
-      if (["rounds", "reports", "decisions"].includes(name)) for (const child of listDir(file)) add(path.join(file, child));
+      if (["rounds", "reports", "decisions", "foreman-reports"].includes(name)) for (const child of listDir(file)) add(path.join(file, child));
       else add(file);
     }
   }
