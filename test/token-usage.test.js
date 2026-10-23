@@ -35,8 +35,14 @@ test("token usage counts each model call once per day, finds resends and subagen
       // A cache that expired writes the whole context again.
       response("m-3", now - HOUR, [1, 1200, 0, 30]),
       JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), message: { id: "x", model: "<synthetic>", usage: { input_tokens: 0, output_tokens: 0 } } }),
+      JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), message: { model: "claude-sonnet-5-5", usage: { input_tokens: 7, output_tokens: 7 } } }),
     ]);
     writeTranscript(claudeHome, "-work-app", "s-1/subagents/agent-a.jsonl", [response("sub-1", now - 2 * HOUR, [5, 300, 0, 5])]);
+    // The window starts at local midnight six days before today.
+    writeTranscript(claudeHome, "-work-app", "s-1/subagents/agent-c.jsonl", [
+      response("m-edge-out", new Date(2026, 9, 16, 23, 59).getTime(), [1, 0, 1, 1]),
+      response("m-edge-in", new Date(2026, 9, 17, 0, 0).getTime(), [1, 0, 2, 1]),
+    ]);
     writeTranscript(claudeHome, "-work-app", "s-1/subagents/agent-b.jsonl", [response("m-old", now - 10 * 24 * HOUR, [100, 0, 0, 100])]);
     const usage = tokenUsage({
       now,
@@ -49,12 +55,13 @@ test("token usage counts each model call once per day, finds resends and subagen
         { taskId: "T-4", projectId: "app", profile: "claude-sonnet", provider: "claude", sessionId: "../s-1" },
       ],
     });
-    assert.equal(usage.calls, 4);
+    assert.equal(usage.calls, 5, "a response without an ID and a call before the window are not counted");
     assert.deepEqual(usage.coverage, { recorded: 5, counted: 1, missing: 2, otherProvider: 1 });
-    assert.deepEqual(usage.total, { tokens: 1060 + 1122 + 1231 + 310, input: 18, cacheWrite: 2600, cacheRead: 1000, output: 105, hit: 27.6 });
+    assert.deepEqual(usage.total, { tokens: 1060 + 1122 + 1231 + 310 + 4, input: 19, cacheWrite: 2600, cacheRead: 1002, output: 106, hit: 27.7 });
     assert.equal(usage.days.length, 7);
     assert.deepEqual(usage.days.slice(-2).map((day) => day.tokens), [1060 + 1122, 1231 + 310]);
-    assert.equal(usage.days[0].hit, null);
+    assert.deepEqual([usage.days[0].tokens, usage.days[0].hit], [4, 66.7]);
+    assert.equal(usage.days[1].hit, null);
     assert.deepEqual(usage.resends.map((resend) => [resend.taskId, resend.tokens]), [["T-1", 1200]], "a session's first call and a subagent's first call are not resends");
     assert.deepEqual(usage.byTask, [{ taskId: "T-1", projectId: "app", tokens: usage.total.tokens }]);
     assert.deepEqual(usage.byProfile, [{ profile: "claude-sonnet", tokens: usage.total.tokens }]);

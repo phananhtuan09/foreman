@@ -52,7 +52,9 @@ function transcriptCalls(file) {
       cacheRead: usage.cache_read_input_tokens || 0,
       output: usage.output_tokens || 0,
     };
+    // A response without any ID cannot be told apart from a repeat of another, so it is not counted.
     const id = message.id || row.requestId || row.uuid;
+    if (!id) continue;
     const previous = byId.get(id);
     byId.set(id, previous ? { ...call, at: previous.at, output: Math.max(previous.output, call.output) } : call);
   }
@@ -118,6 +120,7 @@ function tokenUsage({ sessions, now = Date.now(), env = process.env }) {
           if (!map.has(key)) map.set(key, emptyTotals());
           addCall(map.get(key), call);
         }
+        // Each transcript, a subagent's included, starts cold, so only a later call that writes more than it reads is a resend.
         if (index > 0 && call.cacheWrite > call.cacheRead) resends.push({ taskId: session.taskId, projectId: session.projectId, at: call.at, tokens: call.cacheWrite, cacheRead: call.cacheRead });
       });
     }

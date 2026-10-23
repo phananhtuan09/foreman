@@ -86,12 +86,13 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 - Dự án & lease shows registered projects, held resource claims with the live tasks whose claims overlap them in a conflicting mode, and dependencies.
 - Token & cache counts the token usage of Paseo workers running the Claude provider, from the transcripts of their recorded worker sessions, over the last 7 local days including today.
   - Tokens are input, cache write, cache read, and output, as the transcript reports them; nothing is estimated or priced.
+  - The total includes cache reads and says how many of its tokens were read from the cache.
   - The figures are the total, cache hit (cache read over all input-side tokens), the number of full-context resends, and the task with the most tokens.
-  - A full-context resend is a model call, after the first of its session, that writes more tokens to the cache than it reads from it.
+  - A full-context resend is a model call, after the first of its transcript, that writes more tokens to the cache than it reads from it; a subagent's transcript starts cold like its session's.
   - It also shows tokens and cache hit per day, tokens per task, project, and profile, and each resend with its task, time, and tokens written.
   - A day under 65% cache hit is marked cold.
   - Usage counts up to the latest snapshot; a model call made after it appears with the next one.
-  - The page says that Herdr workers, Paseo workers on other providers, and the Foreman session are not counted, and how many recorded worker sessions have no readable transcript.
+  - The page says that Herdr workers, Paseo workers on other or unknown providers, and the Foreman session are not counted, and how many recorded worker sessions have no readable transcript.
   - With no counted model call in the window every figure shows “—”.
 
 ## References

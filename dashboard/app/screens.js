@@ -298,7 +298,7 @@ export function Tokens({ snap, now, onOpen }) {
   const scope = [
     'Chỉ tính worker Paseo chạy Claude, đọc từ transcript Claude Code của các session worker mà Foreman đã ghi lại; worker Herdr, worker Paseo provider khác và chính session Foreman không được tính.',
     c.missing ? ' ' + c.missing + ' session không đọc được transcript.' : '',
-    c.otherProvider ? ' ' + c.otherProvider + ' session chạy provider khác.' : '',
+    c.otherProvider ? ' ' + c.otherProvider + ' session chạy provider khác hoặc không rõ provider.' : '',
     ' Số liệu tính tới snapshot gần nhất.'
   ].join('');
   const empty = (what) => h(F.StateNotice, { small: true, state: 'empty', stamp: '—', title: 'Chưa có số liệu' }, what);
@@ -307,7 +307,7 @@ export function Tokens({ snap, now, onOpen }) {
     h(F.Banner, { tone: 'ink', lead: 'Phạm vi' }, scope),
     h('div', { style: { height: 16 } }),
     h(F.KpiStrip, { label: '7 ngày ' + range, items: [
-      { label: 'Token 7 ngày', value: total ? tokenText(total.tokens) : null, sub: total ? range + ' · ' + u.calls + ' lượt gọi model' : 'chưa có lượt gọi model nào' },
+      { label: 'Token 7 ngày', value: total ? tokenText(total.tokens) : null, sub: total ? 'gồm ' + tokenText(total.cacheRead) + ' đọc từ cache · ' + u.calls + ' lượt gọi model' : 'chưa có lượt gọi model nào' },
       { label: 'Cache hit', value: total && total.hit !== null ? String(total.hit) : null, unit: '%', sub: total ? 'đọc cache ' + tokenText(total.cacheRead) + ' / input ' + tokenText(total.input + total.cacheWrite + total.cacheRead) : '—', tone: total && total.hit !== null && total.hit < M.THRESHOLDS.cacheCold ? 'mustard' : undefined },
       { label: 'Resend full context', value: total ? String(u.resends.length) : null, unit: 'lần', sub: total ? (u.resends.length ? 'ghi lại ' + tokenText(written) + ' token vào cache' : 'không lần nào') : '—', tone: u.resends.length ? 'mustard' : undefined },
       { label: 'Task tốn nhất', value: top ? tokenText(top.tokens) : null, sub: top ? top.taskId + ' · ' + top.projectId : '—' }
