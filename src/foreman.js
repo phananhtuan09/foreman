@@ -1229,6 +1229,18 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
   });
 }
 
+// The provider session of a collected worker, kept once per session so its token usage can be read after the agent is gone.
+function recordWorkerSession(roots, meta, snapshot) {
+  const sessionId = snapshot.providerSessionId;
+  if (typeof sessionId !== "string" || !sessionId || (meta.workerSessions || []).some((session) => session.sessionId === sessionId)) return;
+  withHomeLock(roots.foremanHome, () => {
+    const current = readMeta(roots.foremanHome, meta.taskId);
+    if (current.endpoint !== meta.endpoint || current.generation !== meta.generation || (current.workerSessions || []).some((session) => session.sessionId === sessionId)) return;
+    const session = { generation: current.generation, endpoint: current.endpoint, provider: snapshot.provider || null, profile: current.dispatchProfile?.name || current.routingProfile || null, sessionId, recordedAt: now() };
+    atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...current, workerSessions: [...(current.workerSessions || []), session] });
+  });
+}
+
 function collectPaseoReports({ roots, adapter }) {
   if (!adapter || adapter.backend !== "paseo" || typeof adapter.read !== "function") throw new ValidationError("Paseo report collection requires the Paseo adapter");
   initHome(roots);
@@ -1260,6 +1272,7 @@ function collectPaseoReports({ roots, adapter }) {
       collected.push({ taskId: meta.taskId, state: "mismatch", issue: "Paseo report identity or workspace does not match assignment" });
       continue;
     }
+    recordWorkerSession(roots, meta, snapshot);
     if (snapshot.gap || snapshot.staleCursor) {
       const issue = { type: "worker.timeline-gap", reason: snapshot.staleCursor ? "Saved Paseo timeline cursor is stale" : "Paseo timeline reports a gap" };
       withHomeLock(roots.foremanHome, () => {

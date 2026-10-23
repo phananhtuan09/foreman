@@ -24,7 +24,7 @@ Thanh trên: **Tổng quan · Chờ bạn · Task · Timeline** | **Health · D�
 - **Timeline**: thời gian theo task (agent làm hay chờ bạn) và nhật ký sự kiện, gồm task đã kết thúc từ `data/task-history.jsonl`.
 - **Health**: status check, task collect, heartbeat Paseo, runtime, bất thường, notice chưa báo, outbox.
 - **Dự án & lease**: slot đã dùng, lease đang giữ và chồng lấn, phụ thuộc.
-- **Token & cache**: tách khỏi màn chính; đang là số liệu mẫu cho tới khi có nguồn thật (#28).
+- **Token & cache**: tách khỏi màn chính; đọc token thật của worker Paseo chạy Claude từ transcript Claude Code.
 - **Cài đặt**: tùy chọn hiển thị lưu ở trình duyệt, routing profile, nguồn dữ liệu, phím tắt.
 
 Tổng quan, Chờ bạn và trang task không có nút copy; chúng hiện báo cáo của Foreman đúng như trong phiên Foreman, và round chỉ hiện lời gốc của bạn.

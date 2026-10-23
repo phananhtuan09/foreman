@@ -270,21 +270,66 @@ export function Projects({ tasks, now, snap, onOpen }) {
 }
 
 // ================= Token & cache =================
-// Foreman has no source of worker token usage yet (#28), so nothing here is a number until one exists.
-export function Tokens() {
-  return h('div', null,
-    h(F.PageHeader, { no: '07', eyebrow: 'Chi phí', title: 'Token & cache', id: 'page-title' }),
-    h(F.Banner, { tone: 'mustard', lead: 'Chưa có nguồn số liệu' }, 'Foreman chưa ghi token usage của worker (#28), nên mọi số liệu ở đây hiện “—” thay vì số đoán.'),
+// Usage of Paseo workers on the Claude provider, from the transcripts of their recorded sessions; nothing is estimated.
+const WEEKDAY = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+function tokenText(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K';
+  return String(n);
+}
+const day = (ts) => { const d = new Date(ts); return WEEKDAY[d.getDay()] + ' ' + d.getDate() + '/' + (d.getMonth() + 1); };
+const shortDate = (ts) => { const d = new Date(ts); return d.getDate() + '/' + (d.getMonth() + 1); };
+
+export function Tokens({ snap, now, onOpen }) {
+  const u = snap.tokens;
+  const header = h(F.PageHeader, { no: '07', eyebrow: 'Chi phí', title: 'Token & cache', id: 'page-title' });
+  if (!u) return h('div', null, header, h(F.StateNotice, { state: 'empty', stamp: '—', title: 'Chưa có số liệu' }, 'Snapshot này chưa có token usage.'));
+  const c = u.coverage;
+  const range = shortDate(u.windowStart) + ' – ' + shortDate(now);
+  const total = u.total;
+  const top = u.byTask[0] || null;
+  const written = u.resends.reduce((sum, r) => sum + r.tokens, 0);
+  const days = u.days.map((d) => ({ ...d, label: day(d.at), short: WEEKDAY[new Date(d.at).getDay()] }));
+  const hits = days.filter((d) => d.hit !== null);
+  const cold = hits.filter((d) => d.hit < M.THRESHOLDS.cacheCold);
+  const lowest = hits.length ? Math.min(...hits.map((d) => d.hit)) : 0;
+  const hitMin = Math.max(0, Math.min(Math.floor(Math.min(lowest, M.THRESHOLDS.cacheCold) / 10) * 10 - 10, 50));
+  const busiest = days.reduce((best, d) => (d.tokens > best.tokens ? d : best), days[0]);
+  const scope = [
+    'Chỉ tính worker Paseo chạy Claude, đọc từ transcript Claude Code của các session worker mà Foreman đã ghi lại; worker Herdr, worker Paseo provider khác và chính session Foreman không được tính.',
+    c.missing ? ' ' + c.missing + ' session không đọc được transcript.' : '',
+    c.otherProvider ? ' ' + c.otherProvider + ' session chạy provider khác.' : '',
+    ' Số liệu tính tới snapshot gần nhất.'
+  ].join('');
+  const empty = (what) => h(F.StateNotice, { small: true, state: 'empty', stamp: '—', title: 'Chưa có số liệu' }, what);
+  const bars = (rows) => h(F.BarList, { rows: rows.slice(0, 6) });
+  return h('div', null, header,
+    h(F.Banner, { tone: 'ink', lead: 'Phạm vi' }, scope),
     h('div', { style: { height: 16 } }),
-    h(F.KpiStrip, { label: 'Tuần này', items: [
-      { label: 'Token tuần này', value: null, sub: 'chưa có nguồn' },
-      { label: 'Cache hit', value: null, sub: 'chưa có nguồn' },
-      { label: 'Resend full context', value: null, sub: 'chưa có nguồn' },
-      { label: 'Task tốn nhất', value: null, sub: 'chưa có nguồn' }
+    h(F.KpiStrip, { label: '7 ngày ' + range, items: [
+      { label: 'Token 7 ngày', value: total ? tokenText(total.tokens) : null, sub: total ? range + ' · ' + u.calls + ' lượt gọi model' : 'chưa có lượt gọi model nào' },
+      { label: 'Cache hit', value: total && total.hit !== null ? String(total.hit) : null, unit: '%', sub: total ? 'đọc cache ' + tokenText(total.cacheRead) + ' / input ' + tokenText(total.input + total.cacheWrite + total.cacheRead) : '—', tone: total && total.hit !== null && total.hit < M.THRESHOLDS.cacheCold ? 'mustard' : undefined },
+      { label: 'Resend full context', value: total ? String(u.resends.length) : null, unit: 'lần', sub: total ? (u.resends.length ? 'ghi lại ' + tokenText(written) + ' token vào cache' : 'không lần nào') : '—', tone: u.resends.length ? 'mustard' : undefined },
+      { label: 'Task tốn nhất', value: top ? tokenText(top.tokens) : null, sub: top ? top.taskId + ' · ' + top.projectId : '—' }
     ] }),
     h('div', { className: 'fm-grid c2', style: { marginTop: 24 } },
-      h('div', null, h(F.SectionHeader, { title: 'Token theo ngày' }), h(F.StateNotice, { small: true, state: 'empty', stamp: '—', title: 'Chưa có số liệu' }, 'Sẽ hiện khi Foreman có nguồn token usage.')),
-      h('div', null, h(F.SectionHeader, { title: 'Cache hit theo ngày' }), h(F.StateNotice, { small: true, state: 'empty', stamp: '—', title: 'Chưa có số liệu' }, 'Sẽ hiện khi Foreman có nguồn token usage.'))));
+      h('div', null, h(F.SectionHeader, { title: 'Token theo ngày' }),
+        total ? h(F.Panel, { note: 'Cao nhất ' + busiest.label + ': ' + tokenText(busiest.tokens) + '.' }, h(F.BarList, { rows: days.map((d) => ({ label: d.label, value: d.tokens, display: d.tokens ? tokenText(d.tokens) : '—' })) })) : empty('Chưa có lượt gọi model nào trong 7 ngày.')),
+      h('div', null, h(F.SectionHeader, { title: 'Cache hit theo ngày', hint: 'dưới ' + M.THRESHOLDS.cacheCold + '% là nguội' }),
+        hits.length ? h(F.HitLine, { height: 232, min: hitMin, max: 100, threshold: M.THRESHOLDS.cacheCold, data: hits.map((d) => ({ label: d.label, short: d.short, value: d.hit })),
+          ariaLabel: 'Cache hit theo ngày, ' + Math.min(...hits.map((d) => d.hit)) + '–' + Math.max(...hits.map((d) => d.hit)) + '%' + (cold.length ? ', ' + cold.length + ' ngày dưới ngưỡng ' + M.THRESHOLDS.cacheCold + '%.' : ', luôn trên ngưỡng ' + M.THRESHOLDS.cacheCold + '%.') }) : empty('Chưa có lượt gọi model nào trong 7 ngày.'))),
+    total ? frag(
+      h(F.SectionHeader, { title: 'Phân bổ' }),
+      h('div', { className: 'fm-grid c3' },
+        h(F.Panel, { title: 'Theo profile' }, bars(u.byProfile.map((r) => ({ label: r.profile, value: r.tokens, display: tokenText(r.tokens) })))),
+        h(F.Panel, { title: 'Theo dự án' }, bars(u.byProject.map((r) => ({ label: r.projectId, value: r.tokens, display: tokenText(r.tokens) })))),
+        h(F.Panel, { title: 'Task tốn nhất' }, bars(u.byTask.map((r) => ({ label: r.taskId + ' · ' + r.projectId, value: r.tokens, display: tokenText(r.tokens) }))))),
+      h(F.SectionHeader, { title: 'Resend full context', meta: u.resends.length, hint: 'lượt gọi ghi vào cache nhiều hơn đọc ra' }),
+      u.resends.length ? table(['Task', 'Lúc', 'Token ghi lại', 'Đọc từ cache'], u.resends.slice(0, 30).map((r, i) => h('tr', { key: i },
+        h('td', { className: 'mono' }, snap.tasks.some((t) => t.taskId === r.taskId) ? link(r.taskId, onOpen) : h('b', null, r.taskId)),
+        h('td', { className: 'mono' }, shortDate(r.at) + ' ' + clock(r.at)),
+        h('td', { className: 'mono' }, tokenText(r.tokens)),
+        h('td', { className: 'mono' }, tokenText(r.cacheRead))))) : h('p', { className: 'fm-faint' }, 'Không có lần resend nào trong 7 ngày.')) : null);
 }
 
 // ================= Settings =================

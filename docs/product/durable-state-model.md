@@ -62,7 +62,7 @@ Every record has a stable identity and a single writer so stale or foreign input
   ├── attachments/      images the user sent, named by content digest
   ├── attachments.json  versioned image manifest and round one's image IDs
   ├── notes.md          optional Foreman context for the worker, kept apart from the user's words
-  ├── meta.json         creation time, adoption, lifecycle, project, owner, generation, workspace, branch, review base and size, resource lease, endpoint, worker pane, routing, and latest report
+  ├── meta.json         creation time, adoption, lifecycle, project, owner, generation, workspace, branch, review base and size, resource lease, endpoint, worker pane, worker sessions, routing, and latest report
   ├── decisions/        versioned Decision Packages and verbatim human responses
   ├── reports/          verbatim worker reports, one file per report
   ├── foreman-reports/  append-only records of Foreman's report of the task as shown to the user, with its round and next-action block
@@ -91,6 +91,7 @@ Every record has a stable identity and a single writer so stale or foreign input
 
 - Each ownership change increments `generation` in task metadata and records the runtime endpoint identity.
 - Herdr assignments bind `paneId`; Paseo assignments bind `agentId` as the endpoint and also persist `workspaceId`.
+- When Foreman collects a Paseo worker whose timeline identity matches the assignment, it records the worker's provider and provider session ID with the generation and endpoint, once per session, so the session's token usage can be read later.
 - Every prompt and steering message carries task ID, project ID, owner, and generation.
 - A worker report is bound to the current endpoint and generation, so a stale pane or Paseo agent cannot update task lifecycle or reports.
 

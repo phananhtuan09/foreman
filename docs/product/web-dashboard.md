@@ -10,7 +10,9 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 
 ## Definitions
 
-- Snapshot: everything the dashboard shows, built from `FOREMAN_HOME/data/` and `FOREMAN_ROOT/config/model-routing.json` in one read.
+- Snapshot: everything the dashboard shows, built from `FOREMAN_HOME/data/`, `FOREMAN_ROOT/config/model-routing.json`, and the transcripts of recorded worker sessions in one read.
+- Worker session: the provider session of a Paseo worker that Foreman recorded for a task's generation when it collected that worker's timeline.
+- Model call: one assistant response in a worker session transcript; its token usage is counted once even when the transcript repeats it.
 - Kept status check: the result of the last fleet-wide status check and Paseo collection per backend, in `data/status-check.json`.
 
 ## Rules
@@ -27,6 +29,7 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 
 - The dashboard MUST NOT send anything to a worker or the Foreman session, write the home, take the home lock, initialize a missing home, or migrate a record.
 - It MUST NOT call a runtime; runtime state and anomalies come only from the kept status check.
+- It reads only the Claude Code transcripts of recorded worker sessions, read-only, under `CLAUDE_CONFIG_DIR` or `~/.claude`; it never reads the Foreman session's or any other transcript.
 - A malformed task record is skipped and listed on the Health screen; the rest still shows.
 - A missing home shows a notice telling the user to run `foreman init` or set `FOREMAN_HOME`.
 - Tổng quan, Chờ bạn, and the task page offer no copy action, prompt for the Foreman session, or CLI command; they only show state.
@@ -81,7 +84,15 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 - Timeline shows time per task and an event log; ended tasks come from `data/task-history.jsonl` and show a title only when the server saw the task while it was open.
 - Health shows the dashboard connection, each backend's kept status check and Paseo collection, the Paseo heartbeat, skipped records, anomalies with whether the user was told, untold notices, and the outbox.
 - Dự án & lease shows registered projects, held resource claims with the live tasks whose claims overlap them in a conflicting mode, and dependencies.
-- Token & cache shows “—” for every number until Foreman records worker token usage; it never shows an estimate.
+- Token & cache counts the token usage of Paseo workers running the Claude provider, from the transcripts of their recorded worker sessions, over the last 7 local days including today.
+  - Tokens are input, cache write, cache read, and output, as the transcript reports them; nothing is estimated or priced.
+  - The figures are the total, cache hit (cache read over all input-side tokens), the number of full-context resends, and the task with the most tokens.
+  - A full-context resend is a model call, after the first of its session, that writes more tokens to the cache than it reads from it.
+  - It also shows tokens and cache hit per day, tokens per task, project, and profile, and each resend with its task, time, and tokens written.
+  - A day under 65% cache hit is marked cold.
+  - Usage counts up to the latest snapshot; a model call made after it appears with the next one.
+  - The page says that Herdr workers, Paseo workers on other providers, and the Foreman session are not counted, and how many recorded worker sessions have no readable transcript.
+  - With no counted model call in the window every figure shows “—”.
 
 ## References
 
