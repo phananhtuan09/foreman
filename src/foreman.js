@@ -2472,19 +2472,30 @@ function taskAttention({ roots, taskId }) {
   return attention.readAttention(roots.foremanHome, taskId);
 }
 
-function proposeNextAction({ roots, taskId, kind, text, instruction, type }) {
+// `summary` is Foreman's report of the task as the user reads it; it is kept verbatim, one append-only record per answer.
+function proposeNextAction({ roots, taskId, kind, text, instruction, type, summary }) {
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     const at = now();
     let proposal;
     try { proposal = nextAction.buildProposal({ meta, kind, text, instruction, type: type === undefined ? undefined : String(type).toLowerCase(), at, points: attention.readAttention(roots.foremanHome, taskId).points }); }
     catch (error) { throw new ValidationError(error.message); }
+    if (summary !== undefined && (typeof summary !== "string" || !summary.trim())) throw new ValidationError("Foreman's report must not be empty");
+    let reportFile = null;
+    if (summary !== undefined) {
+      const dir = path.join(taskDir(roots.foremanHome, taskId), "foreman-reports");
+      fs.mkdirSync(dir, { recursive: true });
+      const count = fs.readdirSync(dir).filter((name) => /^\d{3,}\.json$/.test(name)).length;
+      reportFile = path.join(dir, `${String(count + 1).padStart(3, "0")}.json`);
+      atomicJson(reportFile, { schemaVersion: 1, taskId, round: meta.round || 1, generation: meta.generation, workerReport: meta.lastReport?.file || null, kind: proposal.kind, text: proposal.text, summary: summary.trim(), line: nextAction.renderLine(taskId, proposal), createdAt: at });
+    }
     // The block is shown in the answer that presents the report, so that report's review-ready or blocked notice is told with it.
     // A notice told by an earlier proposal keeps its first told time.
     const told = supervision.taskNotices(meta).filter((notice) => (notice.kind === "review-ready" || notice.kind === "blocked") && !meta.notified?.[notice.key]).map((notice) => notice.key);
     const notified = told.length ? { ...(meta.notified || {}), ...Object.fromEntries(told.map((key) => [key, at])) } : meta.notified;
     atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, ...(notified ? { notified } : {}), nextAction: proposal });
-    return { taskId, ...proposal, told, line: nextAction.renderLine(taskId, proposal) };
+    const line = nextAction.renderLine(taskId, proposal);
+    return { taskId, ...proposal, told, reportFile, line: summary === undefined ? line : `${summary.trim()}\n\n${line}` };
   });
 }
 

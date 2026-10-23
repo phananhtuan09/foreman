@@ -5,3 +5,66 @@
 /* The design's tables keep 640px so wide tables scroll; the two half-width Health tables must fit their column and wrap long IDs. */
 .fm-tablewrap > .fm-table.compact { min-width: 0; }
 .fm-table.compact td.mono { overflow-wrap: anywhere; }
+
+/* Board kanban: four flow columns that stack when the main column is narrow. */
+.fm-kanwrap { container-type: inline-size; }
+.fm-kanban { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); align-items: start; }
+@container (max-width: 760px) { .fm-kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 440px) { .fm-kanban { grid-template-columns: minmax(0, 1fr); } }
+.fm-kcol { background: var(--surface-sunken); border: var(--bw-hair) solid var(--line); border-radius: var(--radius-sm); padding: var(--space-2); min-width: 0; }
+.fm-kcol h3 { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); padding: 4px 6px; font-family: var(--font-display); font-size: 15px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.fm-kcol .gsw { width: 8px; height: 8px; border-radius: var(--radius-round); background: var(--ink-3); }
+.fm-kcol.t-red .gsw { background: var(--red); }
+.fm-kcol.t-blue .gsw { background: var(--blue); }
+.fm-kcol.t-green .gsw { background: var(--green); }
+.fm-kcol.t-mustard .gsw { background: var(--mustard); }
+.fm-kcol .fm-slot { width: 100%; }
+.fm-kanwrap { margin-bottom: var(--space-4); }
+.fm-kcol.t-ink .gsw { background: transparent; border: 1.5px solid var(--ink-3); }
+.fm-kcol ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.fm-kcol .empty { margin: 0; padding: 6px; font-size: 13px; color: var(--ink-3); }
+.fm-kcard { background: var(--surface-raised); border: var(--bw-hair) solid var(--line-strong); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); cursor: pointer; min-width: 0; }
+.fm-kcard:hover { background: var(--surface-hover); }
+/* A table row that opens its task from anywhere; the ID button inside stays the keyboard target. */
+.fm-table tr.fm-rowlink { cursor: pointer; }
+.fm-table tr.fm-rowlink:not(.warn):hover td { background: var(--surface-hover); }
+.fm-table tr.fm-rowlink.warn:hover td { background: color-mix(in srgb, var(--mustard-tint), var(--ink) 6%); }
+.fm-kcard[aria-current="true"] { background: var(--surface-selected); box-shadow: inset var(--bw-bar) 0 0 var(--ink); }
+.fm-kcard.warn { border-color: var(--mustard); background: var(--mustard-tint); }
+.fm-kcard.flash { animation: fm-flash 2.4s ease-out 1; }
+.fm-kcard .top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fm-kcard .tid { font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 20px; }
+.fm-kcard .tt { font-weight: 500; font-size: 14px; line-height: 20px; margin-top: 4px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fm-kcard .tm { font-size: 13px; color: var(--ink-2); margin-top: 2px; line-height: 18px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fm-kcard.dense .tm { -webkit-line-clamp: 1; }
+.fm-kcard .tm .q { color: var(--red-deep); font-weight: 500; }
+.fm-kcard .tm .w { color: var(--mustard-deep); font-weight: 500; }
+.fm-kcard .tm .b { color: var(--green); font-weight: 500; }
+.fm-kcard .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+.fm-kcard .foot { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--ink-3); }
+.fm-kcard .age.you { color: var(--red-deep); font-weight: 600; }
+.fm-kcard .age.warn { color: var(--mustard-deep); font-weight: 600; }
+.fm-kcard .pts { color: var(--ink-2); }
+.fm-kcard .pts.u { color: var(--red-deep); font-weight: 600; }
+
+/* Foreman's own report, rendered from its Markdown as the Foreman session shows it. */
+.fm-freport { border: var(--bw-hair) solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); padding: var(--space-3); }
+.fm-freport .when { margin-top: var(--space-2); font-size: 12px; color: var(--ink-3); }
+.fm-md { font-size: 14px; line-height: 21px; color: var(--ink); overflow-wrap: anywhere; }
+.fm-md > :first-child { margin-top: 0; }
+.fm-md > :last-child { margin-bottom: 0; }
+.fm-md p, .fm-md ul, .fm-md ol, .fm-md pre, .fm-md blockquote, .fm-md .tw { margin: 0 0 var(--space-2); }
+.fm-md ul, .fm-md ol { padding-left: 22px; }
+.fm-md li + li { margin-top: 2px; }
+.fm-md h3, .fm-md h4, .fm-md h5, .fm-md h6 { margin: var(--space-3) 0 var(--space-1); font-size: 15px; line-height: 20px; font-weight: 700; }
+.fm-md code { font-family: var(--font-mono); font-size: 12.5px; background: var(--surface-sunken); border-radius: 4px; padding: 1px 4px; }
+.fm-md pre { background: var(--surface-sunken); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); overflow-x: auto; }
+.fm-md pre code { background: none; padding: 0; }
+.fm-md blockquote { border-left: var(--bw-bar) solid var(--line-strong); background: var(--surface-sunken); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: var(--space-2) var(--space-3); }
+.fm-md blockquote h3, .fm-md blockquote h4 { margin-top: 0; }
+.fm-md hr { border: 0; border-top: var(--bw-hair) solid var(--line); margin: var(--space-3) 0; }
+.fm-md .tw { overflow-x: auto; }
+.fm-md table { border-collapse: collapse; font-size: 13px; }
+.fm-md th, .fm-md td { border: var(--bw-hair) solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.fm-md th { background: var(--surface-sunken); font-weight: 600; }
+.fm-md a { color: var(--blue); }

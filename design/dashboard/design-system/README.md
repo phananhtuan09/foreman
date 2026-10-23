@@ -7,7 +7,7 @@ Mọi hành động chỉ **copy** câu cần nói với Foreman.
 
 | Tab | Mục đích | Thành phần chính |
 | --- | --- | --- |
-| Tổng quan (mặc định) | Thấy mọi agent và task trên một màn | `CounterBar`, `LaneGroup` + `WorkerSlot`/`HeldChip`, `FleetTable`, `Pane` |
+| Tổng quan (mặc định) | Thấy mọi agent và task trên một màn | kanban agent theo runtime state với `WorkerSlot`, kanban task bốn cột theo luồng (trong `dashboard/app/board.js`), `Pane` |
 | Chờ bạn | Xử lý từng việc chờ bạn, lâu nhất trước | `InboxList`, `DecisionOptions`, `Report`, `Compose`, `NextBox` |
 | Timeline | Thời gian đi đâu, vừa xảy ra gì | `ShiftGantt`, `KpiStrip`, `EventLog` |
 | Health | Foreman có đang giám sát đúng không | `CheckList`, bảng bất thường, thông báo chưa báo, hộp thư đi |

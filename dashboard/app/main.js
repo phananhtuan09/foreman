@@ -3,9 +3,9 @@ import * as M from './model.js';
 import { useLiveSnapshot } from './live.js';
 import { Board, TaskPeek } from './board.js';
 import { Inbox } from './inbox.js';
-import { TaskPage, Timeline, Health, Projects, Tokens, Settings, KEYS } from './screens.js';
+import { TaskPage, TaskList, Timeline, Health, Projects, Tokens, Settings, KEYS } from './screens.js';
 
-const { STATUS, clockSec, copyText } = F;
+const { STATUS, clockSec } = F;
 
 // Per-browser conveniences only: display preferences, the selected task, and which reports this browser has seen.
 const store = {
@@ -111,7 +111,7 @@ function App() {
       if (palette || help) return;
       if (gPending.current) {
         gPending.current = false;
-        const map = { b: 'board', i: 'inbox', t: 'timeline', h: 'health', p: 'projects', k: 'tokens', s: 'settings' };
+        const map = { b: 'board', i: 'inbox', a: 'task', t: 'timeline', h: 'health', p: 'projects', k: 'tokens', s: 'settings' };
         if (map[e.key.toLowerCase()]) { e.preventDefault(); go(map[e.key.toLowerCase()]); }
         return;
       }
@@ -119,17 +119,12 @@ function App() {
       if (e.key === '/') { e.preventDefault(); setPalette(true); return; }
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
       if (route.view === 'board' && (e.key === 'j' || e.key === 'k')) {
-        const rows = Array.from(document.querySelectorAll('.fm-fleet tr.row')).map((r) => r.getAttribute('data-task'));
+        const rows = Array.from(document.querySelectorAll('.fm-kcard[data-task]')).map((r) => r.getAttribute('data-task'));
         if (!rows.length) return;
         const i = rows.indexOf(selected), n = e.key === 'j' ? Math.min(rows.length - 1, i + 1) : Math.max(0, i - 1);
         select(rows[n < 0 ? 0 : n]);
-        const el = document.querySelector('.fm-fleet tr.row[data-task="' + rows[n < 0 ? 0 : n] + '"]'); if (el) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest' }); }
+        const el = document.querySelector('.fm-kcard[data-task="' + rows[n < 0 ? 0 : n] + '"]'); if (el) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest' }); }
         e.preventDefault();
-      }
-      const target = route.view === 'task' ? route.arg : route.view === 'board' ? selected : null;
-      if (e.key === 'c' && target) {
-        const t = tasks.find((x) => x.taskId === target); const a = t && M.actionsFor(t, now);
-        if (a && (a.text || a.cli)) copyText(a.text || a.cli).then(() => onCopied(a.text || a.cli), () => onCopied(a.text || a.cli, true));
       }
     }
     window.addEventListener('keydown', onKey);
@@ -139,6 +134,7 @@ function App() {
   const nav = [
     { id: 'board', label: 'Tổng quan' },
     { id: 'inbox', label: 'Chờ bạn', count: youCount, tone: 'red', countLabel: youCount + ' việc chờ bạn' },
+    { id: 'task', label: 'Task' },
     { id: 'timeline', label: 'Timeline' },
     { sep: true, key: 's1' },
     { id: 'health', label: 'Health', count: anomalyCount, tone: 'mustard', countLabel: anomalyCount + ' bất thường' },
@@ -161,9 +157,10 @@ function App() {
   if (!snapshot) content = h('div', null, h(F.PageHeader, { title: TITLES[view] }), h(F.Skeleton, { block: true }), h('div', { style: { height: 12 } }), h(F.Skeleton, { lines: 6 }));
   else if (snapshot.state === 'missing-home') content = h(F.StateNotice, { state: 'missing-home', actions: h(F.CopyCommand, { quiet: true, label: 'Chạy từ checkout Foreman', cli: 'bin/foreman init', onCopied }) }, 'Không có ', h('code', null, snapshot.home + '/data'), '. Nhờ Foreman chạy ', h('code', null, 'foreman init'), ' trước, hoặc đặt ', h('code', null, 'FOREMAN_HOME'), ' đúng home rồi chạy lại dashboard.');
   else if (snapshot.state !== 'ready') content = h(F.StateNotice, { state: 'error', actions: h(F.CopyCommand, { quiet: true, label: 'Kiểm tra trong terminal', cli: 'foreman task list --json --summary', onCopied }) }, 'Đọc ', h('code', null, 'data/'), ' thất bại: ', h('code', null, snapshot.error || 'không rõ lỗi'), '. Sẽ tự thử lại.');
-  else if (view === 'board') content = h(Board, { tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), onCopied, prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
-  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id), onCopied });
-  else if (view === 'task') content = h(TaskPage, { t: tasks.find((t) => t.taskId === route.arg), tasks, now, onBack: () => go('board'), onOpen: (id) => go('task', id), onCopied });
+  else if (view === 'board') content = h(Board, { tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
+  else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
+  else if (view === 'task' && !route.arg) content = h(TaskList, { tasks, now, snap, onOpen: (id) => go('task', id) });
+  else if (view === 'task') content = h(TaskPage, { t: tasks.find((t) => t.taskId === route.arg), tasks, now, onBack: () => go('task'), onOpen: (id) => go('task', id) });
   else if (view === 'timeline') content = h(Timeline, { tasks, now, snap, onOpen: (id) => go('task', id) });
   else if (view === 'health') content = h(Health, { tasks, now, snap, conn, onOpen: (id) => go('task', id), onCopied });
   else if (view === 'projects') content = h(Projects, { tasks, now, snap, onOpen: (id) => go('task', id) });
@@ -174,7 +171,7 @@ function App() {
 
   const since = lastUpdate ? clockSec(lastUpdate) : '—';
   return h(F.Sheet, null,
-    h(F.TopBar, { nav, current: view === 'task' ? null : view, onNavigate: (id) => go(id), live, onHome: () => go('board'), onSearch: () => setPalette(true), onHelp: () => setHelp(true), theme, onTheme: () => setThemePref(theme === 'dark' ? 'light' : 'dark') }),
+    h(F.TopBar, { nav, current: view, onNavigate: (id) => go(id), live, onHome: () => go('board'), onSearch: () => setPalette(true), onHelp: () => setHelp(true), theme, onTheme: () => setThemePref(theme === 'dark' ? 'light' : 'dark') }),
     h(F.Perforation),
     h('main', { className: 'fm-main', 'aria-labelledby': 'page-title' },
       conn === 'offline' ? h('div', { style: { marginBottom: 16 } }, h(F.Banner, { tone: 'red', lead: 'Mất kết nối', actions: h(F.Button, { variant: 'flat', size: 'sm', onClick: reconnect }, 'Thử lại') }, 'Dữ liệu dừng lúc ' + since + '. Đang tự kết nối lại mỗi 5 giây.')) : null,
@@ -186,9 +183,9 @@ function App() {
       h('span', null, tasks.length + ' task chưa accept'),
       h('span', null, 'Status check ' + (lastCheck ? clockSec(lastCheck) : '—')),
       h('span', { className: 'end' }, 'Nhấn ', h('span', { className: 'fm-kbd' }, '?'), ' xem phím tắt')),
-    drawer && !wide && view === 'board' && selTask ? h(F.Drawer, { onClose: () => setDrawer(false), label: 'Chi tiết ' + selected }, h(TaskPeek, { t: selTask, all: tasks, now, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), onClose: () => setDrawer(false), onCopied })) : null,
+    drawer && !wide && view === 'board' && selTask ? h(F.Drawer, { onClose: () => setDrawer(false), label: 'Chi tiết ' + selected }, h(TaskPeek, { t: selTask, all: tasks, now, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), onClose: () => setDrawer(false) })) : null,
     palette ? h(F.CommandPalette, { items: paletteItems, onClose: () => setPalette(false) }) : null,
-    help ? h(F.Dialog, { title: 'Phím tắt', onClose: () => setHelp(false) }, h(F.KeyHelp, { groups: KEYS }), h(F.Callout, { variant: 'note', lead: 'Chỉ đọc.' }, 'Các nút Copy chỉ copy prompt hoặc CLI, dashboard không gửi gì.')) : null,
+    help ? h(F.Dialog, { title: 'Phím tắt', onClose: () => setHelp(false) }, h(F.KeyHelp, { groups: KEYS }), h(F.Callout, { variant: 'note', lead: 'Chỉ đọc.' }, 'Dashboard không gửi gì cho Foreman hay agent.')) : null,
     h(F.Toasts, { items: toasts, onDismiss: (id) => setToasts((l) => l.filter((x) => x.id !== id)) }));
 }
 

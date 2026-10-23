@@ -47,9 +47,10 @@ Everything needed to present a new report is here; read `.agents/skills/foreman-
    - candidates are the worker's "Next steps" and requirements of earlier rounds still unfinished; drop what is done, declined, accepted as a limit, or against a limit in force;
    - a worker's optional refactor is input, not an obligation;
    - `round` when the worker can do it, `accept` when the goal is reached and nothing is pending, `clarify` when a report contradicts an earlier result or facts are missing, and `decision` when only the user's choice can unblock it.
-4. Record and show it: `next propose --task ID --kind round|decision|accept|clarify --text LINE [--instruction TEXT] [--type ship|scout]`.
+4. Record and show it: `next propose --task ID --kind round|decision|accept|clarify --text LINE --summary-file FILE [--instruction TEXT] [--type ship|scout]`.
+   `FILE` holds your report of this task's result as the user should read it, in Markdown; it is kept verbatim for the dashboard.
    For `round`, `--instruction` is the worker's instruction, written by the rewriting rules of `foreman-control`.
-   Show the printed block exactly, at the end of the answer, after the result; add no reason paragraph, no instruction text, and no option list.
+   Show the printed output exactly, the report then its block, as this task's part of the answer; add no reason paragraph, no instruction text, and no option list.
    Write "chốt task" or "accept task" for acceptance, never "merge".
 
 When the user answers a shown block, follow "Approving a shown next action" in `foreman-control`.
