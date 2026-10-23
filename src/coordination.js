@@ -55,6 +55,9 @@ function validateTaskMetaRecord(meta, taskId) {
   if (meta.workspaceId !== undefined && meta.workspaceId !== null && typeof meta.workspaceId !== "string") throw new SchemaValidationError(`Task metadata workspace ID is invalid: ${taskId || meta.taskId}`);
   if (meta.round !== undefined && (!Number.isInteger(meta.round) || meta.round < 1)) throw new SchemaValidationError(`Task metadata round is invalid: ${taskId || meta.taskId}`);
   if (meta.everShip !== undefined && typeof meta.everShip !== "boolean") throw new SchemaValidationError(`Task metadata everShip is invalid: ${taskId || meta.taskId}`);
+  if (meta.workerSessions !== undefined && (!Array.isArray(meta.workerSessions) || meta.workerSessions.some((session) => !session || typeof session.sessionId !== "string"))) {
+    throw new SchemaValidationError(`Task metadata worker sessions are invalid: ${taskId || meta.taskId}`);
+  }
   return meta;
 }
 

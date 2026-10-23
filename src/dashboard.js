@@ -9,6 +9,7 @@ const history = require("./history");
 const supervision = require("./supervision");
 const nextAction = require("./next-action");
 const reviewLoad = require("./review-load");
+const tokenUsage = require("./token-usage");
 
 // The web dashboard's view of the home: one snapshot of everything its screens show, built from `data/` without the home lock.
 // Like `taskSummaries`, it never initializes the home, migrates a record, or calls a runtime; runtime evidence comes only
@@ -280,7 +281,7 @@ function untoldNotices(home, metas, tasks, check) {
  * Everything the dashboard shows, as one JSON-ready object. `titles` remembers the title of each task the server has seen open,
  * because ended-task history keeps no task content.
  */
-function buildSnapshot({ roots, now = Date.now(), titles = new Map() }) {
+function buildSnapshot({ roots, now = Date.now(), titles = new Map(), env = process.env }) {
   const home = roots.foremanHome;
   const base = { schemaVersion: 1, generatedAt: now, home: tilde(home) };
   if (!fs.existsSync(path.join(home, "data"))) return { ...base, state: "missing-home" };
@@ -315,6 +316,8 @@ function buildSnapshot({ roots, now = Date.now(), titles = new Map() }) {
       sup = { heartbeat: heartbeat ? { id: heartbeat.heartbeatId, agent: heartbeat.agentId, cron: record.heartbeatCron, lastFiredAt: ms(heartbeat.lastFiredAt), confirmedAt: ms(heartbeat.confirmedAt), createdAt: ms(heartbeat.createdAt) } : null, enabled: record.heartbeatEnabled !== false, cron: record.heartbeatCron };
     } catch (_) {}
     const ended = history.readHistory(home);
+    const sessionsOf = (record) => (Array.isArray(record.workerSessions) ? record.workerSessions : []).map((session) => ({ ...session, taskId: record.taskId, projectId: record.projectId }));
+    const tokens = tokenUsage.tokenUsage({ sessions: [...metas.flatMap(sessionsOf), ...ended.records.filter((record) => ms(record.endedAt) >= now - (tokenUsage.WINDOW_DAYS + 1) * 86400000).flatMap(sessionsOf)], now, env });
     return {
       ...base,
       state: "ready",
@@ -329,6 +332,7 @@ function buildSnapshot({ roots, now = Date.now(), titles = new Map() }) {
       history: ended.records.map((record) => ({ taskId: record.taskId, projectId: record.projectId, type: record.type, backend: record.backend, outcome: record.outcome, createdAt: ms(record.createdAt), endedAt: ms(record.endedAt), round: record.round, generation: record.generation, title: titles.get(record.taskId) || null }))
         .sort((left, right) => (right.endedAt || 0) - (left.endedAt || 0)),
       historySkipped: ended.skipped.length,
+      tokens,
       nextExpiryAt: tasks.flatMap((task) => task.attention.map((point) => point.until)).filter((until) => until !== null).reduce((min, until) => (min === null || until < min ? until : min), null),
     };
   } catch (error) {

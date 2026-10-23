@@ -46,7 +46,7 @@ class FakePaseoAdapter {
   inspect(endpoint) {
     this.calls.push(`inspect:${endpoint}`);
     const agent = this.agents.get(endpoint);
-    return agent ? { endpoint, endpointId: endpoint, agentId: endpoint, owner: agent.owner, taskId: agent.taskId, projectId: agent.projectId, generation: agent.generation, cwd: agent.cwd, workspaceId: agent.workspaceId, status: agent.status, activeTurn: agent.activeTurn, requiresAttention: agent.requiresAttention, attentionReason: agent.attentionReason, attentionTimestamp: agent.attentionTimestamp } : { endpoint, status: "missing" };
+    return agent ? { endpoint, endpointId: endpoint, agentId: endpoint, provider: agent.dispatchProfile?.provider || null, providerSessionId: agent.providerSessionId || null, owner: agent.owner, taskId: agent.taskId, projectId: agent.projectId, generation: agent.generation, cwd: agent.cwd, workspaceId: agent.workspaceId, status: agent.status, activeTurn: agent.activeTurn, requiresAttention: agent.requiresAttention, attentionReason: agent.attentionReason, attentionTimestamp: agent.attentionTimestamp } : { endpoint, status: "missing" };
   }
   cursor(endpoint) { const agent = this.agents.get(endpoint); return agent ? { ...agent.cursor } : null; }
   send(endpoint, prompt, options = {}) {

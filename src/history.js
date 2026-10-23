@@ -95,6 +95,7 @@ function historyRecord({ home, meta, outcome, at }) {
     // A reassignment whose first dispatch failed is dispatched again with the same handoff, so it counts once.
     reassignments: new Set(events.filter((event) => event.type === "dispatch" && event.replaced === "human-reassign").map((event) => event.handoffId)).size,
     reviewLoad: meta.reviewLoad || null,
+    workerSessions: meta.workerSessions || [],
     events: [...events, { type: outcome, at }],
   };
 }

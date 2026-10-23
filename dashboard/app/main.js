@@ -173,7 +173,7 @@ function App() {
   else if (view === 'timeline') content = h(Timeline, { tasks, now, snap, onOpen: (id) => go('task', id) });
   else if (view === 'health') content = h(Health, { tasks, now, snap, conn, onOpen: (id) => go('task', id), onCopied });
   else if (view === 'projects') content = h(Projects, { tasks, now, snap, onOpen: (id) => go('task', id) });
-  else if (view === 'tokens') content = h(Tokens);
+  else if (view === 'tokens') content = h(Tokens, { snap, now, onOpen: (id) => go('task', id) });
   else content = h(Settings, { tasks, snap, prefs, setPrefs, themePref, setThemePref, notifyState,
     onNotify: (v) => { if (!v) return setPrefs({ notify: false }); if (typeof Notification === 'undefined') return; Notification.requestPermission().then((p) => { setPrefs({ notify: p === 'granted' }); if (p !== 'granted') toast('Trình duyệt không cho phép thông báo.', { tone: 'red' }); }); } });
   useEffect(() => { if (view === 'task' && route.arg) { const t = tasks.find((x) => x.taskId === route.arg); if (t) markSeen(t); } }, [view, route.arg, tasks]);

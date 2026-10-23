@@ -74,6 +74,8 @@ function statusView(agent) {
     paseoProfileId: labels["foreman.paseoProfileId"] || null,
     paseoProfileName: labels["foreman.paseoProfileName"] || null,
     provider: agent.provider || null,
+    // The provider's own session, which names its transcript; the Claude provider writes token usage there.
+    providerSessionId: agent.persistence?.sessionId || agent.runtimeInfo?.sessionId || null,
     model: agent.model || null,
     currentModeId: agent.currentModeId || null,
     thinkingOptionId: agent.thinkingOptionId || null,

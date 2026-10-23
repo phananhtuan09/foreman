@@ -3,7 +3,7 @@ import { F } from './react.js';
 
 const { STATUS, STATUS_ORDER, issueOf, dur, ago, clock, dayLabel, TIME } = F;
 
-export const THRESHOLDS = { silentMin: 90, overdueHours: 24 };
+export const THRESHOLDS = { silentMin: 90, overdueHours: 24, cacheCold: 65 };
 const BAD_RUNTIME = ['unknown', 'dead', 'missing', 'mismatch', 'waiting-input'];
 export const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
