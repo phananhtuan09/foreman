@@ -53,6 +53,8 @@ Everything needed to present a new report is here; read `.agents/skills/foreman-
    Show the printed output exactly, the report then its block, as this task's part of the answer; add no reason paragraph, no instruction text, and no option list.
    Write "chốt task" or "accept task" for acceptance, never "merge".
 
+When the user asks to check a task that is `review-ready` or `blocked` and `next show --task ID` shows no `current` next action, run these steps for its last report before answering, even though the report is no longer new; the dashboard shows Foreman's report only after `next propose`.
+
 When the user answers a shown block, follow "Approving a shown next action" in `foreman-control`.
 
 ## Heartbeat turn (Paseo)

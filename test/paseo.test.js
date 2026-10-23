@@ -306,6 +306,21 @@ test("adopting a Paseo agent sends the persisted brief and binds later reports t
   } finally { f.cleanup(); }
 });
 
+test("Paseo records a report whose turn id repeats after the timeline restarts", () => {
+  const f = fixture();
+  try {
+    const { task, assignment } = routeAndAssign(f);
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "progress", summary: "First pass." }), { turnId: "foreground-turn-2" });
+    assert.equal(collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks[0].state, "progress");
+    // A restarted timeline numbers its turns again, so the next report can reuse the same turn id.
+    f.adapter.agents.get(assignment.endpoint).cursor.epoch = "epoch-restarted";
+    f.adapter.finish(assignment.endpoint, JSON.stringify({ status: "done", summary: "Second pass." }), { turnId: "foreground-turn-2" });
+    const collection = collectPaseoReports({ roots: f.roots, adapter: f.adapter }).tasks[0];
+    assert.equal(collection.state, "done", JSON.stringify(collection));
+    assert.equal(reconstructTask({ roots: f.roots, taskId: task.id }).meta.status, "review-ready");
+  } finally { f.cleanup(); }
+});
+
 test("Paseo rejects invalid, duplicate, stale-generation, and timeline-gap reports without claiming completion", () => {
   const f = fixture();
   try {
