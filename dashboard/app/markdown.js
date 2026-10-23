@@ -3,7 +3,8 @@ import { h } from './react.js';
 // A small Markdown reader for Foreman's own reports, so the dashboard shows them as the Foreman session does.
 // It builds React elements only (never HTML strings), and links open only for http(s) URLs.
 
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(\[[^\]]+\]\([^)\s]+\))/;
+// Underscores inside a word (git_log_file.md) stay literal, as in ordinary Markdown.
+const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*|(?<![\p{L}\p{N}_])__[^_]+__(?![\p{L}\p{N}_]))|(\*[^*\s][^*]*\*|(?<![\p{L}\p{N}_])_[^_\s][^_]*_(?![\p{L}\p{N}_]))|(\[[^\]]+\]\([^)\s]+\))/u;
 
 function inline(text, key = 'i') {
   const out = [];
@@ -25,7 +26,8 @@ function inline(text, key = 'i') {
   return out;
 }
 
-const cells = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+// An escaped pipe (\|) belongs to its cell rather than separating columns.
+const cells = (line) => line.trim().replace(/^\||(?<!\\)\|$/g, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
 
 function blocks(lines, key) {
   const out = [];

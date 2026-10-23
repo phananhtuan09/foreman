@@ -102,14 +102,15 @@ export function TaskList({ tasks, now, snap, onOpen }) {
   const rows = scoped.filter((t) => status === 'all' || M.statusKey(t) === status);
   const ended = (snap.history || []).filter(matches).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
   const projects = Array.from(new Set((snap.projects || []).map((p) => p.id).concat(tasks.map((t) => t.projectId))));
-  const keys = Array.from(new Set(scoped.map(M.statusKey)));
+  // A chosen status stays listed (and the chips visible) even when the project or search leaves no task in it, so it can be cleared.
+  const keys = Array.from(new Set(scoped.map(M.statusKey).concat(status === 'all' ? [] : [status])));
   return h('div', null,
     h(F.PageHeader, { no: '03', eyebrow: 'Danh sách', title: 'Task', id: 'page-title', lede: tasks.length + ' task chưa accept · ' + (snap.history || []).length + ' task đã kết thúc.' }),
     h('div', { className: 'fm-toolbar' },
       h(F.FilterChips, { label: 'Dự án', value: proj, onChange: setProj, options: [{ value: 'all', label: 'Tất cả' }].concat(projects.map((p) => ({ value: p, label: p }))) }),
       h('span', { className: 'end' }, h(F.SearchField, { value: q, onChange: setQ, inputRef: null }))),
     h(F.SectionHeader, { title: 'Đang mở', meta: rows.length < tasks.length ? rows.length + ' / ' + tasks.length : tasks.length }),
-    keys.length > 1 ? h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Trạng thái', value: status, onChange: setStatus, options: [{ value: 'all', label: 'Tất cả', count: scoped.length }].concat(keys.map((k) => ({ value: k, label: STATUS[k].label, count: scoped.filter((t) => M.statusKey(t) === k).length }))) })) : null,
+    keys.length > 1 || status !== 'all' ? h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Trạng thái', value: status, onChange: setStatus, options: [{ value: 'all', label: 'Tất cả', count: scoped.length }].concat(keys.map((k) => ({ value: k, label: STATUS[k].label, count: scoped.filter((t) => M.statusKey(t) === k).length }))) })) : null,
     rows.length ? table(['Task', 'Trạng thái', 'Dự án', 'Agent', { label: 'Round', r: true }, { label: 'Hoạt động cuối', r: true }], rows.map((t) => h('tr', { key: t.taskId, className: cx('fm-rowlink', M.anomalyOf(t, now).any && 'warn'), onClick: () => onOpen(t.taskId) },
       h('td', null, link(t.taskId, onOpen), h('div', { style: { fontSize: 13 } }, t.title)),
       h('td', null, h(F.StatusLabel, { status: M.statusKey(t), size: 'sm' })),
