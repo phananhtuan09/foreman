@@ -56,6 +56,19 @@ The dashboard answers, in order: what waits for the user, which agents run and w
   Ended tasks from `data/task-history.jsonl` are listed below with their outcome and no link, because their content is gone.
 - Tổng quan's Agent section shows every task with an endpoint, or still dispatching, exactly once on a kanban board by runtime state: Đang chạy (running or dispatching), Idle, Chờ input, and Không rõ / mất (unknown, mismatch, dead, missing).
 - Tổng quan shows a one-line summary, the Agent section, and every live task exactly once on a kanban board with four flow columns: Hàng chờ (routing, queued), Đang làm (pending, working), Cần bạn (waiting decision, blocked, model choice), and Chờ duyệt (review-ready).
+- Tổng quan warns about the user's load above the boards, from the same items as Chờ bạn, and only while the warning applies.
+  - Now: the number of items reaches a limit, or one item has waited longer than the limit of its kind: blocked or decision, model choice, or review and attention point.
+    The warning is red when a blocked task or decision is over its limit, because its agent is idle; otherwise mustard.
+  - End of day: within the user's work hours, the estimated time to handle every item is compared with the time left.
+    It is red when the estimate exceeds the time left, and mustard within a set time before the end when the estimate reaches a set share of the time left.
+    The warning names the quick items that fit, by Chờ bạn's quick-first order, and the rest that can wait for tomorrow.
+    After the end of the work hours it lists what is left for tomorrow.
+  - Each estimate is a set number of minutes per kind; a review adds minutes per changed file up to a cap and counts an unmeasured size as five files.
+  - Every limit, the work hours, and every estimate are browser settings on Cài đặt with defaults, stored in the browser only where they differ from the default, and one action restores all defaults.
+    The warning can be turned off there; it never changes what Foreman does.
+  - A task ID in a warning opens that item in Chờ bạn.
+    The now warning opens Chờ bạn filtered to overdue items, and the end-of-day warning opens it in quick-first order.
+  - In Chờ bạn an item over the wait limit of its kind is marked overdue, with a filter for overdue items, and during the work hours an item today's forecast leaves for tomorrow is marked so.
 - In Đang làm, a task with an issue, a bad runtime state, or no activity for 90 minutes is marked as an anomaly and listed first.
 - Task status labels are Vietnamese; runtime states keep Foreman's values.
 - Chờ bạn lists decisions, blocked reports, model choices, reviews, and the user's open attention points, grouped by kind and longest waiting first.

@@ -235,7 +235,7 @@ test("dashboard serve ends a HEAD request for the event stream and shows a snooz
 
 // The browser modules read React from `window`; a stub that keeps elements as plain objects lets them run under Node.
 async function importApp(name) {
-  globalThis.window ??= { React: { createElement: (type, props, ...children) => ({ type, props, children: children.flat(Infinity) }), Fragment: "frag" }, Foreman: {} };
+  globalThis.window ??= { React: { createElement: (type, props, ...children) => ({ type, props, children: children.flat(Infinity) }), Fragment: "frag" }, Foreman: { dur: (ms) => `${Math.round(ms / 60000)}m` } };
   return import(require("node:url").pathToFileURL(path.join(__dirname, "..", "dashboard", "app", name)).href);
 }
 
@@ -291,4 +291,18 @@ test("dashboard Chờ bạn orders quick ascending and risk descending, with an 
   assert.equal(reason(writes, "risk"), "build · 1 file · 0 dòng · 2 lease ghi");
   assert.equal(reason(writes, "quick"), "1 file · 0 dòng");
   assert.equal(reason(unmeasured, "quick"), "chưa đo cỡ, tính như review vừa");
+});
+
+test("dashboard end-of-day forecast fills the time left in the order Chờ bạn lists the items", async () => {
+  const { loadState, loadSettings } = await importApp("load.js");
+  const { listOrder, inboxItems } = await importApp("inbox.js");
+  const now = new Date(2026, 9, 23, 17, 50).getTime();
+  const task = (id, status, reviewChange) => ({ taskId: id, title: id, projectId: "p", type: "build", status, statusSince: now - 60000, round: 1, rounds: [], lease: [], attention: [], decisions: [], reviewChange });
+  // 10 minutes left: the quicker 6-minute review comes after the 10-minute blocked item in Chờ bạn, so the blocked item is the one that fits.
+  const tasks = [task("review", "review-ready", { files: 1, lines: 0 }), task("blocked", "blocked", null)];
+  const listed = listOrder(inboxItems(tasks, now, () => false), "quick").map((i) => i.id);
+  assert.deepEqual(listed, ["blocked", "review"]);
+  const { day } = loadState(tasks, now, loadSettings({ dayStart: "09:00", dayEnd: "18:00" }));
+  assert.deepEqual(day.fit.map((i) => i.id), ["blocked"]);
+  assert.deepEqual(day.later.map((i) => i.id), ["review"]);
 });

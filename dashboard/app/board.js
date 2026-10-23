@@ -101,7 +101,7 @@ function Kanban({ label, columns }) {
       col.items.length ? h('ul', null, col.items) : h('p', { className: 'empty' }, 'Không có.')))));
 }
 
-export function Board({ tasks, now, selected, onSelect, onOpenFull, onOpenInbox, prefs, setPrefs, wide, flashId, isNew }) {
+export function Board({ tasks, now, selected, onSelect, onOpenFull, onOpenInbox, prefs, setPrefs, wide, flashId, isNew, banners }) {
   const [proj, setProj] = useState('all');
   const [q, setQ] = useState('');
   const search = useMemo(() => q.trim().toLowerCase(), [q]);
@@ -123,6 +123,7 @@ export function Board({ tasks, now, selected, onSelect, onOpenFull, onOpenInbox,
     h('div', { style: { minWidth: 0 } },
       h(F.PageHeader, { no: '01', eyebrow: dateLabel(now) + ' · ' + clock(now), title: 'Tổng quan', id: 'page-title',
         lede: (all.you.length ? all.you.length + ' việc chờ bạn, lâu nhất ' + oldest : 'Không có việc chờ bạn') + ' · ' + (all.anomaly.length ? all.anomaly.length + ' bất thường' : 'không có bất thường') + ' · ' + all.run.length + ' agent đang chạy.' }),
+      banners,
       prefs.showLanes ? frag(
         h(F.SectionHeader, { title: 'Agent', meta: agents.length + ' endpoint', end: h(F.Button, { variant: 'ghost', size: 'sm', onClick: () => setPrefs({ showLanes: false }) }, 'Thu gọn') }),
         h(Kanban, { label: 'Agent theo runtime state', columns: agentColumns })
