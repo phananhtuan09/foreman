@@ -1,5 +1,5 @@
 import { h, F, Fragment } from './react.js';
-import { inboxItems, weigh } from './inbox.js';
+import { inboxItems, listOrder } from './inbox.js';
 import { minutes } from './model.js';
 
 // The user's load: what is waiting on them now, and whether today's remaining work time covers it.
@@ -50,11 +50,10 @@ export function loadState(tasks, now, cfg) {
       const left = (end - now) / 60000;
       const tone = total > left ? 'red' : left <= cfg.warnBeforeMin && total >= (cfg.warnPct / 100) * left ? 'mustard' : null;
       if (tone) {
-        // Fill the time left with the quickest work first; what does not fit can wait for tomorrow.
-        const quick = items.slice().sort((a, b) => weigh(a.task, 'quick') - weigh(b.task, 'quick') || b.ms - a.ms);
+        // Fill the time left in the order “Xem theo thứ tự nhanh” lists the items; what does not fit can wait for tomorrow.
         let used = 0;
         const fit = [], later = [];
-        quick.forEach((i) => { const e = estimateMin(i, cfg); if (used + e <= left) { used += e; fit.push(i); } else later.push(i); });
+        listOrder(items, 'quick').forEach((i) => { const e = estimateMin(i, cfg); if (used + e <= left) { used += e; fit.push(i); } else later.push(i); });
         day = { phase: 'during', tone, total, left, fit, fitMin: used, later };
       }
     }

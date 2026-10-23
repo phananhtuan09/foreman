@@ -158,13 +158,15 @@ function App() {
   const loadCfg = loadSettings(prefs.load);
   const load = snap ? loadState(tasks, now, loadCfg) : { marks: {} };
   const openInbox = (kind, order) => { setInboxKind(kind); if (order) setPrefs({ inboxOrder: order }); go('inbox'); };
-  const banners = view === 'board' && snap && loadCfg.enabled ? h(LoadBanners, { state: load, cfg: loadCfg, onPick: (k) => { setInboxKind('all'); go('inbox', k); },
+  // Opening one item clears the kind filter, which could otherwise hide it.
+  const openItem = (k) => { setInboxKind('all'); go('inbox', k); };
+  const banners = view === 'board' && snap && loadCfg.enabled ? h(LoadBanners, { state: load, cfg: loadCfg, onPick: openItem,
     onOpenOverdue: () => openInbox('overdue'), onOpenQuick: () => openInbox('all', 'quick'), onOpenInbox: () => openInbox('all') }) : null;
   let content;
   if (!snapshot) content = h('div', null, h(F.PageHeader, { title: TITLES[view] }), h(F.Skeleton, { block: true }), h('div', { style: { height: 12 } }), h(F.Skeleton, { lines: 6 }));
   else if (snapshot.state === 'missing-home') content = h(F.StateNotice, { state: 'missing-home', actions: h(F.CopyCommand, { quiet: true, label: 'Chạy từ checkout Foreman', cli: 'bin/foreman init', onCopied }) }, 'Không có ', h('code', null, snapshot.home + '/data'), '. Nhờ Foreman chạy ', h('code', null, 'foreman init'), ' trước, hoặc đặt ', h('code', null, 'FOREMAN_HOME'), ' đúng home rồi chạy lại dashboard.');
   else if (snapshot.state !== 'ready') content = h(F.StateNotice, { state: 'error', actions: h(F.CopyCommand, { quiet: true, label: 'Kiểm tra trong terminal', cli: 'foreman task list --json --summary', onCopied }) }, 'Đọc ', h('code', null, 'data/'), ' thất bại: ', h('code', null, snapshot.error || 'không rõ lỗi'), '. Sẽ tự thử lại.');
-  else if (view === 'board') content = h(Board, { banners, tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
+  else if (view === 'board') content = h(Board, { banners, tasks, now, selected, onSelect: select, onOpenFull: (id) => go('task', id), onOpenInbox: openItem, prefs: { ...prefs, cards: narrow }, setPrefs, wide, flashId, isNew });
   else if (view === 'inbox') content = h(Inbox, { tasks, now, profiles: snap.profiles || [], current: route.arg, isNew, order: prefs.inboxOrder, onOrder: (v) => setPrefs({ inboxOrder: v }), kind: inboxKind, setKind: setInboxKind, marks: load.marks, onPick: (k) => { go('inbox', k); const t = tasks.find((x) => x.taskId === k.split(':')[0]); if (t) markSeen(t); }, onOpenFull: (id) => go('task', id) });
   else if (view === 'task' && !route.arg) content = h(TaskList, { tasks, now, snap, onOpen: (id) => go('task', id) });
   else if (view === 'task') content = h(TaskPage, { t: tasks.find((t) => t.taskId === route.arg), tasks, now, onBack: () => go('task'), onOpen: (id) => go('task', id) });
@@ -190,7 +192,7 @@ function App() {
       h('span', null, tasks.length + ' task chưa accept'),
       h('span', null, 'Status check ' + (lastCheck ? clockSec(lastCheck) : '—')),
       h('span', { className: 'end' }, 'Nhấn ', h('span', { className: 'fm-kbd' }, '?'), ' xem phím tắt')),
-    drawer && !wide && view === 'board' && selTask ? h(F.Drawer, { onClose: () => setDrawer(false), label: 'Chi tiết ' + selected }, h(TaskPeek, { t: selTask, all: tasks, now, onOpenFull: (id) => go('task', id), onOpenInbox: (k) => go('inbox', k), onClose: () => setDrawer(false) })) : null,
+    drawer && !wide && view === 'board' && selTask ? h(F.Drawer, { onClose: () => setDrawer(false), label: 'Chi tiết ' + selected }, h(TaskPeek, { t: selTask, all: tasks, now, onOpenFull: (id) => go('task', id), onOpenInbox: openItem, onClose: () => setDrawer(false) })) : null,
     palette ? h(F.CommandPalette, { items: paletteItems, onClose: () => setPalette(false) }) : null,
     help ? h(F.Dialog, { title: 'Phím tắt', onClose: () => setHelp(false) }, h(F.KeyHelp, { groups: KEYS }), h(F.Callout, { variant: 'note', lead: 'Chỉ đọc.' }, 'Dashboard không gửi gì cho Foreman hay agent.')) : null,
     h(F.Toasts, { items: toasts, onDismiss: (id) => setToasts((l) => l.filter((x) => x.id !== id)) }));

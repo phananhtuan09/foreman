@@ -15,7 +15,7 @@ const ORDERS = [{ value: 'age', label: 'Lâu nhất' }, { value: 'quick', label:
 
 // Plain weights meant to be tuned with use: quick favours small first-round work with nothing open,
 // risk favours shipped code, wide writes, lease overlaps, and rework. An unmeasured size counts as a medium review.
-export function weigh(t, order) {
+function weigh(t, order) {
   const c = t.reviewChange, size = c ? c.files + c.lines / 50 : 5, rework = Math.max(0, t.round - 1), points = M.openPoints(t).length;
   if (order === 'quick') return size + 2 * rework + 3 * points;
   return (t.type === 'ship' ? 3 : 0) + size + t.lease.filter((l) => l.mode === 'write').length + (t.leaseOverlap ? 5 : 0) + 2 * rework + 2 * points;
@@ -31,6 +31,10 @@ export function byOrder(order) {
   const sign = order === 'quick' ? 1 : -1;
   return (a, b) => sign * (weigh(a.task, order) - weigh(b.task, order)) || b.ms - a.ms;
 }
+
+// The order Chờ bạn lists items in: by kind, then by `order` within each kind.
+const GROUPS = KINDS.concat([{ key: 'point', label: 'Attention' }]);
+export const listOrder = (items, order) => GROUPS.reduce((out, g) => out.concat(items.filter((i) => i.kind === g.key).sort(byOrder(order))), []);
 
 export function inboxItems(tasks, now, isNew) {
   const items = [];
@@ -59,7 +63,7 @@ export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew
     const badges = m.over || m.later ? h('span', { className: 'fm-ibadges' }, m.over ? h('span', { className: 'fm-ibadge t-red' }, 'Quá hạn') : null, m.later ? h('span', { className: 'fm-ibadge t-blue' }, 'Để mai') : null) : null;
     return { ...i, project: h(Fragment, null, r ? i.project + ' · ' + r : i.project, badges) }; };
   const picked = (i, g) => i.kind === g.key && (kind === 'all' || kind === g.key || (kind === 'overdue' && i.late));
-  const groups = KINDS.concat([{ key: 'point', label: 'Attention' }]).map((g) => ({ ...g, items: items.filter((i) => picked(i, g)).sort(byOrder(order)).map(shown) })).filter((g) => g.items.length);
+  const groups = GROUPS.map((g) => ({ ...g, items: items.filter((i) => picked(i, g)).sort(byOrder(order)).map(shown) })).filter((g) => g.items.length);
   const flat = groups.reduce((a, g) => a.concat(g.items), []);
   const cur = flat.find((i) => i.key === current) || flat[0];
   const oldest = items.slice().sort((a, b) => b.ms - a.ms)[0];
@@ -71,7 +75,7 @@ export function Inbox({ tasks, now, profiles, current, onPick, onOpenFull, isNew
   return h('div', null,
     h(F.PageHeader, { no: '02', eyebrow: 'Inbox', title: 'Chờ bạn', id: 'page-title', lede: items.length ? items.length + ' việc, lâu nhất ' + oldest.age + ' (' + oldest.id + ').' : 'Không có việc chờ bạn.' }),
     items.length === 0 ? h(F.StateNotice, { state: 'empty', stamp: 'Trống', title: 'Không có việc chờ bạn' }, 'Các agent đang tự chạy.') : frag(
-      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(overdueCount || kind === 'overdue' ? [{ value: 'overdue', label: 'Quá hạn', count: overdueCount }] : []).concat(KINDS.concat([{ key: 'point', label: 'Attention' }]).map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) }),
+      h('div', { className: 'fm-toolbar' }, h(F.FilterChips, { label: 'Loại', value: kind, onChange: setKind, options: [{ value: 'all', label: 'Tất cả', count: items.length }].concat(overdueCount || kind === 'overdue' ? [{ value: 'overdue', label: 'Quá hạn', count: overdueCount }] : []).concat(GROUPS.map((k) => ({ value: k.key, label: k.label, count: items.filter((i) => i.kind === k.key).length })).filter((o) => o.count)) }),
         h('span', { className: 'end' }, h(F.Segmented, { label: 'Thứ tự trong mỗi nhóm', value: order, onChange: onOrder, options: ORDERS }))),
       h('div', { className: 'fm-inbox' },
         h(F.InboxList, { groups, current: cur && cur.key, onPick }),

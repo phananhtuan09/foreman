@@ -300,8 +300,10 @@ function NumInput({ value, onChange, type = 'number', min = 0, max, label }) {
 // Only values that differ from the defaults are stored, so a later change of a default still reaches every field the user left alone.
 function LoadSettings({ prefs, setPrefs }) {
   const stored = prefs.load || {}, cfg = loadSettings(stored);
+  // Restoring defaults remounts the inputs, so a field left invalid at its default value also returns to it.
+  const [resets, setResets] = useState(0);
   const set = (k) => (v) => { const next = { ...stored, [k]: v }; if (v === LOAD_DEFAULTS[k]) delete next[k]; setPrefs({ load: next }); };
-  const input = (k, label, extra) => h(NumInput, { value: cfg[k], onChange: set(k), label, ...extra });
+  const input = (k, label, extra) => h(NumInput, { key: k + ':' + resets, value: cfg[k], onChange: set(k), label, ...extra });
   // One row reads as a sentence: what it is, its value, and the unit; a value changed from the default is marked.
   const row = (label, controls, keys) => h('div', { className: cx('fm-lrow', keys.some((k) => k in stored) && 'changed') }, h('span', { className: 'l' }, label), h('span', { className: 'c' }, controls));
   const num = (k, label, unit, extra) => row(label, [input(k, label, extra), h('span', { key: 'u', className: 'u' }, unit)], [k]);
@@ -311,7 +313,7 @@ function LoadSettings({ prefs, setPrefs }) {
   return h(F.Card, { title: 'Tải của bạn', end: changed ? changed + ' giá trị đã đổi · lưu ở trình duyệt' : 'mặc định · lưu ở trình duyệt' },
     h('div', { className: 'fm-lhead' },
       h(F.Toggle, { checked: cfg.enabled, onChange: set('enabled') }, 'Cảnh báo tải trên Tổng quan'),
-      h(F.Button, { variant: 'ghost', size: 'sm', disabled: !changed, onClick: () => setPrefs({ load: {} }) }, 'Khôi phục mặc định')),
+      h(F.Button, { variant: 'ghost', size: 'sm', disabled: !changed, onClick: () => { setResets(resets + 1); setPrefs({ load: {} }); } }, 'Khôi phục mặc định')),
     h('div', { className: cx('fm-lgroups', !cfg.enabled && 'off') },
       group('Đang dồn việc', 'Báo khi một trong các điều kiện dưới đây xảy ra. Đỏ nếu việc bị chặn hoặc quyết định quá hạn, vì agent đang đứng chờ.', [
         num('maxItems', 'Số việc chờ bạn từ', 'việc', { min: 1 }),
