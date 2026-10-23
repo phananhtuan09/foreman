@@ -211,6 +211,8 @@ function taskView({ home, meta, check, messages, now }) {
     lease: (meta.resourceLease?.resources || []).map(({ key, mode }) => ({ key, mode })), dependencies: meta.dependencies || [],
     handoff: handoffView(dir), rounds, foremanReports: foremanReports(dir), decisions, attention: points, messages: own,
     unread: Boolean(meta.lastReport && !meta.lastReport.readAt), reviewSize: meta.status === "review-ready" ? reviewLoad.formatReviewLoad(meta.reviewLoad, "vi") : null,
+    // The same measurement as numbers, so Chờ bạn can order reviews by size.
+    reviewChange: meta.status === "review-ready" && meta.reviewLoad && !meta.reviewLoad.error ? { files: meta.reviewLoad.files, lines: meta.reviewLoad.insertions + meta.reviewLoad.deletions } : null,
     nextAction: proposal,
   };
 }

@@ -75,6 +75,9 @@ test("the snapshot shows what the board needs from Foreman's own records and lea
     const done = byId[ids.done];
     assert.equal(done.status, "review-ready");
     assert.equal(done.title, "Add the login form");
+    assert.equal(done.reviewSize, "0 file, +0/−0");
+    assert.deepEqual(done.reviewChange, { files: 0, lines: 0 }, "the review size also arrives as numbers to order reviews by");
+    assert.equal(byId[ids.blocked].reviewChange, null);
     assert.equal(done.rounds[0].original, "Làm form đăng nhập có kiểm tra dữ liệu.");
     assert.deepEqual(done.rounds[0].reports[0].steps, ["Accept task. (recommended)", "Thêm test cho màn hình nhỏ."]);
     assert.equal(done.rounds[0].reports[0].summary, "Kết quả: form đăng nhập có kiểm tra dữ liệu.\nBằng chứng: 12/12 test pass.");
@@ -259,4 +262,33 @@ test("dashboard Markdown keeps underscores inside words and escaped pipes inside
   const table = Markdown({ text: "| Check | Result |\n| --- | --- |\n| a\\|b | passed |" });
   assert.deepEqual(findAll(table, "td").map(textOf), ["a|b", "passed"]);
   assert.deepEqual(findAll(table, "th").map(textOf), ["Check", "Result"]);
+});
+
+test("dashboard Chờ bạn orders quick ascending and risk descending, with an unmeasured size counted as medium", async () => {
+  const { byOrder, reason } = await importApp("inbox.js");
+  const task = (id, extra = {}) => ({ taskId: id, type: "build", round: 1, lease: [], attention: [], reviewChange: { files: 1, lines: 0 }, ...extra });
+  const item = (t, ms = 0) => ({ id: t.taskId, ms, task: t });
+  const ids = (items, order) => items.slice().sort(byOrder(order)).map((i) => i.id);
+
+  const small = task("small"), big = task("big", { reviewChange: { files: 9, lines: 0 } }), unmeasured = task("unmeasured", { reviewChange: null });
+  const items = [item(big), item(small), item(unmeasured)];
+  assert.deepEqual(ids(items, "quick"), ["small", "unmeasured", "big"]);
+  assert.deepEqual(ids(items, "risk"), ["big", "unmeasured", "small"]);
+
+  // Rework, open points, shipped code, write leases, and overlaps each move a task as weighed.
+  const rework = task("rework", { round: 3 }), pointed = task("pointed", { attention: [{ state: "open" }] });
+  assert.deepEqual(ids([item(pointed), item(rework), item(small)], "quick"), ["small", "pointed", "rework"]);
+  const ship = task("ship", { type: "ship" }), writes = task("writes", { lease: [{ mode: "write" }, { mode: "write" }, { mode: "read" }] }), overlap = task("overlap", { leaseOverlap: "T-9" });
+  assert.deepEqual(ids([item(small), item(writes), item(ship), item(overlap)], "risk"), ["overlap", "ship", "writes", "small"]);
+
+  // Equal weights fall back to the oldest first, as does the age order.
+  const older = item(task("older"), 5000), newer = item(task("newer"), 1000);
+  assert.deepEqual(ids([newer, older], "quick"), ["older", "newer"]);
+  assert.deepEqual(ids([newer, older], "risk"), ["older", "newer"]);
+  assert.deepEqual(ids([item(small, 1), item(big, 9)], "age"), ["big", "small"]);
+
+  // The explanation names every input the order used.
+  assert.equal(reason(writes, "risk"), "build · 1 file · 0 dòng · 2 lease ghi");
+  assert.equal(reason(writes, "quick"), "1 file · 0 dòng");
+  assert.equal(reason(unmeasured, "quick"), "chưa đo cỡ, tính như review vừa");
 });

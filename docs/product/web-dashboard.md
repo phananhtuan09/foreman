@@ -58,7 +58,10 @@ The dashboard answers, in order: what waits for the user, which agents run and w
 - Tổng quan shows a one-line summary, the Agent section, and every live task exactly once on a kanban board with four flow columns: Hàng chờ (routing, queued), Đang làm (pending, working), Cần bạn (waiting decision, blocked, model choice), and Chờ duyệt (review-ready).
 - In Đang làm, a task with an issue, a bad runtime state, or no activity for 90 minutes is marked as an anomaly and listed first.
 - Task status labels are Vietnamese; runtime states keep Foreman's values.
-- Chờ bạn lists decisions, blocked reports, model choices, reviews, and the user's open attention points, longest waiting first.
+- Chờ bạn lists decisions, blocked reports, model choices, reviews, and the user's open attention points, grouped by kind and longest waiting first.
+- The user can instead order each group quick first or risk first; the choice is kept in the browser.
+  Quick first favours a small measured change, the first round, and no open attention point; risk first favours ship work, a large change, many write leases, a lease overlap, rework rounds, and open points.
+  A review without a measured size counts as medium, ties keep the longest waiting first, and each item shows the facts its position came from.
 - Tổng quan, Chờ bạn, and the task page show Foreman's reports of a task, rendered from their Markdown exactly as the Foreman session showed them with their next-action block, instead of worker reports; a task without one says so.
 - The task page lists each round with only the user's own words and Foreman's reports of that round, not the instruction Foreman sent the worker.
 - A task card's one-line summary and a blocked item's title in Chờ bạn come from the first sentence of Foreman's latest report; while a newer worker report has not been presented yet, or no Foreman report exists, they come from the worker report.
