@@ -1178,19 +1178,24 @@ function paseoRuntimeState(snapshot) {
   return status;
 }
 
+// A turn id is only unique within one timeline epoch, so a turn counts as recorded only when its epoch matches too.
+function paseoTurnRecorded(meta, turnId, cursor) {
+  return Boolean(turnId) && meta.lastPaseoTurnId === turnId && (meta.lastPaseoEpoch || null) === (cursor?.epoch || null);
+}
+
 function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor, raw }) {
   const report = parsePaseoReport(raw);
   return withHomeLock(roots.foremanHome, () => {
     const meta = readMeta(roots.foremanHome, taskId);
     if ((meta.backend || "herdr") !== "paseo" || meta.endpoint !== endpoint || Number(meta.generation) !== Number(generation)) throw new StaleGenerationError("Paseo report does not match the current task assignment");
-    if (turnId && meta.lastPaseoTurnId === turnId) return { taskId, generation, endpoint, duplicate: true, taskStatus: meta.status };
+    if (paseoTurnRecorded(meta, turnId, cursor)) return { taskId, generation, endpoint, duplicate: true, taskStatus: meta.status };
     if (!["working", "blocked"].includes(meta.status)) throw new ValidationError(`Task ${taskId} is ${meta.status}; cannot record another Paseo report`);
     if (!report) {
       const at = now();
       const file = path.join(taskDir(roots.foremanHome, taskId), "reports", `paseo-invalid-g${generation}-${crypto.createHash("sha256").update(`${turnId || "unknown"}:${raw}`).digest("hex").slice(0, 12)}.txt`);
       atomicWrite(file, String(raw));
       const issue = { type: "worker.report-invalid", reason: "Paseo final response did not match the required report object", file };
-      atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, paseoCursor: cursor || meta.paseoCursor || null, lastPaseoTurnId: turnId || null, paseoReportError: issue, paseoReportAt: at });
+      atomicJson(metaFile(roots.foremanHome, taskId), { ...meta, paseoCursor: cursor || meta.paseoCursor || null, lastPaseoTurnId: turnId || null, lastPaseoEpoch: cursor?.epoch || null, paseoReportError: issue, paseoReportAt: at });
       return { taskId, generation, endpoint, report: null, issue, file };
     }
     const at = now();
@@ -1212,6 +1217,7 @@ function recordPaseoReport({ roots, taskId, endpoint, generation, turnId, cursor
       lastReport: { file, status: report.status, at, readAt: null, round: meta.round || 1 },
       paseoCursor: cursor || meta.paseoCursor || null,
       lastPaseoTurnId: turnId || null,
+      lastPaseoEpoch: cursor?.epoch || null,
       paseoReportError: null,
       paseoReportAt: at,
     };
@@ -1288,8 +1294,8 @@ function collectPaseoReports({ roots, adapter }) {
       const issue = { type: "worker.report-missing", reason: "Paseo marked the turn finished but exposed no assistant report" };
       withHomeLock(roots.foremanHome, () => {
         const current = readMeta(roots.foremanHome, meta.taskId);
-        if (current.endpoint === meta.endpoint && current.generation === meta.generation && (!turnId || current.lastPaseoTurnId !== turnId)) {
-          atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...current, paseoCursor: snapshot.cursor || current.paseoCursor || null, lastPaseoTurnId: turnId || null, paseoReportError: issue, paseoReportAt: now() });
+        if (current.endpoint === meta.endpoint && current.generation === meta.generation && !paseoTurnRecorded(current, turnId, snapshot.cursor)) {
+          atomicJson(metaFile(roots.foremanHome, meta.taskId), { ...current, paseoCursor: snapshot.cursor || current.paseoCursor || null, lastPaseoTurnId: turnId || null, lastPaseoEpoch: snapshot.cursor?.epoch || null, paseoReportError: issue, paseoReportAt: now() });
         }
       });
       collected.push({ taskId: meta.taskId, state: "report-missing", issue: "Paseo marked the turn finished but exposed no assistant report" });
