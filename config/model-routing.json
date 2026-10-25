@@ -101,7 +101,7 @@
     },
     "antigravity-flash": {
       "tool": "antigravity",
-      "model": "gemini-3.8-flash-high",
+      "model": "gemini-3.8-flash-medium",
       "effort": null,
       "whenToUse": "Preferred for UI work — components, layout and design tokens. Paseo only."
     }
