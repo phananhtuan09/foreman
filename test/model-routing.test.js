@@ -284,6 +284,17 @@ test("inactive profiles are hidden from the router and never selected", () => {
   } finally { f.cleanup(); }
 });
 
+test("a grok routing profile is Paseo-only and hidden from Herdr", () => {
+  const configured = routingConfig();
+  configured.groups.ordinary.profiles.push("grok-4-7");
+  configured.profiles["grok-4-7"] = { tool: "grok", model: "grok-4.7", effort: null, whenToUse: "Grok requested." };
+  const herdr = validateRoutingConfig(configured, { includeAllProfiles: true });
+  assert.deepEqual(herdr.paseoOnlyProfiles, ["grok-4-7"]);
+  assert.equal(herdr.profiles["grok-4-7"], undefined);
+  assert.equal(validateRoutingConfig(configured, { backend: "paseo" }).profiles["grok-4-7"].tool, "grok");
+  assert.throws(() => validateRoutingConfig({ ...configured, profiles: { ...configured.profiles, "grok-4-7": { ...configured.profiles["grok-4-7"], command: ["grok"] } } }), /must not set a command/);
+});
+
 test("a Paseo-only antigravity profile has no command or effort and is never routed or selected on Herdr", () => {
   const f = fixture();
   try {
