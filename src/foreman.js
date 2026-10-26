@@ -42,9 +42,9 @@ function sendOptions(roots, taskId, messageId, refs) {
 }
 
 const SUPPORTED_SCHEMA_VERSION = 1;
-const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode", "antigravity"]);
+const SUPPORTED_ROUTING_TOOLS = new Set(["codex", "claude", "omp", "opencode", "antigravity", "grok"]);
 // Tools that only a Paseo provider launches: their profiles have no command or effort and never run on Herdr.
-const PASEO_ONLY_TOOLS = new Set(["antigravity"]);
+const PASEO_ONLY_TOOLS = new Set(["antigravity", "grok"]);
 
 function canonical(p) {
   try { return fs.realpathSync(p); } catch (_) { throw new ValidationError(`Path does not exist: ${p}`); }

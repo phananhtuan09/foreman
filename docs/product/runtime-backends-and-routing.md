@@ -53,7 +53,7 @@ Routing recommends a worker profile, but the user confirms it and no implicit fa
 - No implicit profile or model fallback is performed beyond the `default` profile named in `model-routing.json`.
 - Profiles with `isActive: false` are excluded from routing; `isActive` defaults to `true`, the `default` profile MUST be active, and existing task routing records keep their selected profile.
 - A routing profile may set `effort` for Codex, Claude, or OMP through the tool's native command flag.
-- An `antigravity` profile runs only on Paseo through the Antigravity provider: it sets no `command` or `effort`, its model ID carries any variant, and it cannot be the router.
+- An `antigravity` or `grok` profile runs only on Paseo through its provider: it sets no `command` or `effort`, its model ID carries any variant, and it cannot be the router.
 - Herdr omits Paseo-only profiles from routing candidates and refuses to confirm, reassign, or dispatch them; the Herdr `default` profile MUST NOT be Paseo-only.
 
 ### OpenCode V2 within Herdr

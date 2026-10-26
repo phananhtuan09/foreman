@@ -69,5 +69,13 @@
     "model": "gemini-3.8-flash-medium",
     "modeId": "full-access",
     "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Preferred for UI work — components, layout and design tokens."
+  },
+  {
+    "id": "foreman-grok-4-7",
+    "name": "Foreman Grok 4.7",
+    "provider": "grok",
+    "model": "grok-4.7",
+    "thinkingOptionId": "medium",
+    "notes": "Managed by Foreman. Select only when Foreman routing chooses this profile. Use when Grok is explicitly requested."
   }
 ]
