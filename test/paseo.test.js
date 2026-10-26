@@ -125,6 +125,17 @@ test("Paseo dispatches the Antigravity profile without a command, effort, or thi
   } finally { f.cleanup(); }
 });
 
+test("Paseo dispatches the Grok profile with a thinking option and no mode", () => {
+  const f = fixture();
+  try {
+    const task = createTask({ roots: f.roots, projectId: "fixture", brief: "Inspect README.md.", backend: "paseo", routingRunner: () => ({ profile: "grok-4-7", reason: "Grok requested." }) });
+    const selected = confirmTaskProfile({ roots: f.roots, taskId: task.id, profile: "grok-4-7" });
+    assert.deepEqual(selected.dispatchProfile, { provider: "grok", model: "grok-4.7", thinkingOptionId: "medium", name: "grok-4-7", profileLabel: "Foreman Grok 4.7", paseoProfileId: "foreman-grok-4-7" });
+    const assignment = assignTask({ roots: f.roots, taskId: task.id, adapter: f.adapter });
+    assert.equal(f.adapter.agents.get(assignment.endpoint).dispatchProfile.provider, "grok");
+  } finally { f.cleanup(); }
+});
+
 test("Paseo profile mismatch keeps the task queued with a reviewable dispatch error", () => {
   const f = fixture();
   try {

@@ -23,7 +23,8 @@
         "codex-luna",
         "opencode-sol",
         "opencode-luna",
-        "claude-sonnet"
+        "claude-sonnet",
+        "grok-4-7"
       ]
     },
     "deep": {
@@ -104,6 +105,12 @@
       "model": "gemini-3.8-flash-medium",
       "effort": null,
       "whenToUse": "Preferred for UI work — components, layout and design tokens. Paseo only."
+    },
+    "grok-4-7": {
+      "tool": "grok",
+      "model": "grok-4.7",
+      "effort": null,
+      "whenToUse": "Use when Grok is explicitly requested. Paseo only."
     }
   }
 }

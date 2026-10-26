@@ -180,7 +180,8 @@ For Paseo, add or edit the matching `foreman-<profile>` entry in `FOREMAN_ROOT/c
 Every model-routing profile must have a matching Paseo entry, including profiles with `isActive: false`; inactive profiles remain installed but cannot be recommended or selected by Foreman.
 OpenCode profiles keep their model ID and omit Herdr's unsupported effort setting.
 An Antigravity profile sets `tool: "antigravity"`, no `command`, and `effort: null`; pick the variant through the model ID such as `gemini-3.8-flash-high`, and leave `thinkingOptionId` unset because Antigravity models have none.
-Antigravity profiles run only on Paseo: Herdr hides them from its router and refuses to select them.
+A Grok profile sets `tool: "grok"`, no `command`, and `effort: null`; pick the model through the model ID such as `grok-4.7`, set `thinkingOptionId` (`high`, `medium`, or `low`), and omit `modeId` because the Grok provider exposes no modes.
+Antigravity and Grok profiles run only on Paseo: Herdr hides them from its router and refuses to select them.
 The router recommends a profile, but the user still confirms the profile before dispatch.
 After profile edits, run `bin/foreman-paseo profiles sync`; task creation and `init` never change Paseo's installed profiles.
 The selected profile settings are copied into the task when the user confirms, so later profile edits do not alter the stored assignment.
